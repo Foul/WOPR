@@ -15,3 +15,6 @@
 - Le groupe Google Contacts utilise le réglage local avec `WOPR` comme valeur neutre.
 - La clé maître utilise le nouvel emplacement WOPR tout en conservant la compatibilité avec l’ancien emplacement Foul-Fix pour les installations existantes.
 - Foul-Fix reste mentionné uniquement au crédit de développement et pour cette compatibilité historique.
+
+## 2026-09-06
+- Ajout d’un lien discret « ← Foul-Fix » sur la page de présentation et la documentation HTML.
