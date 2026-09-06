@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
 **Workflow d’Organisation et de Pilotage des Réparations**  
-Version documentée : **2.3.192**  
+Version documentée : **2.3.193**  
 Documentation mise à jour : **6 septembre 2026**
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
@@ -14,7 +14,7 @@ WOPR signifie **Workflow d’Organisation et de Pilotage des Réparations**.
 
 WOPR est une application locale de gestion d’atelier destinée à centraliser le cycle complet d’une réparation : réception du matériel, suivi, client, devis, facture, encaissement, restitution, documents, contacts, achats, justificatifs et suivi administratif.
 
-Cette documentation correspond à la version **2.3.192** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
+Cette documentation correspond à la version **2.3.193** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -22,6 +22,7 @@ Cette documentation correspond à la version **2.3.192** du paquet public fourni
 
 - WOPR fonctionne comme une application web locale, avec une interface dans le navigateur.
 - Les données métier sont séparées du code public dans le dossier `private/`.
+- **L’identité de l’entreprise est privée et configurable** : nom commercial, responsable, coordonnées, informations légales, logo de facture et paramètres de messagerie ne sont pas codés en dur dans le cœur public.
 - Un dépôt public ne doit jamais contenir `private/`, la base SQLite, les sauvegardes, les clés, les jetons, les signatures ou les documents clients.
 - Les documents gérés par WOPR sont organisés dans la partie privée : Factures, Devis et Suivi de réparation.
 - Le **Suivi** est la source de vérité pour le chiffre d’affaires et les montants comptables. Les PDF restent des justificatifs et ne sont pas relus pour recalculer le CA.
@@ -344,7 +345,7 @@ Le nom interne de certains fichiers ou variables peut conserver une ancienne ter
 
 ## 19. Publication sur GitHub
 
-Avant toute publication, vérifier impérativement qu’aucune donnée privée n’est incluse.
+Avant toute publication, vérifier impérativement qu’aucune donnée privée n’est incluse. Le cœur public doit rester **générique** : les valeurs d’entreprise réelles proviennent de la configuration locale et `Foul-Fix` n’apparaît publiquement que dans le crédit de développement ou dans une compatibilité technique explicitement historique.
 
 ### À publier
 

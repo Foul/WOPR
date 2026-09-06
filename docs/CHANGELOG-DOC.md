@@ -8,3 +8,10 @@
 - ajout de la gestion du logo facture dans la partie privée ;
 - ajout des consignes GitHub et d’hébergement statique ;
 - aucune donnée issue de `private/` ni aucune capture client réelle incluse.
+
+## 2.3.193 - 6 septembre 2026 - nettoyage publication publique
+- Suppression des coordonnées et identifiants d’entreprise codés en dur dans le cœur public.
+- Les e-mails, SMS, devis et factures utilisent désormais l’identité configurée localement.
+- Le groupe Google Contacts utilise le réglage local avec `WOPR` comme valeur neutre.
+- La clé maître utilise le nouvel emplacement WOPR tout en conservant la compatibilité avec l’ancien emplacement Foul-Fix pour les installations existantes.
+- Foul-Fix reste mentionné uniquement au crédit de développement et pour cette compatibilité historique.

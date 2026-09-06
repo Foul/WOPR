@@ -94,21 +94,28 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.192"
+APP_VERSION = "2.3.193"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
-# Sécurité locale Foul-Fix
+# Sécurité locale WOPR
 ADMIN_PIN_FILE = PRIVATE_ROOT / "data" / "admin_pin.json"
 APP_SECRET_FILE = PRIVATE_ROOT / "data" / "app_secret.key"
 
-# Clé maîtresse des secrets : volontairement hors du dossier Foul-Fix.
-# Copier uniquement le projet ne suffit donc pas pour déchiffrer les jetons.
+# Clé maîtresse des secrets : volontairement hors du dossier WOPR.
+# Pour une installation existante, l'ancien emplacement Foul-Fix reste reconnu
+# afin de ne pas casser le déchiffrement des secrets déjà enregistrés.
 def _secret_key_path():
     if os.name == "nt":
         root = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
     else:
         root = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return root / "Foul-Fix" / "master.key"
+    current = root / "WOPR" / "master.key"
+    legacy = root / "Foul-Fix" / "master.key"
+    if current.exists():
+        return current
+    if legacy.exists():
+        return legacy
+    return current
 
 MASTER_SECRET_FILE = _secret_key_path()
 BACKUP_DIR = PRIVATE_ROOT / "data" / "backups"
@@ -534,7 +541,7 @@ def register_roboto():
     """Utilise Roboto si elle est installée sur Linux, sinon Helvetica."""
     global PDF_FONTS
     candidates = {
-        # Roboto reste prioritaire pour conserver le rendu Foul-Fix.
+        # Roboto reste prioritaire pour conserver le rendu historique WOPR.
         # DejaVu Sans sert de repli Unicode/Cyrillique si Roboto n'est pas installee.
         "Roboto": [
             "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
@@ -657,18 +664,37 @@ def cfg():
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def business_identity():
+    """Identité de l'entreprise configurée localement, sans valeur personnelle codée en dur."""
+    conf = cfg()
+    name = str(conf.get("business_name") or "WOPR").strip() or "WOPR"
+    owner = str(conf.get("owner_name") or "").strip()
+    website = str(conf.get("website") or "").strip()
+    email = str(conf.get("email") or "").strip()
+    signature = f"{owner} – {name}" if owner and owner.casefold() != name.casefold() else (owner or name)
+    return {"name": name, "owner": owner, "website": website, "email": email, "signature": signature}
+
+
+def business_signature():
+    ident = business_identity()
+    lines = [ident["signature"]]
+    if ident["website"]:
+        lines.append(ident["website"])
+    return "\n".join(lines)
+
+
 SECRET_PREFIX = "enc:v1:"
 
 
 def validate_master_secret(raw):
-    """Valide et normalise une clé Fernet Foul-Fix."""
+    """Valide et normalise une clé Fernet WOPR."""
     raw = bytes(raw or b"").strip()
     if not raw:
         raise ValueError("Le fichier de clé est vide.")
     try:
         Fernet(raw)
     except Exception as exc:
-        raise ValueError("Ce fichier n'est pas une clé maître Foul-Fix valide.") from exc
+        raise ValueError("Ce fichier n'est pas une clé maître WOPR valide.") from exc
     return raw
 
 
@@ -700,12 +726,12 @@ def load_or_create_master_secret():
     """Retourne la clé Fernet locale. La création passe par l'écran dédié."""
     if not MASTER_SECRET_FILE.exists():
         raise RuntimeError(
-            "Clé maître Foul-Fix absente. Importez votre master.key au démarrage."
+            "Clé maître WOPR absente. Importez votre master.key au démarrage."
         )
     try:
         return validate_master_secret(MASTER_SECRET_FILE.read_bytes())
     except ValueError as exc:
-        raise RuntimeError(f"Clé maître Foul-Fix invalide : {MASTER_SECRET_FILE}") from exc
+        raise RuntimeError(f"Clé maître WOPR invalide : {MASTER_SECRET_FILE}") from exc
 
 
 def encrypt_local_secret(value):
@@ -730,7 +756,7 @@ def decrypt_local_secret(value):
         return Fernet(load_or_create_master_secret()).decrypt(token.encode("ascii")).decode("utf-8")
     except InvalidToken as exc:
         raise RuntimeError(
-            "Impossible de déchiffrer un secret Foul-Fix. La clé maître locale est absente ou différente."
+            "Impossible de déchiffrer un secret WOPR. La clé maître locale est absente ou différente."
         ) from exc
 
 
@@ -897,7 +923,7 @@ def abby_request(method, path, *, query=None, body=None, timeout=25):
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
-        "User-Agent": f"Foul-Fix/{APP_VERSION}",
+        "User-Agent": f"WOPR/{APP_VERSION}",
     }
     if body is not None:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -989,7 +1015,7 @@ def abby_contact_payload(client_row):
     if not first:
         first = "Client"
     if not last:
-        last = legacy or "Foul-Fix"
+        last = legacy or "Client"
 
     payload = {
         "firstname": first,
@@ -1010,7 +1036,7 @@ def abby_contact_payload(client_row):
 def abby_organization_payload(client_row):
     company = " ".join(str(client_row["company"] or "").split()).strip()
     legacy = " ".join(str(client_row["name"] or "").split()).strip()
-    official_name = company or legacy or "Client Foul-Fix"
+    official_name = company or legacy or "Client"
 
     payload = {"name": official_name}
     if company:
@@ -1073,7 +1099,7 @@ def abby_unique(index, key):
 def sync_clients_to_abby():
     """
     Première synchronisation volontairement prudente :
-    - Foul-Fix reste la source.
+    - WOPR reste la source.
     - si le client existe déjà chez Abby, on le rattache sans l'écraser ;
     - sinon on le crée.
     """
@@ -1419,7 +1445,7 @@ def _portability_diagnostics_impl():
     # (/usr/share/fonts, APPDATA, XDG_CONFIG_HOME...) ne sont pas des dépendances à ce PC.
     forbidden = (
         "/home/" + "foul/",
-        "GDrive" + "/Web/Foul-Fix",
+        "GDrive" + "/Web/",
         "/mnt/" + "data/",
         "C:\\Users\\" + "foul\\",
     )
@@ -1550,7 +1576,7 @@ def split_legacy_client_name(name):
     if len(parts) == 1:
         return value, ""
 
-    # Convention majoritaire de l'historique Foul-Fix : NOM puis prénom(s).
+    # Convention majoritaire de l'historique WOPR : NOM puis prénom(s).
     return parts[0], " ".join(parts[1:])
 
 
@@ -1939,7 +1965,7 @@ def init_db():
         ))
 
     # V2.3.19 : correction ciblée de la répartition CA d'août 2026.
-    # Source : dernier ODS Foul-Fix fourni le 31/08/2026.
+    # Source : dernier jeu historique importé avant la migration WOPR.
     ca_aug_fix_key = "v2319_ca_august_2026_repartition_v1"
     if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (ca_aug_fix_key,)).fetchone():
         fixed_notes = []
@@ -2183,7 +2209,7 @@ def init_db():
             now().isoformat(timespec="seconds")
         ))
 
-    # V2.3.31 : les dossiers Foul-Fix n'utilisent plus les secondes.
+    # V2.3.31 : les dossiers WOPR n'utilisent plus les secondes.
     dossier_key = "v2331_dossier_numbers_without_seconds_v1"
     if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (dossier_key,)).fetchone():
         changed = 0
@@ -2442,7 +2468,7 @@ def init_db():
                 (detected_mode, payment_mode_row["id"])
             )
 
-    # Les dossiers déjà créés dans Foul-Fix doivent aussi apparaître dans le Suivi mensuel.
+    # Les dossiers déjà créés dans WOPR doivent aussi apparaître dans le Suivi mensuel.
     con.execute("""
         UPDATE repairs
         SET followup_year = CAST(substr(received_date,1,4) AS INTEGER),
@@ -2451,7 +2477,7 @@ def init_db():
           AND received_date GLOB '????-??-??'
     """)
 
-    # Si un ancien dossier Foul-Fix est déjà payé, il alimente automatiquement le CA.
+    # Si un ancien dossier WOPR est déjà payé, il alimente automatiquement le CA.
     con.execute("""
         UPDATE repairs
         SET accounting_year = CAST(substr(COALESCE(finished_at,received_date),1,4) AS INTEGER),
@@ -2864,7 +2890,7 @@ def find_client_invoice_pdf(invoice_no, client_name):
 
 def seed_legacy_followups(con):
     """
-    Importe les deux onglets Suivi-Rép 2025 et 2026 du Foul-Fix.ods.
+    Importe les deux onglets Suivi-Rép 2025 et 2026 du WOPR.ods.
 
     - 296 lignes historiques.
     - Conserve les mois d'affichage du classeur.
@@ -2999,7 +3025,7 @@ def seed_legacy_followups(con):
 def seed_legacy_ledger_entries(con):
     """
     Importe une seule fois les lignes historiques Achats/Ventes 2025 + 2026
-    extraites du classeur Foul-Fix.ods.
+    extraites du classeur WOPR.ods.
 
     - N'écrase aucune ligne existante.
     - Évite les doublons exacts si quelques lignes ont déjà été saisies à la main.
@@ -3719,7 +3745,7 @@ def repair_dead_supplier_document_links():
 
 def find_document_recursive(root, filename=None, document_no=None):
     """
-    Cherche un document dans les vrais dossiers Foul-Fix/Devis ou Factures.
+    Cherche un document dans les vrais dossiers WOPR/private/documents/Devis ou Factures.
     Priorité au nom de fichier exact, sinon au numéro contenu dans le nom.
     """
     if not root.exists():
@@ -3746,7 +3772,7 @@ def find_document_recursive(root, filename=None, document_no=None):
 
 def quote_document_candidates(quote_no):
     """
-    PDF historiques réellement présents avant génération Foul-Fix.
+    PDF historiques réellement présents avant génération WOPR.
     Les PDF produits par l'application portent le suffixe `.foulfix.pdf`
     et ne sont jamais comptés comme des Originaux.
     """
@@ -3895,7 +3921,7 @@ def google_service():
 
 
 def google_find_group(service, wanted_name=None):
-    wanted = (wanted_name or cfg().get("google_contact_group", "Foul-Fix")).strip().casefold()
+    wanted = (wanted_name or cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR").strip().casefold()
     token = None
     while True:
         res = service.contactGroups().list(pageSize=1000, pageToken=token).execute()
@@ -3945,7 +3971,7 @@ def google_contact_body(client):
             google_name["familyName"] = last_name
         body = {"names": [google_name]}
     else:
-        body = {"names": [{"givenName": client["name"] or "Client Foul-Fix"}]}
+        body = {"names": [{"givenName": client["name"] or "Client"}]}
     if client["email"]:
         body["emailAddresses"] = [{"value": client["email"], "type": "home"}]
     else:
@@ -4011,7 +4037,7 @@ def sync_client_to_google(client_id):
     try:
         group_resource = google_find_group(service)
         if not group_resource:
-            msg = f"Le groupe Google '{cfg().get('google_contact_group','Foul-Fix')}' est introuvable."
+            msg = f"Le groupe Google '{cfg().get('google_contact_group') or cfg().get('business_name') or 'WOPR'}' est introuvable."
             set_google_sync_state(client_id, "Erreur", error=msg)
             return False, msg
 
@@ -4043,7 +4069,7 @@ def sync_client_to_google(client_id):
             created = service.people().createContact(body=body).execute()
             resource_name = created.get("resourceName")
 
-        # Ajoute au groupe Foul-Fix existant. Cette opération est sans danger si déjà membre.
+        # Ajoute au groupe Google configuré. Cette opération est sans danger si déjà membre.
         try:
             service.contactGroups().members().modify(
                 resourceName=group_resource,
@@ -4209,7 +4235,7 @@ def parse_proton_vcf(raw_text):
         primary_address = address_values[0] if address_values else {}
         extra_notes = list(notes)
 
-        # La base Foul-Fix a un email/téléphone/adresse principal.
+        # La base WOPR a un email/téléphone/adresse principal.
         # Les coordonnées Proton supplémentaires sont donc conservées dans Notes.
         if len(email_values) > 1:
             extra_notes.append("Autres e-mails Proton : " + " / ".join(email_values[1:]))
@@ -4543,7 +4569,7 @@ def merge_safe_local_duplicates():
 
 
 def parse_google_contacts_csv(raw_text):
-    """Lit un export CSV Google Contacts et conserve les champs utiles à Foul-Fix."""
+    """Lit un export CSV Google Contacts et conserve les champs utiles à WOPR."""
     reader = csv.DictReader(io.StringIO(str(raw_text or "")))
     if not reader.fieldnames:
         return []
@@ -4555,7 +4581,7 @@ def parse_google_contacts_csv(raw_text):
     contacts = []
     for pos, row in enumerate(reader, start=2):
         labels = str(row.get("Labels") or "").strip()
-        # Si le CSV contient des libellés, ne garder que Foul-Fix.
+        # Les libellés Google sont conservés pour information ; le groupe cible est configurable.
         # Si Labels est vide partout, on accepte le fichier tel quel.
         raw_first_name = str(row.get("First Name") or "").strip()
         raw_last_name = str(row.get("Last Name") or "").strip()
@@ -5237,11 +5263,11 @@ def security_gate():
         return None
     if endpoint != "static" and not MASTER_SECRET_FILE.exists():
         if request.remote_addr not in {"127.0.0.1", "::1"}:
-            return "Clé maître Foul-Fix absente sur la machine hôte.", 503
+            return "Clé maître WOPR absente sur la machine hôte.", 503
         return redirect(url_for("master_key_setup"))
 
     # V2.3.52 — vraie sauvegarde quotidienne :
-    # si Foul-Fix reste ouvert plusieurs jours, la première requête du nouveau
+    # si WOPR reste ouvert plusieurs jours, la première requête du nouveau
     # jour crée le backup. backup_database évite automatiquement les doublons.
     if endpoint != "static":
         try:
@@ -5320,7 +5346,7 @@ def admin_setup():
             session.permanent = True
             session["_csrf_token"] = secrets.token_urlsafe(32)
             audit_event("PIN_CREATED", "PIN administrateur initialisé", request.remote_addr)
-            flash("PIN administrateur créé. Foul-Fix est maintenant verrouillé.")
+            flash("PIN administrateur créé. WOPR est maintenant verrouillé.")
             return redirect(url_for("index"))
     return render_template("admin_setup.html")
 
@@ -6047,7 +6073,7 @@ def wopr_end_sequence_audio():
 
 @app.route("/")
 def home():
-    """Accueil Foul-Fix : le tableau de bord Atelier devient la page principale."""
+    """Accueil WOPR : le tableau de bord Atelier devient la page principale."""
     return redirect(url_for("atelier_dashboard"))
 
 
@@ -6842,15 +6868,14 @@ def quote_email(quote_id):
             flash("Impossible d'envoyer : le client n'a pas d'adresse e-mail.")
             return redirect(cancel_url)
 
-        subject = f"Foul-Fix - Devis {q['quote_no']}"
+        ident = business_identity()
+        subject = f"{ident['name']} - Devis {q['quote_no']}"
         body = (
             "Bonjour,\n\n"
-            "Veuillez trouver ci-joint votre devis Foul-Fix.\n\n"
+            f"Veuillez trouver ci-joint votre devis {ident['name']}.\n\n"
             "Je reste à votre disposition si vous avez des questions.\n\n"
             "Cordialement,\n"
-            "Cédric – Foul-Fix\n"
-            "Réparation informatique & électronique\n"
-            "https://foul-fix.fr"
+            f"{business_signature()}"
         )
 
         return render_template(
@@ -6889,7 +6914,7 @@ def quote_email(quote_id):
     sender_email = str(
         smtp_settings.get("sender_email") or smtp_settings.get("username") or ""
     ).strip()
-    sender_name = str(smtp_settings.get("sender_name") or "Foul-Fix").strip()
+    sender_name = str(smtp_settings.get("sender_name") or business_identity()["name"]).strip()
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -6955,7 +6980,7 @@ def quote_original_real(quote_id, doc_index):
 
     docs = quote_document_candidates(q["quote_no"])
     if doc_index < 0 or doc_index >= len(docs):
-        return "PDF original introuvable dans Foul-Fix/Devis", 404
+        return "PDF original introuvable dans WOPR/private/documents/Devis", 404
 
     path = docs[doc_index]
     return send_file(
@@ -6986,7 +7011,7 @@ def quote_original_document(document_id):
     )
     if not path:
         return (
-            "PDF historique introuvable dans le dossier Foul-Fix/Devis. "
+            "PDF historique introuvable dans le dossier privé des devis. "
             "Vérifie qu'il est bien rangé dans Devis/AAAA/MM - Mois/.",
             404,
         )
@@ -7002,7 +7027,7 @@ def quote_original_document(document_id):
 @app.route("/devis/<int:quote_id>/pdf")
 def quote_pdf(quote_id):
     """
-    Devis Foul-Fix au format historique Calc/PDF.
+    Devis WOPR au format historique Calc/PDF.
     La mise en page reprend le modèle réel fourni par l'utilisateur.
     """
     con = db()
@@ -7081,17 +7106,22 @@ def quote_pdf(quote_id):
     def draw_footer():
         c.setFillColor(colors.black)
         c.setFont(QF["regular"], 7.4)
-        footer1 = (
-            f"Foul-Fix - Monféfoul Cédric - N° Siret : {conf.get('siret','97813341100014')} "
-            f"- Code APE : {conf.get('ape','9511Z')}"
-        )
+        footer_parts = [str(conf.get("business_name") or "WOPR").strip()]
+        owner = str(conf.get("owner_name") or "").strip()
+        if owner:
+            footer_parts.append(owner)
+        if str(conf.get("siret") or "").strip():
+            footer_parts.append(f"N° Siret : {conf.get('siret')}")
+        if str(conf.get("ape") or "").strip():
+            footer_parts.append(f"Code APE : {conf.get('ape')}")
+        footer1 = " - ".join(x for x in footer_parts if x)
         c.drawCentredString(W/2, 17.8*mm, footer1)
         c.setFont(QF["bold"], 7.4)
         c.drawCentredString(W/2, 13.8*mm, f"IBAN : {conf.get('iban','')}")
         c.setFont(QF["regular"], 7.2)
         c.drawCentredString(
             W/2, 10.2*mm,
-            f"- {conf.get('website','https://foul-fix.fr')} - {conf.get('email','contact@foul-fix.fr')} -"
+            f"- {conf.get('website','')} - {conf.get('email','')} -"
         )
         c.setFont(QF["regular"], 7.0)
         c.drawCentredString(
@@ -7167,10 +7197,10 @@ def quote_pdf(quote_id):
 
     c.setFillColor(colors.black)
     c.setFont(QF["bold"], 13.0)
-    c.drawString(company_x+1.0*mm, box_y+box_h-6.0*mm, conf.get("owner_name","Cédric Monféfoul (EI)"))
+    c.drawString(company_x+1.0*mm, box_y+box_h-6.0*mm, conf.get("owner_name",""))
     c.setFont(QF["regular"], 12.2)
     c.drawString(company_x+1.0*mm, box_y+box_h-18.5*mm, conf.get("address_line1","25 rue font laurière"))
-    c.drawString(company_x+1.0*mm, box_y+box_h-30.7*mm, conf.get("address_line2","24000 Périgueux"))
+    c.drawString(company_x+1.0*mm, box_y+box_h-30.7*mm, conf.get("address_line2",""))
     c.drawString(company_x+1.0*mm, box_y+box_h-42.2*mm, f"Tél : {conf.get('phone','06 60 47 29 48')}")
 
     client_x = 136.5*mm
@@ -7401,7 +7431,7 @@ def quote_pdf(quote_id):
     c.save()
     pdf_bytes = bio.getvalue()
 
-    # Sauvegarde automatique dans Foul-Fix/Devis/AAAA/MM - Mois
+    # Sauvegarde automatique dans WOPR/private/documents/Devis/AAAA/MM - Mois
     quote_folder = year_month_folder(DEVIS_ROOT, q["quote_date"], create=True)
     quote_filename = safe_document_name(f"{q['client_name']}_{q['quote_no']}.foulfix.pdf")
     quote_saved_path = quote_folder / quote_filename
@@ -7462,7 +7492,7 @@ def achats_ventes_page():
     )
 
     # V2.3.100 — pour une ligne Vente, le justificatif est la facture client.
-    # Aucun PDF n'est copié : on pointe vers la facture déjà générée par Foul-Fix.
+    # Aucun PDF n'est copié : on pointe vers la facture déjà générée par WOPR.
     invoice_rows = con.execute("""
         SELECT r.id, r.invoice_no, r.legacy_imported, r.accounting_date,
                r.service_amount, r.goods_amount, r.received_date,
@@ -8231,13 +8261,14 @@ def client_message_from_client(client_id):
         display_name = ""
 
     salutation = f"Bonjour {display_name}," if display_name else "Bonjour,"
-    footer = "Cédric – Foul-Fix"
+    ident = business_identity()
+    footer = ident["signature"]
 
     templates = {
         "libre": f"{salutation}\n\n\n\n{footer}",
         "rappel": (
             f"{salutation}\n\n"
-            "Je vous contacte au sujet de votre matériel chez Foul-Fix. "
+            f"Je vous contacte au sujet de votre matériel chez {ident['name']}. "
             "Vous pouvez simplement me répondre à ce message.\n\n"
             f"{footer}"
         ),
@@ -8294,7 +8325,8 @@ def client_message(rid):
     ]
     device = " ".join(x for x in device_bits if x).strip() or "votre matériel"
 
-    footer = "Cédric – Foul-Fix"
+    ident = business_identity()
+    footer = ident["signature"]
     status = str(r.get("status") or "").strip()
 
     templates = {
@@ -8320,12 +8352,12 @@ def client_message(rid):
         ),
         "termine": (
             f"{salutation}\n\n"
-            f"Votre {device} est prêt. Vous pouvez venir le récupérer chez Foul-Fix.\n\n"
+            f"Votre {device} est prêt. Vous pouvez venir le récupérer chez {ident['name']}.\n\n"
             f"{footer}"
         ),
         "pieces": (
             f"{salutation}\n\n"
-            "Comme convenu, votre matériel est laissé à Foul-Fix pour pièces "
+            f"Comme convenu, votre matériel est laissé à {ident['name']} pour pièces "
             "en remplacement du forfait diagnostic de 30 €.\n\n"
             f"{footer}"
         ),
@@ -10297,7 +10329,7 @@ def invoice_pdf(rid):
                          float(r["goods_amount"]), float(r["goods_amount"])))
 
     # -----------------------------------------------------------------
-    # Typographie facture Foul-Fix :
+    # Typographie facture WOPR :
     #   - 1re ligne de chaque article/prestation : Roboto 12
     #   - 2e ligne et suivantes (détails)       : Roboto 10
     # Les lignes trop longues sont renvoyées à la ligne, jamais réduites.
@@ -10432,7 +10464,7 @@ def invoice_pdf(rid):
     c.setFillColor(BLACK)
     c.setFont(PDF_FONTS["regular"], 7.8)
     footer = [
-        f"{conf.get('business_name','Foul-Fix')} - Monféfoul Cédric - {pdf_t('siret_no', lang)} : {conf.get('siret','')} - {pdf_t('ape_code', lang)} : {conf.get('ape','')}",
+        f"{conf.get('business_name','WOPR')} - {conf.get('owner_name','')} - {pdf_t('siret_no', lang)} : {conf.get('siret','')} - {pdf_t('ape_code', lang)} : {conf.get('ape','')}",
         f"IBAN : {conf.get('iban','')}",
         f"- {conf.get('website','')} - {conf.get('email','')} -",
     ]
@@ -10491,26 +10523,23 @@ def followup_email(rid):
             flash("Impossible d'envoyer : le client n'a pas d'adresse e-mail.")
             return redirect(cancel_url)
 
-        subject = f"Foul-Fix - Suivi de réparation"
+        ident = business_identity()
+        subject = f"{ident['name']} - Suivi de réparation"
         if str(r["status"] or "") == "Laissé pour pièces":
             body = (
                 "Bonjour,\n\n"
-                "Comme convenu, vous avez choisi de laisser votre matériel à Foul-Fix pour pièces "
+                f"Comme convenu, vous avez choisi de laisser votre matériel à {ident['name']} pour pièces "
                 "en remplacement du forfait diagnostic de 30 €.\n\n"
                 "Vous trouverez ci-joint le suivi de votre dossier ainsi que les photos sélectionnées.\n\n"
                 "Cordialement,\n"
-                "Cédric – Foul-Fix\n"
-                "Réparation informatique & électronique\n"
-                "https://foul-fix.fr"
+                f"{business_signature()}"
             )
         else:
             body = (
                 "Bonjour,\n\n"
-                "Vous trouverez ci-joint le suivi de votre dossier Foul-Fix ainsi que les photos sélectionnées.\n\n"
+                f"Vous trouverez ci-joint le suivi de votre dossier {ident['name']} ainsi que les photos sélectionnées.\n\n"
                 "Cordialement,\n"
-                "Cédric – Foul-Fix\n"
-                "Réparation informatique & électronique\n"
-                "https://foul-fix.fr"
+                f"{business_signature()}"
             )
 
         # Génère aussi le PDF dès l'écran de prévisualisation afin d'afficher
@@ -10571,7 +10600,7 @@ def followup_email(rid):
         return redirect(url_for("followup_email", rid=rid, lang=lang))
 
     sender_email = str(smtp_settings.get("sender_email") or smtp_settings.get("username") or "").strip()
-    sender_name = str(smtp_settings.get("sender_name") or "Foul-Fix").strip()
+    sender_name = str(smtp_settings.get("sender_name") or business_identity()["name"]).strip()
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -10704,15 +10733,14 @@ def invoice_email(rid):
             flash("Impossible d'envoyer : le client n'a pas d'adresse e-mail.")
             return redirect(cancel_url)
 
-        subject = f"Foul-Fix - Facture {r['invoice_no']}"
+        ident = business_identity()
+        subject = f"{ident['name']} - Facture {r['invoice_no']}"
         body = (
             "Bonjour,\n\n"
-            "Veuillez trouver ci-joint votre facture Foul-Fix.\n\n"
+            f"Veuillez trouver ci-joint votre facture {ident['name']}.\n\n"
             "Je vous remercie pour votre confiance.\n\n"
             "Cordialement,\n"
-            "Cédric – Foul-Fix\n"
-            "Réparation informatique & électronique\n"
-            "https://foul-fix.fr"
+            f"{business_signature()}"
         )
         return render_template(
             "invoice_email_preview.html",
@@ -10748,7 +10776,7 @@ def invoice_email(rid):
         pdf_data = bytes(pdf_response.data)
 
     sender_email = str(smtp_settings.get("sender_email") or smtp_settings.get("username") or "").strip()
-    sender_name = str(smtp_settings.get("sender_name") or "Foul-Fix").strip()
+    sender_name = str(smtp_settings.get("sender_name") or business_identity()["name"]).strip()
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -10789,7 +10817,7 @@ def invoice_sms_link(rid):
         return redirect(url_for("repair_detail", rid=rid))
 
     # Cette page ouvre le composeur SMS sur un téléphone.
-    message = f"Bonjour {r['client_name']}, votre facture Foul-Fix n° {r['invoice_no'] or ''} est disponible. Merci."
+    message = f"Bonjour {r['client_name']}, votre facture {business_identity()['name']} n° {r['invoice_no'] or ''} est disponible. Merci."
     from urllib.parse import quote
     phone = re.sub(r"[^0-9+]", "", r["client_phone"])
     return redirect(f"sms:{phone}?body={quote(message)}")
@@ -11105,7 +11133,7 @@ def import_proton_confirm():
         return redirect(url_for("import_proton_contacts"))
 
     contacts = payload.get("contacts", [])
-    # Tous les contacts Proton sont des clients Foul-Fix.
+    # Tous les contacts Proton importés sont considérés comme des clients WOPR.
     # Google est un miroir : les contacts absents y sont créés automatiquement.
     create_missing_google = True
 
@@ -11330,7 +11358,7 @@ def import_proton_cancel():
 
 @app.route("/recherche")
 def global_search():
-    """Recherche globale Foul-Fix, strictement en lecture seule."""
+    """Recherche globale WOPR, strictement en lecture seule."""
     q = " ".join(str(request.args.get("q") or "").split()).strip()
     results = {"clients": [], "repairs": [], "ledger": [], "quotes": []}
     if q:
@@ -11442,7 +11470,7 @@ def achats_ventes_sale_invoice_view(entry_id):
     if pdf and pdf.exists():
         return send_file(pdf, mimetype="application/pdf", as_attachment=False, download_name=pdf.name)
 
-    # Fallback : s'il n'existe aucun PDF historique classé, on retombe sur la facture Foul-Fix.
+    # Fallback : s'il n'existe aucun PDF historique classé, on retombe sur la facture WOPR.
     con = db()
     members = con.execute("""
         SELECT r.id, c.name AS client_name, r.legacy_imported
@@ -11806,9 +11834,9 @@ def google_callback():
         service = google_service()
         group = google_find_group(service) if service else None
         if group:
-            flash("Google Contacts connecté. Groupe Foul-Fix trouvé : synchro automatique activée.")
+            flash("Google Contacts connecté : groupe configuré trouvé, synchro automatique activée.")
         else:
-            flash("Google connecté, mais le groupe Foul-Fix n'a pas été trouvé.")
+            flash("Google connecté, mais le groupe configuré n'a pas été trouvé.")
     except Exception as e:
         flash(f"Connexion Google impossible : {e}")
 
@@ -11819,7 +11847,7 @@ def google_callback():
 def google_disconnect():
     if GOOGLE_TOKEN.exists():
         GOOGLE_TOKEN.unlink()
-    flash("Google Contacts déconnecté de Foul-Fix.")
+    flash("Google Contacts déconnecté de WOPR.")
     return redirect(url_for("contacts_page"))
 
 
@@ -11834,7 +11862,7 @@ def contacts_sync_google():
     if errors:
         flash(f"Google : {ok}/{len(ids)} contacts synchronisés. Première erreur : {errors[0]}")
     else:
-        flash(f"Google : {ok} contacts synchronisés dans le groupe Foul-Fix.")
+        flash(f"Google : {ok} contacts synchronisés dans le groupe configuré.")
     return redirect(url_for("contacts_page"))
 
 
@@ -11852,7 +11880,7 @@ def export_google_contacts():
            "Address 1 - Label","Address 1 - Street","Address 1 - City","Address 1 - Postal Code","Address 1 - Country","Labels","Notes"]]
     for c in clients:
         rows.append([c["name"],"Home",c["email"] or "","Mobile",c["phone"] or "","Home",
-                     c["address_street"] or "",c["city"] or "",c["postal_code"] or "","France","Foul-Fix",c["notes"] or ""])
+                     c["address_street"] or "",c["city"] or "",c["postal_code"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
     return csv_response("FoulFix_Contacts_Google.csv", rows)
 
 
@@ -11862,7 +11890,7 @@ def export_proton_contacts():
     rows=[["first name","email","mobile","address 1","postal code","city","country","group membership","notes"]]
     for c in clients:
         rows.append([c["name"],c["email"] or "",c["phone"] or "",c["address_street"] or "",
-                     c["postal_code"] or "",c["city"] or "","France","Foul-Fix",c["notes"] or ""])
+                     c["postal_code"] or "",c["city"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
     return csv_response("FoulFix_Contacts_Proton.csv", rows)
 
 
@@ -11877,7 +11905,7 @@ def export_vcard_contacts():
         street=c["address_street"] or ""
         if street or c["city"] or c["postal_code"]:
             lines.append(f"ADR;TYPE=HOME:;;{vcard_escape(street)};{vcard_escape(c['city'])};;{vcard_escape(c['postal_code'])};France")
-        lines.append("CATEGORIES:Foul-Fix")
+        lines.append("CATEGORIES:" + str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"))
         if c["notes"]:
             lines.append(f"NOTE:{vcard_escape(c['notes'])}")
         lines.append("END:VCARD")
@@ -11945,7 +11973,7 @@ if __name__ == "__main__":
     backup_database(force=False, tag="demarrage")
     init_db()
     harden_local_permissions()
-    print("Foul-Fix : http://127.0.0.1:5000")
+    print("WOPR : http://127.0.0.1:5000")
     print("Signature téléphone : http://%s:5000" % local_ip())
     print("Mode sécurité : actif — debug désactivé")
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

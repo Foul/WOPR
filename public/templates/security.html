@@ -64,13 +64,13 @@
         Activer l'envoi Proton SMTP
       </label>
       <label>Adresse d'envoi
-        <input type="email" name="smtp_sender_email" value="{{ smtp_settings.sender_email or 'contact@foul-fix.fr' }}" required>
+        <input type="email" name="smtp_sender_email" value="{{ smtp_settings.sender_email or '' }}" required>
       </label>
       <label>Nom d'expéditeur
         <input name="smtp_sender_name" value="{{ smtp_settings.sender_name or 'WOPR' }}">
       </label>
       <label>Utilisateur SMTP
-        <input type="email" name="smtp_username" value="{{ smtp_settings.username or 'contact@foul-fix.fr' }}" required>
+        <input type="email" name="smtp_username" value="{{ smtp_settings.username or '' }}" required>
       </label>
       <div class="grid two">
         <label>Serveur
