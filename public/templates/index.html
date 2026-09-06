@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+{% block title %}Suivi {{ selected_year }} - WOPR<script>
+(function () {
+  const topScroll = document.getElementById('followupTopScroll');
+  const spacer = document.getElementById('followupTopScrollSpacer');
+  const wrapper = document.getElementById('followupSheetWrapper');
+  const table = wrapper ? wrapper.querySelector('.followup-table') : null;
+  if (!topScroll || !spacer || !wrapper || !table) return;
+
+  let syncing = false;
+
+  function refreshTopScrollbar() {
+    const contentWidth = Math.max(table.scrollWidth, wrapper.scrollWidth);
+    spacer.style.width = contentWidth + 'px';
+    topScroll.style.display = contentWidth > wrapper.clientWidth + 2 ? 'block' : 'none';
+    topScroll.scrollLeft = wrapper.scrollLeft;
+  }
+
+  topScroll.addEventListener('scroll', function () {
+    if (syncing) return;
+    syncing = true;
+    wrapper.scrollLeft = topScroll.scrollLeft;
+    syncing = false;
+  });
+
+  wrapper.addEventListener('scroll', function () {
+    if (syncing) return;
+    syncing = true;
+    topScroll.scrollLeft = wrapper.scrollLeft;
+    syncing = false;
+  });
+
+  window.addEventListener('resize', refreshTopScrollbar);
+  requestAnimationFrame(refreshTopScrollbar);
+})();
+</script>
+
+{% endblock %}
+{% block body %}
+
+<div class="sheet-head">
+  <div class="sheet-banner">
+    <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+    <div class="banner-title">Suivie de Réparations Clients {{ selected_year }}</div>
+  </div>
+  <div class="sheet-actions">
+    <a class="button primary" href="{{ url_for('repair_new') }}">+ Nouvelle réparation</a>
+    <a class="button" href="{{ url_for('export_suivi') }}">Exporter suivi CSV</a>
+  </div>
+</div>
+
+<div class="followup-year-tabs">
+  {% for y in available_years %}
+    <a class="year-tab {% if y == selected_year %}active{% endif %}" href="{{ url_for('index', year=y, a_restituer=1 if to_return_only else None, q=client_search or None) }}">{{ y }}</a>
+  {% endfor %}
+</div>
+
+<div class="followup-workshop-filters">
+  <a class="button {% if to_return_only %}primary{% endif %}"
+     href="{{ url_for('index', year=selected_year, a_restituer=None if to_return_only else 1, q=client_search or None) }}">
+    📦 À restituer ({{ to_return_count }})
+  </a>
+
+  <form method="get" action="{{ url_for('index') }}" class="followup-client-search">
+    <input type="hidden" name="year" value="{{ selected_year }}">
+    {% if to_return_only %}<input type="hidden" name="a_restituer" value="1">{% endif %}
+    <input type="search" name="q" value="{{ client_search or '' }}"
+           placeholder="🔎 Rechercher un client…" aria-label="Rechercher un client dans le suivi" autocomplete="off">
+    <button class="button" type="submit">Rechercher</button>
+    {% if client_search %}
+      <a class="button" href="{{ url_for('index', year=selected_year, a_restituer=1 if to_return_only else None) }}">Effacer</a>
+    {% endif %}
+  </form>
+
+  {% if to_return_only %}
+    <span class="workshop-filter-note">Uniquement le matériel réellement encore à restituer.</span>
+  {% endif %}
+</div>
+
+<div class="followup-legend">
+  <div class="legend-item"><span class="legend-yellow"></span><strong>Jaune</strong> : non facturé / règlement ou comptabilisation à une autre date</div>
+  <div class="legend-item"><span class="legend-red">Aa</span><strong>Rouge</strong> : en attente de règlement</div>
+  <div class="legend-counters">{{ yellow_count }} jaune(s) · {{ red_count }} en attente</div>
+</div>
+
+<div class="followup-top-scroll" id="followupTopScroll" aria-label="Défilement horizontal du tableau">
+  <div class="followup-top-scroll-spacer" id="followupTopScrollSpacer"></div>
+</div>
+
+<div class="sheet-wrapper followup-sheet-wrapper" id="followupSheetWrapper">
+<table class="sheet-table followup-table ods-followup-table {% if selected_year == 2025 %}followup-2025{% else %}followup-2026{% endif %}">
+  <colgroup>
+    <col class="col-first-name">
+    <col class="col-last-name">
+    <col class="col-date">
+    <col class="col-problem">
+    {% if selected_year == 2025 %}<col class="col-call">{% endif %}
+    <col class="col-invoice">
+    <col class="col-price">
+    <col class="col-price">
+    <col class="col-payment">
+    <col class="col-accounting-date">
+    <col class="col-send">
+    <col class="col-remarks">
+    <col class="col-actions">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Prénom</th>
+      <th>Nom</th>
+      <th>Date</th>
+      <th>Panne</th>
+      {% if selected_year == 2025 %}<th>Appel Téléphonique<br><span>(Oui/rep/NJ)</span></th>{% endif %}
+      <th>{% if selected_year == 2025 %}Facture N°{% else %}Facture/devis N°{% endif %}</th>
+      <th>Prestations de services<br><span>BIC</span></th>
+      <th>Vente de marchandises<br><span>BIC</span></th>
+      <th>Total / Mode<br><span>ESP / CB / VIR / PAY / BTC / CHQ</span></th>
+      <th>Date encaissée<br><span>JJ/MM/AAAA</span></th>
+      <th>Remise / Envoi<br><span>Facture / Devis / Reçu</span></th>
+      <th>Remarques</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+
+  <tbody>
+  {% for month in months %}
+    {% if month.rows or month.service_total or month.goods_total %}
+      <tr class="followup-month-row">
+        <td colspan="{% if selected_year == 2025 %}13{% else %}12{% endif %}">
+          {{ month.name }}
+        </td>
+      </tr>
+
+      {% for r in month.rows %}
+        {% set invoice_text = r['legacy_invoice_text'] or r['invoice_no'] or '' %}
+        <tr id="suivi-{{ r['id'] }}" class="followup-data-row status-{{ r['accounting_status'] or 'normal' }} {% if r['status']=='Terminé' %}repair-state-finished{% elif r['status']=='Restitué' %}repair-state-returned{% endif %}">
+          <td class="followup-first-name">
+            <strong>{{ r['client_first_name'] or '' }}</strong>
+          </td>
+
+          <td class="followup-last-name">
+            <strong>{{ r['client_last_name'] or r['client_name'] or '' }}</strong>
+            {% if r['legacy_imported'] %}<span class="legacy-mini">ODS</span>{% endif %}
+            {% if r.get('_virtual_payment') %}
+              <span class="payment-mode-badge" title="Encaissement réalisé sur ce mois">Encaissement</span>
+            {% elif r['status']=='Terminé' %}
+              <span class="repair-state-badge repair-state-badge-finished" title="Réparation terminée — appareil encore à restituer">À restituer</span>
+              {% if r.get('_days_waiting_return') is not none and r.get('_days_waiting_return') >= 7 %}
+                <span class="return-wait-badge {% if r.get('_days_waiting_return') >= 15 %}return-wait-critical{% else %}return-wait-warning{% endif %}">
+                  {{ r.get('_days_waiting_return') }} j
+                </span>
+              {% endif %}
+            {% elif r['status']=='Restitué' %}
+              <span class="repair-state-badge repair-state-badge-returned" title="Appareil restitué au client — dossier clos">Restitué</span>
+            {% elif r['status']=='Laissé pour pièces' %}
+              <span class="repair-state-badge repair-state-badge-parts" title="Matériel laissé à WOPR pour pièces — dossier clos, sans facture">Laissé pour pièces</span>
+            {% endif %}
+          </td>
+
+          <td class="followup-date">
+            {% if r['received_date'] %}
+              {{ r['received_date'][8:10] }}/{{ r['received_date'][5:7] }}/{{ r['received_date'][0:4] }}
+            {% endif %}
+          </td>
+
+          <td class="{% if r['accounting_status']=='yellow' and (r['problem'] or '').lower().startswith('paiement du') %}ods-yellow-cell{% endif %}">
+            {{ r['problem'] or '' }}
+          </td>
+
+          {% if selected_year == 2025 %}
+            <td>{{ r['legacy_call_note'] or '' }}</td>
+          {% endif %}
+
+          <td class="{% if r['accounting_status']=='yellow' and not (r['problem'] or '').lower().startswith('paiement du') %}ods-yellow-cell{% endif %}">
+            {% if invoice_text %}
+              {% if r['invoice_no'] %}
+                <a class="invoice-number-edit-link"
+                   href="{{ url_for('repair_close', rid=r['id'], return='suivi') }}"
+                   title="Modifier la facture">{{ invoice_text }}</a>
+              {% else %}
+                {{ invoice_text }}
+              {% endif %}
+            {% elif r['status']=='Laissé pour pièces' %}
+              <span class="no-invoice-label">Sans facture</span>
+            {% elif r['status']=='Terminé' and not r['invoice_no'] %}
+              Non Facturé
+            {% endif %}
+          </td>
+
+          <td class="money-cell">
+            {% if r['service_amount'] %}{{ '%.2f'|format(r['service_amount'])|replace('.', ',') }} €{% endif %}
+          </td>
+
+          <td class="money-cell">
+            {% if r['goods_amount'] %}{{ '%.2f'|format(r['goods_amount'])|replace('.', ',') }} €{% endif %}
+          </td>
+
+          <td class="total-mode-cell {% if r['accounting_status']=='red' %}ods-red-cell{% endif %}">
+            {% set row_total = r.get('_display_total', (r['service_amount'] or 0) + (r['goods_amount'] or 0)) %}
+            {% set row_mode = r.get('_display_payment_mode', '') %}
+            {% if r['status'] == 'Laissé pour pièces' %}
+              <strong>—</strong>
+            {% else %}
+              <strong>{{ '%.2f'|format(row_total)|replace('.', ',') }} €</strong>
+            {% endif %}
+            {% if row_mode %}
+              <span class="payment-mode-badge">{{ row_mode }}</span>
+            {% elif r['payment_mode'] == 'MIXTE' %}
+              <span class="payment-mode-badge" title="{{ r['payment_method'] or '' }}">Mixte · {{ r['payment_method'] or '' }}</span>
+            {% elif r['payment_mode'] %}
+              <span class="payment-mode-badge">{{ r['payment_mode'] }}</span>
+            {% elif r['payment_method'] %}
+              <small class="legacy-payment-text">{{ r['payment_method'] }}</small>
+            {% endif %}
+          </td>
+
+          <td class="accounting-date-cell {% if r['accounting_status']=='red' %}ods-red-cell{% endif %}">
+            {% set visible_accounting_date = r.get('_display_accounting_date', r['accounting_date'] or '') %}
+            {% if visible_accounting_date %}
+              <strong>{{ visible_accounting_date[8:10] }}/{{ visible_accounting_date[5:7] }}/{{ visible_accounting_date[0:4] }}</strong>
+            {% elif r['accounting_status']=='red' %}
+              <strong>En attente</strong>
+            {% elif r['invoice_no'] and r['paid'] %}
+              <span class="invoice-date-unknown">Date inconnue</span>
+            {% endif %}
+          </td>
+
+          <td>{{ r['sent_via'] or '' }}</td>
+          <td>{{ r['remarks'] or '' }}</td>
+
+          <td class="row-actions followup-actions">
+            {% if r.get('_virtual_payment') %}
+              <a class="mini-btn" href="{{ url_for('repair_detail', rid=r['id']) }}">Voir dossier</a>
+            {% else %}
+              <a class="mini-btn" href="{{ url_for('repair_detail', rid=r['id']) }}">Ouvrir</a>
+              {% if r['client_phone'] %}
+                <a class="mini-btn client-message-mini" href="{{ url_for('client_message', rid=r['id']) }}" title="Préparer un message pour le client">💬</a>
+              {% endif %}
+              <a class="mini-btn edit-inline-btn" href="{{ url_for('repair_edit', rid=r['id']) }}">Modifier</a>
+
+
+              {% if not r['invoice_no'] and not r['legacy_imported'] %}
+                <a class="mini-btn invoice-row-btn"
+                   href="{{ url_for('repair_close', rid=r['id'], return='suivi') }}">FACTURER</a>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+
+        {% if edit_id == r['id'] and not r.get('_virtual_payment') %}
+        <tr id="edit-{{ r['id'] }}" class="inline-edit-row">
+          <td colspan="{% if selected_year == 2025 %}13{% else %}12{% endif %}">
+            <form method="post" action="{{ url_for('repair_quick_edit', rid=r['id']) }}" class="inline-followup-form">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+              <div class="inline-edit-title">
+                Modifier la ligne —
+                <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong>
+              </div>
+
+              <div class="inline-edit-grid">
+                <label>Prénom
+                  <input value="{{ r['client_first_name'] or '' }}" readonly
+                         title="À modifier depuis la fiche Clients">
+                </label>
+
+                <label>Nom
+                  <input value="{{ r['client_last_name'] or r['client_name'] or '' }}" readonly
+                         title="À modifier depuis la fiche Clients">
+                  <small>
+                    <a href="{{ url_for('client_edit', client_id=r['client_id']) }}">Modifier client</a>
+                  </small>
+                </label>
+
+                <label>Date
+                  <input type="date" name="received_date" value="{{ r['received_date'] or '' }}">
+                </label>
+
+                <label class="span-2">Panne
+                  <input name="problem" value="{{ r['problem'] or '' }}">
+                </label>
+
+                {% if selected_year == 2025 %}
+                <label class="span-2">Appel Téléphonique / Suivi
+                  <input name="legacy_call_note" value="{{ r['legacy_call_note'] or '' }}">
+                </label>
+                {% else %}
+                <input type="hidden" name="legacy_call_note" value="{{ r['legacy_call_note'] or '' }}">
+                {% endif %}
+
+                <label>Facture / devis N°
+                  <input name="legacy_invoice_text" value="{{ r['legacy_invoice_text'] or r['invoice_no'] or '' }}" placeholder="Non Facturé ou N°">
+                </label>
+
+                <div class="quick-amounts-pair">
+      <label class="price-edit">Prestation €
+                  <input inputmode="decimal" name="service_amount" value="{{ '%.2f'|format(r['service_amount'] or 0) }}">
+                </label>
+      <label class="price-edit">Marchandise €
+                  <input inputmode="decimal" name="goods_amount" value="{{ '%.2f'|format(r['goods_amount'] or 0) }}">
+                </label>
+    </div>
+    
+
+                
+
+                <label>Total / Mode
+                  <div class="total-mode-editor">
+                    <input class="readonly-total" value="{{ '%.2f'|format((r['service_amount'] or 0) + (r['goods_amount'] or 0))|replace('.', ',') }} €" readonly>
+                    <select name="payment_mode" class="payment-mode-select">
+                      <option value="">—</option>
+                      {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ','MIXTE'] %}
+                        <option value="{{ mode }}" {% if r['payment_mode']==mode %}selected{% endif %}>{{ mode }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  {% if not r['payment_mode'] and r['payment_method'] %}
+                    <small>Historique ODS : {{ r['payment_method'] }}</small>
+                  {% endif %}
+
+                  <div class="payment-mix-fields" data-payment-mix hidden>
+                    <div class="payment-mix-title">Paiement mixte — ventilation</div>
+                    <div class="payment-mix-grid">
+                      <label>Espèces €<input inputmode="decimal" name="payment_ESP" value="{{ r.get('_payment_split', {}).get('ESP', '') }}" placeholder="0,00"></label>
+                      <label>CB €<input inputmode="decimal" name="payment_CB" value="{{ r.get('_payment_split', {}).get('CB', '') }}" placeholder="0,00"></label>
+                      <label>Virement €<input inputmode="decimal" name="payment_VIR" value="{{ r.get('_payment_split', {}).get('VIR', '') }}" placeholder="0,00"></label>
+                      <label>PayPal €<input inputmode="decimal" name="payment_PAY" value="{{ r.get('_payment_split', {}).get('PAY', '') }}" placeholder="0,00"></label>
+                      <label>Bitcoin €<input inputmode="decimal" name="payment_BTC" value="{{ r.get('_payment_split', {}).get('BTC', '') }}" placeholder="0,00"></label>
+                      <label>Chèque €<input inputmode="decimal" name="payment_CHQ" value="{{ r.get('_payment_split', {}).get('CHQ', '') }}" placeholder="0,00"></label>
+                    </div>
+                    <small>La somme doit être exactement égale au total.</small>
+                  </div>
+                </label>
+
+                <label>Remise / Envoi facture
+                  <input name="sent_via" list="sent-via-quick-choices" value="{{ r['sent_via'] or '' }}"
+                         placeholder="Papier, E-mail, SMS, E-mail + reçu CB...">
+                  <datalist id="sent-via-quick-choices">
+          <option value="Facture + Suivi Papier">
+          <option value="Non Facturé">
+          <option value="Facture par Mail">
+          <option value="Facture Papier">
+        </datalist>
+      </label>
+
+                <label class="span-2">Remarques
+                  <input name="remarks" value="{{ r['remarks'] or '' }}">
+                </label>
+
+                <label>État comptable
+                  <select name="accounting_status">
+                    <option value="normal" {% if (r['accounting_status'] or 'normal') == 'normal' %}selected{% endif %}>Normal / réglé même mois</option>
+                    <option value="yellow" {% if r['accounting_status'] == 'yellow' %}selected{% endif %}>Jaune / autre date</option>
+                    <option value="red" {% if r['accounting_status'] == 'red' %}selected{% endif %}>Rouge / attente paiement</option>
+                  </select>
+                </label>
+
+                <label>Date encaissée / déclarée
+                  <input type="date" name="accounting_date"
+                         value="{{ r['accounting_date'] or '' }}">
+                </label>
+              </div>
+
+              <div class="inline-edit-actions">
+                <button type="submit" class="button primary">ENREGISTRER</button>
+                <a class="button" href="{{ url_for('index', year=selected_year) }}#suivi-{{ r['id'] }}">Annuler</a>
+                <a class="button" href="{{ url_for('repair_edit', rid=r['id']) }}">Modification complète</a>
+              </div>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+
+      {% if not to_return_only %}
+      <tr class="followup-total-row">
+        <td>Total {{ month.name }}</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        {% if selected_year == 2025 %}<td></td>{% endif %}
+        <td></td>
+        <td class="money-cell followup-total-service">
+          <strong>{{ '%.2f'|format(month.service_total)|replace('.', ',') }} €</strong>
+        </td>
+        <td class="money-cell followup-total-goods">
+          <strong>{{ '%.2f'|format(month.goods_total)|replace('.', ',') }} €</strong>
+        </td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+      </tr>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% endblock %}

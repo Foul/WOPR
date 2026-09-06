@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Importer Proton - WOPR{% endblock %}
+{% block body %}
+
+<div class="sheet-banner narrow">
+  <div class="banner-top">Contacts</div>
+  <div class="banner-title">Importer Proton Contacts</div>
+</div>
+
+<div class="import-card">
+  <h2>1. Choisir l'export Proton VCF</h2>
+
+  <p>
+    <strong>Tous les contacts Proton sont considérés comme des clients WOPR.</strong><br>
+    WOPR commence par analyser le fichier. Aucune fiche client n'est modifiée avant l'écran de confirmation.
+  </p>
+
+  {% if google_connected %}
+  <div class="import-ok">
+    ● Google Contacts connecté : l'analyse vérifiera les correspondances dans tous tes Google Contacts.
+    Les contacts déjà présents seront réutilisés ; les absents seront créés automatiquement dans le groupe WOPR.
+  </div>
+  {% else %}
+  <div class="import-warning">
+    Google Contacts n'est pas connecté. L'import Proton pourra être analysé côté WOPR,
+    mais les doublons Google ne pourront pas être vérifiés.
+  </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" class="proton-upload">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>Fichier Proton Contacts (.vcf)
+      <input type="file" name="vcf" accept=".vcf,text/vcard,text/x-vcard" required>
+    </label>
+
+    <div class="footer-actions">
+      <button class="primary big-action" type="submit">ANALYSER AVANT IMPORT</button>
+      <a class="button" href="{{ url_for('contacts_page') }}">Annuler</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

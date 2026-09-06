@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Contrôle justificatifs - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow"><div class="banner-top">WOPR</div><div class="banner-title">Contrôle des justificatifs</div></div>
+<div class="audit-readonly-notice">🔒 Contrôle en lecture seule : cette page ne copie, ne renomme, ne déplace et ne supprime aucun fichier.</div>
+<div class="audit-stats"><div><strong>{{ linked_count }}</strong><span>liens enregistrés</span></div><div><strong>{{ ok_rows|length }}</strong><span>fichiers trouvés</span></div><div class="{% if broken_rows %}audit-bad{% endif %}"><strong>{{ broken_rows|length }}</strong><span>liens cassés</span></div></div>
+{% if broken_rows %}<h2>⚠️ Liens cassés</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Facture</th><th>Fichier attendu</th></tr></thead><tbody>{% for e in broken_rows %}<tr><td>{{ e.entry_date }}</td><td>{{ e.party or '' }}</td><td>{{ e.invoice_no or '—' }}</td><td><code>{{ e.document_original_name or e.document_path }}</code></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="audit-ok">✅ Tous les justificatifs liés pointent vers un fichier existant.</div>{% endif %}
+<p><a class="button" href="{{ url_for('achats_ventes_page') }}">← Achats / Ventes</a></p>
+{% endblock %}

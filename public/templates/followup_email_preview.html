@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Envoyer suivi - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">📧 Envoyer le suivi + médias</div>
+</div>
+
+<div class="email-preview-card">
+  <div class="email-preview-meta">
+    <div><strong>Client :</strong> {{ r['client_name'] }}</div>
+    <div><strong>Expéditeur :</strong> {{ sender }}</div>
+    <div><strong>Pièces jointes :</strong></div>
+    {% if preview_pdf_ok %}
+      <div class="attachment-card">
+        <span class="attachment-icon">📎</span>
+        <span>
+          <strong>{{ preview_pdf_filename }}</strong><br>
+          <small>PDF de suivi prêt à être joint — {{ '%.1f'|format(preview_pdf_size / 1024) }} Ko — aucune facture</small>
+        </span>
+        <a class="button" href="{{ url_for('intake_pdf', rid=r['id'], lang=pdf_lang) }}" target="_blank">Voir</a>
+      </div>
+    {% else %}
+      <div class="attachment-card attachment-error">
+        ⚠️ Impossible de préparer le PDF de suivi.
+      </div>
+    {% endif %}
+  </div>
+
+  <form method="post" enctype="multipart/form-data" class="grid one">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+    <label>Langue du PDF de suivi
+      <select name="lang">
+        {% for code, info in pdf_languages.items() %}
+          <option value="{{ code }}" {% if pdf_lang == code %}selected{% endif %}>{{ info[0] }} - {{ info[1] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Destinataire
+      <input type="email" name="recipient" value="{{ recipient }}" required>
+    </label>
+
+    <label>Objet
+      <input name="subject" value="{{ subject }}" required>
+    </label>
+
+    <label>Message
+      <textarea name="body" rows="12" required>{{ body }}</textarea>
+    </label>
+
+    <label>Photos / GIF / vidéos à joindre
+      <input type="file" name="media"
+             accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm,.m4v,.avi,image/*,video/*"
+             multiple>
+      <small>Formats acceptés : JPG, PNG, WEBP, GIF, MP4, MOV, WEBM, M4V, AVI. Limite : 20 Mo de médias par e-mail, en plus du PDF de suivi.</small>
+    </label>
+
+    <div class="footer-actions">
+      <button class="primary email-send-btn" type="submit">📧 Envoyer suivi + médias</button>
+      <a class="button" href="{{ cancel_url }}">Annuler</a>
+      <a class="button" href="{{ url_for('intake_pdf', rid=r['id'], lang=pdf_lang) }}" target="_blank">Voir le PDF suivi</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

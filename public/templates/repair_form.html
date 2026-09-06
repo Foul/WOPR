@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Nouvelle prise en charge{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+  <div class="banner-title">Prise en charge / Suivi de réparation</div>
+</div>
+
+<div class="client-mode-notice">🔒 Mode Client actif — aucune donnée des autres clients n'est visible.</div>
+<form method="post" class="sheet-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <div class="section-title">Informations Client</div>
+  <div class="grid two">
+    <label>Prénom<input name="first_name" autocomplete="given-name"></label>
+    <label>Nom<input name="last_name" autocomplete="family-name" required></label>
+    <label>Date<input type="date" name="received_date" value="{{ today }}" required></label>
+    <label class="wide">Adresse<input name="address_street" placeholder="25 rue Exemple"></label>
+    <label>Code postal<input name="postal_code" inputmode="numeric" placeholder="24000"></label>
+    <label>Ville<input name="city" placeholder="Périgueux"></label>
+    <label>Téléphone<input name="phone"></label>
+    <label>Courriel<input type="email" name="email"></label>
+  </div>
+
+  <div class="section-title">Détails de l'Appareil</div>
+  <div class="grid two">
+    <label>Type d'Appareil<input name="device_type"></label>
+    <label>Marque et Modèle<input name="brand_model"></label>
+    <label>Numéro de Série<input name="serial_no"></label>
+    <label>Système<input name="system_name" placeholder="Windows 11, macOS, Linux..."></label>
+    <label>Mot de passe
+      <div class="password-field">
+        <input type="password" name="system_password" autocomplete="off">
+        <button type="button" class="password-toggle" aria-label="Afficher le mot de passe">👁</button>
+      </div>
+    </label>
+    <label class="wide">Accessoires<textarea name="accessories"></textarea></label>
+    <label class="wide">État<textarea name="device_state"></textarea></label>
+  </div>
+
+  <div class="section-title">Description du Problème</div>
+  <div class="grid one">
+    <label>Panne<textarea name="problem" required rows="5"></textarea></label>
+    <label>Remarques<textarea name="remarks" rows="3"></textarea></label>
+  </div>
+
+  <div class="footer-actions">
+    <button class="primary" type="submit">Créer le dossier</button>
+  </div>
+</form>
+{% endblock %}

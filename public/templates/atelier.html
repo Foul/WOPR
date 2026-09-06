@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Atelier - {{ business_name }}{% endblock %}
+{% block body %}
+<div class="atelier-head">
+  <div>
+    <h1>🛠️ Tableau de bord atelier</h1>
+    <p>Vue rapide de ce qui demande ton attention aujourd'hui.</p>
+  </div>
+  <a class="button primary" href="{{ url_for('repair_new') }}">+ Nouvelle réparation</a>
+</div>
+
+<div class="atelier-kpis">
+  <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
+    <span class="atelier-kpi-icon">🔧</span>
+    <span class="atelier-kpi-label">En cours</span>
+    <strong>{{ en_cours_count }}</strong>
+    <small>dossiers actifs</small>
+  </a>
+  <div class="atelier-kpi">
+    <span class="atelier-kpi-icon">📦</span>
+    <span class="atelier-kpi-label">Attente pièce</span>
+    <strong>{{ attente_piece_count }}</strong>
+    <small>réparation(s)</small>
+  </div>
+  <a class="atelier-kpi atelier-kpi-return" href="{{ url_for('index', year=current_year, a_restituer=1) }}">
+    <span class="atelier-kpi-icon">✅</span>
+    <span class="atelier-kpi-label">À restituer</span>
+    <strong>{{ a_restituer_count }}</strong>
+    <small>matériel(s) terminé(s)</small>
+  </a>
+  <a class="atelier-kpi {% if unpaid_count %}atelier-kpi-alert{% endif %}" href="{{ url_for('invoices_page', unpaid=1) }}">
+    <span class="atelier-kpi-icon">💳</span>
+    <span class="atelier-kpi-label">Impayés</span>
+    <strong>{{ unpaid_count }}</strong>
+    <small>{{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €</small>
+  </a>
+  <a class="atelier-kpi atelier-kpi-ca" href="{{ url_for('total_page') }}">
+    <span class="atelier-kpi-icon">📈</span>
+    <span class="atelier-kpi-label">CA {{ month_name }}</span>
+    <strong>{{ '%.2f'|format(ca_month)|replace('.', ',') }} €</strong>
+    <small>encaissé</small>
+  </a>
+  <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
+    <span class="atelier-kpi-icon">🧰</span>
+    <span class="atelier-kpi-label">Réparations {{ month_name }}</span>
+    <strong>{{ reparations_mois_count }}</strong>
+    <small>entrées atelier</small>
+  </a>
+</div>
+
+<div class="atelier-panels">
+  <section class="atelier-panel">
+    <div class="atelier-panel-title">
+      <h2>⏰ À surveiller</h2>
+      <span>Terminés depuis 7 jours ou plus</span>
+    </div>
+    {% if watch %}
+      <div class="atelier-list">
+      {% for r in watch %}
+        <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
+          <div><strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['problem'] or '' }}</span></div>
+          <b class="atelier-days {% if r['days_waiting'] >= 15 %}critical{% endif %}">{{ r['days_waiting'] }} j</b>
+        </a>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="atelier-empty">👍 Aucun matériel terminé ne traîne depuis plus de 7 jours.</div>
+    {% endif %}
+  </section>
+
+  <section class="atelier-panel">
+    <div class="atelier-panel-title">
+      <h2>💶 Règlements en attente</h2>
+      <span>{{ unpaid_count }} dossier(s) · {{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €</span>
+    </div>
+    {% if unpaid_rows %}
+      <div class="atelier-list">
+      {% for r in unpaid_rows %}
+        <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
+          <div><strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['invoice_no'] }} · {{ r['problem'] or '' }}</span></div>
+          <b>{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €</b>
+        </a>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="atelier-empty">👌 Aucun règlement en attente.</div>
+    {% endif %}
+  </section>
+
+  <section class="atelier-panel atelier-panel-wide">
+    <div class="atelier-panel-title">
+      <h2>🕘 Derniers dossiers</h2>
+      <a href="{{ url_for('index', year=current_year) }}">Voir le Suivi →</a>
+    </div>
+    <div class="atelier-recent-grid">
+      {% for r in recent_rows %}
+        <a class="atelier-recent" href="{{ url_for('repair_detail', rid=r['id']) }}">
+          <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong>
+          <span>{{ r['problem'] or 'Sans description' }}</span>
+          <small>{{ r['status'] or '' }}{% if r['received_date'] %} · {{ r['received_date'][8:10] }}/{{ r['received_date'][5:7] }}/{{ r['received_date'][0:4] }}{% endif %}</small>
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

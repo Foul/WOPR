@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Sécurité - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow"><div class="banner-top">WOPR</div><div class="banner-title">Sécurité locale</div></div>
+<div class="security-grid">
+  <section class="security-card">
+    <h2>PIN administrateur</h2>
+    <p>Session atelier : <strong>{{ session_hours }} h</strong> maximum, renouvelée pendant l'utilisation.</p>
+    <form method="post" class="grid one">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="change_pin">
+      <label>PIN actuel<input type="password" inputmode="numeric" name="current_pin" maxlength="8" required></label>
+      <label>Nouveau PIN<input type="password" inputmode="numeric" name="new_pin" minlength="4" maxlength="8" required></label>
+      <label>Confirmer<input type="password" inputmode="numeric" name="new_pin_confirm" minlength="4" maxlength="8" required></label>
+      <button type="submit">Modifier le PIN</button>
+    </form>
+  </section>
+  <section class="security-card">
+    <h2>🏢 Identité entreprise — logo des factures</h2>
+    <p>Le logo est propre à cette installation de WOPR et reste dans <code>private/assets/</code>. Il n'est jamais enregistré dans <code>public/</code>.</p>
+    {% if invoice_logo_configured %}
+      <div style="margin:12px 0;padding:12px;background:#fff;border:1px solid #bbb;text-align:center;">
+        <img src="{{ url_for('security_invoice_logo_preview') }}?v={{ app_version }}" alt="Logo actuel des factures" style="display:block;max-width:100%;max-height:180px;margin:auto;object-fit:contain;">
+      </div>
+      <div class="smtp-status ok">✓ Logo personnalisé actif sur les nouveaux PDF</div>
+    {% else %}
+      <div class="smtp-status warn">Aucun logo personnalisé — les nouveaux PDF sont générés sans logo.</div>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data" class="grid one" style="margin-top:12px;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="invoice_logo_upload">
+      <label>Choisir / remplacer le logo
+        <input type="file" name="invoice_logo" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" required>
+      </label>
+      <small>PNG, JPG/JPEG ou WebP. WOPR l'enregistre automatiquement au format PNG dans la partie privée.</small>
+      <button class="primary" type="submit">Enregistrer le logo</button>
+    </form>
+    {% if invoice_logo_configured %}
+    <form method="post" style="margin-top:10px;" onsubmit="return confirm('Supprimer le logo personnalisé des factures ?');">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="invoice_logo_remove">
+      <button type="submit" class="danger-btn">Supprimer le logo</button>
+    </form>
+    {% endif %}
+  </section>
+  <section class="security-card">
+    <h2>Sauvegardes</h2>
+    <p>Une seule sauvegarde SQLite automatique est créée par jour. Les 30 derniers jours sont conservés.</p>
+    <form method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="backup">
+      <button class="primary" type="submit">Créer une sauvegarde maintenant</button>
+    </form>
+    {% if backups %}<ul class="backup-list">{% for b in backups %}<li>{{ b.name }}</li>{% endfor %}</ul>{% endif %}
+  </section>
+  <section class="security-card smtp-card">
+    <h2>📧 Envoi des factures — Proton SMTP</h2>
+    <p>Le jeton SMTP reste uniquement sur ce PC dans <code>data/smtp_settings.json</code> et n'est jamais affiché après enregistrement.</p>
+    <form method="post" class="grid one">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="smtp_save">
+      <label class="checkboxline">
+        <input type="checkbox" name="smtp_enabled" {% if smtp_settings.enabled %}checked{% endif %}>
+        Activer l'envoi Proton SMTP
+      </label>
+      <label>Adresse d'envoi
+        <input type="email" name="smtp_sender_email" value="{{ smtp_settings.sender_email or 'contact@foul-fix.fr' }}" required>
+      </label>
+      <label>Nom d'expéditeur
+        <input name="smtp_sender_name" value="{{ smtp_settings.sender_name or 'WOPR' }}">
+      </label>
+      <label>Utilisateur SMTP
+        <input type="email" name="smtp_username" value="{{ smtp_settings.username or 'contact@foul-fix.fr' }}" required>
+      </label>
+      <div class="grid two">
+        <label>Serveur
+          <input name="smtp_host" value="{{ smtp_settings.host or 'smtp.protonmail.ch' }}" required>
+        </label>
+        <label>Port
+          <input type="number" name="smtp_port" value="{{ smtp_settings.port or 587 }}" min="1" max="65535" required>
+        </label>
+      </div>
+      <label>Sécurité
+        <select name="smtp_security">
+          <option value="starttls" {% if smtp_settings.security == 'starttls' %}selected{% endif %}>STARTTLS</option>
+          <option value="ssl" {% if smtp_settings.security == 'ssl' %}selected{% endif %}>SSL/TLS</option>
+        </select>
+      </label>
+      <label>Jeton SMTP Proton
+        <input type="password" name="smtp_token" autocomplete="new-password"
+               placeholder="{% if smtp_token_configured %}Jeton déjà enregistré — laisser vide pour le conserver{% else %}Coller le jeton Proton ici{% endif %}">
+      </label>
+      <div class="smtp-status {% if smtp_token_configured %}ok{% else %}warn{% endif %}">
+        {% if smtp_token_configured %}✓ Jeton SMTP enregistré localement{% else %}Jeton SMTP non configuré{% endif %}
+      </div>
+      <button class="primary" type="submit">Enregistrer SMTP Proton</button>
+    </form>
+  </section>
+  <section class="security-card">
+    <h2>💾 Sauvegarde automatique</h2>
+    <p>
+      Une seule sauvegarde de la base est créée automatiquement à la première utilisation de WOPR chaque jour, même si l'application est restée ouverte.
+      Les <strong>30 derniers jours</strong> sont conservés dans <code>data/backups/</code>.
+    </p>
+    <div class="backup-auto-status">✓ Sauvegarde quotidienne active</div>
+  </section>
+
+  <section class="security-card">
+    <h2>🧳 Diagnostic de portabilité</h2>
+    <div class="smtp-status {% if portability.ready %}ok{% else %}warn{% endif %}">
+      {% if portability.ready %}✓ WOPR est prêt à être déplacé{% else %}⚠ Un point bloque encore la portabilité{% endif %}
+    </div>
+    <ul class="backup-list portability-list">
+      {% for item in portability.checks %}
+      <li>
+        <strong>{% if item.ok %}✓{% elif item.required %}⚠{% else %}○{% endif %} {{ item.label }}</strong><br>
+        <small>{{ item.detail }}</small>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section class="security-card">
+    <h2>Protections actives</h2>
+    <ul>
+      <li>PIN stocké sous forme de hash scrypt</li><li>Secrets locaux chiffrés</li><li>CSRF sur les opérations atelier</li><li>Debug Flask désactivé</li><li>Clé de session aléatoire locale</li><li>Permissions Linux renforcées</li><li>Signature client isolée et à usage unique</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}

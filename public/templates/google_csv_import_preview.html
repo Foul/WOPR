@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Aperçu Google CSV - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">Aperçu Google CSV</div>
+</div>
+
+{% set s = payload.summary %}
+{% if s.total_source < 5 %}
+<div class="google-csv-warning">
+  Seulement {{ s.total_source }} contact(s) analysé(s).
+  Si tu voulais tout ton carnet Google, recharge le CSV en laissant
+  <strong>“Limiter au label WOPR”</strong> décoché.
+</div>
+{% endif %}
+<div class="google-csv-summary">
+  <div><strong>{{ s.total_source }}</strong><span>contacts Google</span></div>
+  <div><strong>{{ s.safe }}</strong><span>correspondances sûres</span></div>
+  <div><strong>{{ s.will_fill }}</strong><span>clients à compléter</span></div>
+  <div><strong>{{ s.will_merge or 0 }}</strong><span>doublons à fusionner</span></div>
+  <div><strong>{{ s.already_complete }}</strong><span>déjà complets</span></div>
+  <div><strong>{{ s.ambiguous }}</strong><span>ambigus</span></div>
+  <div><strong>{{ s.unmatched }}</strong><span>sans correspondance</span></div>
+</div>
+
+<form method="post" action="{{ url_for('import_google_csv_confirm') }}">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+  <div class="sheet-wrapper google-csv-preview-wrap">
+    <table class="sheet-table google-csv-preview-table">
+      <thead>
+        <tr>
+          <th>Appliquer</th>
+          <th>Contact Google</th>
+          <th>Client WOPR</th>
+          <th>Correspondance</th>
+          <th>Compléments proposés</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for c in payload.contacts %}
+        {% if c.status == 'safe' and c.actionable %}
+        <tr>
+          <td class="preview-check">
+            <input type="checkbox" name="apply_client_id"
+                   value="{{ c.local_client_id }}" checked>
+          </td>
+          <td>
+            <strong>{{ c.display_name }}</strong>
+            {% if c.phone %}<br><small>{{ c.phone }}</small>{% endif %}
+            {% if c.email %}<br><small>{{ c.email }}</small>{% endif %}
+          </td>
+          <td><strong>{{ c.local_name }}</strong></td>
+          <td>
+            <span class="match-safe">Sûre</span>
+            {% if c.evidence %}<br><small>{{ c.evidence|join(' + ') }}</small>{% endif %}
+            {% if c.duplicate_local_ids %}
+              <br><small class="match-warning">
+                {{ c.duplicate_local_ids|length }} doublon(s) local(aux) détecté(s)
+              </small>
+            {% endif %}
+          </td>
+          <td>
+            {% if c.duplicate_local_ids %}
+              <div><strong>Fusion :</strong> {{ c.duplicate_local_ids|length }} doublon(s) local(aux)</div>
+            {% endif %}
+            {% for key, value in c.fill.items() %}
+              <div><strong>
+                {% if key == 'first_name' %}Prénom
+                {% elif key == 'last_name' %}Nom
+                {% elif key == 'company' %}Entreprise / Société
+                {% elif key == 'phone' %}Téléphone
+                {% elif key == 'email' %}E-mail
+                {% elif key == 'address_street' %}Adresse
+                {% elif key == 'postal_code' %}CP
+                {% elif key == 'city' %}Ville
+                {% else %}{{ key }}{% endif %} :
+              </strong> {{ value }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+      {% else %}
+        <tr><td colspan="5">Aucun contact.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer-actions">
+    <button class="primary" type="submit">Appliquer compléments + fusions cochés</button>
+  </div>
+</form>
+
+<details class="google-csv-details">
+  <summary>Voir les correspondances non appliquées / déjà complètes</summary>
+  <div class="sheet-wrapper">
+    <table class="sheet-table google-csv-preview-table secondary">
+      <thead><tr><th>Google</th><th>État</th><th>Client WOPR</th></tr></thead>
+      <tbody>
+      {% for c in payload.contacts %}
+        {% if not (c.status == 'safe' and c.actionable) %}
+        <tr>
+          <td>{{ c.display_name }}</td>
+          <td>
+            {% if c.status == 'safe' %}<span class="match-complete">Déjà complet</span>
+            {% elif c.status == 'ambiguous' %}<span class="match-warning">Ambigu</span>
+            {% else %}<span class="match-muted">Sans correspondance</span>{% endif %}
+          </td>
+          <td>{{ c.local_name or '—' }}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<form method="post" action="{{ url_for('import_google_csv_cancel') }}" class="cancel-import-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <button type="submit">Annuler l'import</button>
+</form>
+{% endblock %}

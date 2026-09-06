@@ -1,0 +1,21 @@
+{% extends "base_public.html" %}
+{% block title %}Sécuriser WOPR{% endblock %}
+{% block body %}
+<div class="auth-card">
+  <img src="{{ url_for('static', filename='logo_topbar.png') }}" alt="WOPR" class="auth-logo">
+  <h1>Première sécurisation</h1>
+  <p>Choisis ton code PIN administrateur. <strong>6 chiffres sont conseillés.</strong></p>
+  {% with messages = get_flashed_messages() %}{% if messages %}<div class="flash">{{ messages[0] }}</div>{% endif %}{% endwith %}
+  <form method="post" class="auth-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>PIN
+      <input type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" name="pin" autocomplete="new-password" autofocus required>
+    </label>
+    <label>Confirmer le PIN
+      <input type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" name="pin_confirm" autocomplete="new-password" required>
+    </label>
+    <button class="primary big-action" type="submit">ACTIVER LA PROTECTION</button>
+  </form>
+  <p class="auth-help">Le PIN n'est jamais enregistré en clair. Il est stocké sous forme de hash dans le dossier local <code>data/</code>.</p>
+</div>
+{% endblock %}

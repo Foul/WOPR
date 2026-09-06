@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Analyse Proton - WOPR{% endblock %}
+{% block body %}
+
+<div class="sheet-banner narrow">
+  <div class="banner-top">Import Proton</div>
+  <div class="banner-title">Analyse avant import</div>
+</div>
+
+{% set s = payload['summary'] %}
+
+<div class="import-source-rule">
+  <strong>Règle d'import :</strong> les {{ s['total'] }} contacts Proton seront tous importés comme clients WOPR.
+  Google sert uniquement à éviter les doublons et à maintenir le groupe WOPR.
+</div>
+
+<div class="import-summary-grid">
+  <div class="import-stat"><strong>{{ s['total'] }}</strong><span>Contacts Proton</span></div>
+  <div class="import-stat"><strong>{{ s['local_existing'] }}</strong><span>Déjà reconnus dans WOPR</span></div>
+  <div class="import-stat"><strong>{{ s['local_ambiguous'] }}</strong><span>Ambigus côté WOPR</span></div>
+
+  {% if payload['google_checked'] %}
+    <div class="import-stat google"><strong>{{ s['google_existing'] }}</strong><span>Déjà présents sur Google</span></div>
+    <div class="import-stat google"><strong>{{ s['google_in_group'] }}</strong><span>Déjà dans le groupe WOPR</span></div>
+    <div class="import-stat warning"><strong>{{ s['google_ambiguous'] }}</strong><span>Doublons Google à vérifier</span></div>
+    <div class="import-stat"><strong>{{ s['google_missing'] }}</strong><span>Absents de Google</span></div>
+  {% endif %}
+
+  <div class="import-stat warning"><strong>{{ s['shared_coordinates'] }}</strong><span>Fiches avec coordonnées partagées</span></div>
+</div>
+
+{% if payload['google_error'] %}
+<div class="import-warning">Vérification Google incomplète : {{ payload['google_error'] }}</div>
+{% endif %}
+
+<div class="import-rules">
+  <strong>Règles anti-doublons :</strong>
+  e-mail identique = correspondance forte ; téléphone identique = utilisé seulement s'il n'est pas partagé
+  par plusieurs fiches Proton ; un simple nom identique ne déclenche jamais de fusion automatique.
+</div>
+
+<div class="sheet-wrapper proton-preview-wrap">
+<table class="sheet-table proton-preview-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Contact Proton</th>
+      <th>Coordonnées</th>
+      <th>WOPR actuel</th>
+      {% if payload['google_checked'] %}<th>Google Contacts</th>{% endif %}
+      <th>Attention</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for c in payload['contacts'] %}
+    <tr>
+      <td>{{ c['source_position'] }}</td>
+      <td>
+        <strong>{{ c['name'] }}</strong>
+        {% if c['notes'] %}<div class="tiny-note">{{ c['notes'][:100] }}{% if c['notes']|length > 100 %}…{% endif %}</div>{% endif %}
+      </td>
+      <td>
+        {% if c['email'] %}{{ c['email'] }}<br>{% endif %}
+        {% if c['phone'] %}{{ c['phone'] }}<br>{% endif %}
+        {% if c['address_street'] %}{{ c['address_street'] }}<br>{% endif %}
+        {% if c['postal_code'] or c['city'] %}{{ c['postal_code'] }} {{ c['city'] }}{% endif %}
+      </td>
+      <td>
+        {% if c['local_matches']|length == 1 %}
+          <span class="sync-ok">● Déjà reconnu</span>
+          {% if c['local_reasons'] %}<div class="tiny-note">{{ c['local_reasons']|join(', ') }}</div>{% endif %}
+        {% elif c['local_matches']|length > 1 %}
+          <span class="sync-error">● {{ c['local_matches']|length }} correspondances</span>
+        {% else %}
+          <span class="sync-wait">● Nouveau</span>
+        {% endif %}
+      </td>
+
+      {% if payload['google_checked'] %}
+      <td>
+        {% if c['google_matches']|length == 1 %}
+          <span class="sync-ok">● Existe déjà</span>
+          {% if c['google_in_group'] %}<div class="tiny-note">déjà dans WOPR</div>
+          {% else %}<div class="tiny-note">sera rattaché au groupe WOPR</div>{% endif %}
+        {% elif c['google_matches']|length > 1 %}
+          <span class="sync-error">● {{ c['google_matches']|length }} doublons possibles</span>
+          <div class="tiny-note">aucun nouveau contact Google ne sera créé</div>
+        {% else %}
+          <span class="sync-wait">● Absent</span>
+        {% endif %}
+      </td>
+      {% endif %}
+
+      <td>
+        {% if c['shared_warnings'] %}
+          <span class="import-shared">{{ c['shared_warnings']|join(', ') }}</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div class="import-confirm-panel">
+  <form method="post" action="{{ url_for('import_proton_confirm') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+    {% if payload['google_checked'] %}
+    <div class="import-google-rule">
+      <strong>Google Contacts :</strong>
+      contact unique trouvé → réutilisé et rattaché au groupe WOPR ;
+      absent → créé automatiquement ;
+      plusieurs correspondances → marqué à vérifier, aucun doublon supplémentaire créé.
+    </div>
+    {% endif %}
+
+    <div class="footer-actions">
+      <button class="primary big-action" type="submit">IMPORTER LES {{ s['total'] }} CLIENTS PROTON</button>
+    </div>
+  </form>
+
+  <form method="post" action="{{ url_for('import_proton_cancel') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Annuler — ne rien modifier</button>
+  </form>
+</div>
+
+{% endblock %}

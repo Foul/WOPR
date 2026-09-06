@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Message client - {% if r %}{{ r['client_name'] }}{% else %}{{ client['name'] or client['company'] }}{% endif %}{% endblock %}
+{% block body %}
+<div class="client-message-page">
+  <div class="client-message-head">
+    <div>
+      {% if r %}
+        <div class="client-message-kicker">DOSSIER {{ r['dossier_no'] }}</div>
+      {% else %}
+        <div class="client-message-kicker">CLIENT</div>
+      {% endif %}
+      <h1>💬 Message client</h1>
+      <p>
+        {% if r %}
+          <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong>
+          · {{ phone_raw }}
+          · {{ r['device_type'] or 'Matériel' }}{% if r['brand_model'] %} {{ r['brand_model'] }}{% endif %}
+        {% else %}
+          <strong>{{ client['first_name'] or '' }} {{ client['last_name'] or client['name'] or client['company'] or '' }}</strong>
+          · {{ phone_raw }}
+        {% endif %}
+      </p>
+    </div>
+    {% if r %}
+      <a class="button" href="{{ url_for('repair_detail', rid=r['id']) }}">← Retour au dossier</a>
+    {% else %}
+      <a class="button" href="{{ url_for('contacts_page') }}">← Retour aux clients</a>
+    {% endif %}
+  </div>
+
+  <div class="client-message-card">
+    <label>Modèle
+      <select id="message-template">
+        {% if r %}
+          <option value="auto">✨ Automatique selon le statut ({{ r['status'] }})</option>
+          <option value="diagnostic">🔎 Diagnostic en cours</option>
+          <option value="accord">👍 Demande d'accord</option>
+          <option value="piece">📦 Pièce commandée</option>
+          <option value="termine">✅ Matériel prêt</option>
+          <option value="pieces">🧩 Laissé pour pièces</option>
+          <option value="libre">✍️ Message libre</option>
+        {% else %}
+          <option value="libre">✍️ Message libre</option>
+          <option value="rappel">📞 Rappel / prise de contact</option>
+          <option value="dispo">💬 Disponible pour faire le point</option>
+        {% endif %}
+      </select>
+    </label>
+
+    <label>Message
+      <textarea id="client-message-text" rows="12">{{ templates['auto'] if r else templates['libre'] }}</textarea>
+    </label>
+
+    <div class="client-message-counter">
+      <span id="message-chars">0 caractère</span>
+      <span>Tu peux modifier le texte avant de l'envoyer.</span>
+    </div>
+
+    <div class="client-message-actions">
+      <button type="button" class="primary" id="copy-message">📋 Copier le message</button>
+
+      {% if kde_devices %}
+      <form method="post" action="{{ url_for('kdeconnect_send_sms') }}" id="kde-sms-form" class="kde-sms-form"
+            onsubmit="return confirm('Envoyer réellement ce SMS via KDE Connect ?');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="phone" value="{{ phone_sms }}">
+        <input type="hidden" name="message" id="kde-message-value" value="">
+        <input type="hidden" name="return_url" value="{{ request.path }}">
+        {% if kde_devices|length == 1 %}
+          <input type="hidden" name="device_id" value="{{ kde_devices[0]['id'] }}">
+          <button type="submit" class="button kde-send-btn">📲 Envoyer via {{ kde_devices[0]['name'] }}</button>
+        {% else %}
+          <select name="device_id" class="kde-device-select" required>
+            {% for dev in kde_devices %}
+              <option value="{{ dev['id'] }}">{{ dev['name'] }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="button kde-send-btn">📲 Envoyer via KDE Connect</button>
+        {% endif %}
+      </form>
+      {% else %}
+        <button type="button" class="button" disabled title="Aucun téléphone KDE Connect joignable">📲 KDE Connect indisponible</button>
+      {% endif %}
+
+      <a class="button" href="https://messages.google.com/web/" target="_blank" rel="noopener">💬 Google Messages</a>
+    </div>
+
+    <div class="client-message-tip">
+      <strong>KDE Connect :</strong>
+      le bouton 📲 envoie maintenant réellement le SMS depuis ton téléphone Android via <code>kdeconnect-cli</code>.
+      Le message reste modifiable avant envoi et une confirmation est demandée.
+    </div>
+
+    <div id="copy-ok" class="client-message-copy-ok" hidden>✓ Message copié</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const templates = {{ templates|tojson }};
+  const select = document.getElementById('message-template');
+  const text = document.getElementById('client-message-text');
+  const copyBtn = document.getElementById('copy-message');
+  const counter = document.getElementById('message-chars');
+  const ok = document.getElementById('copy-ok');
+  const phone = {{ phone_sms|tojson }};
+
+  function updateCounter(){
+    const n = text.value.length;
+    counter.textContent = n + (n > 1 ? ' caractères' : ' caractère');
+  }
+
+  function syncKdeMessage(){
+    const hidden = document.getElementById('kde-message-value');
+    if(hidden) hidden.value = text.value;
+  }
+
+  select.addEventListener('change', () => {
+    text.value = templates[select.value] || '';
+    updateCounter();
+    syncKdeMessage();
+    text.focus();
+  });
+
+  text.addEventListener('input', () => {
+    updateCounter();
+    syncKdeMessage();
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text.value);
+    } catch(e) {
+      text.focus();
+      text.select();
+      document.execCommand('copy');
+    }
+    ok.hidden = false;
+    setTimeout(() => { ok.hidden = true; }, 1800);
+  });
+
+  updateCounter();
+  syncKdeMessage();
+})();
+</script>
+{% endblock %}

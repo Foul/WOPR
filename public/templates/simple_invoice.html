@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Facture simple - WOPR{% endblock %}
+{% block body %}
+<div class="banner">
+  <div>
+    <div class="banner-title">🧾 Facture simple</div>
+    <div class="banner-sub">Client de passage · aucune ligne créée dans Suivi</div>
+  </div>
+  <a class="button" href="{{ url_for('invoices_page') }}">← Retour Factures</a>
+</div>
+
+<form method="post" class="invoice-entry simple-invoice-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+  <div class="section-title">Client</div>
+  <div class="simple-client-choice">
+    <label>Client existant
+      <select name="client_id" id="simple-client-id">
+        <option value="">— Nouveau / Client de passage —</option>
+        {% for c in clients %}
+          <option value="{{ c['id'] }}">{% if c['first_name'] or c['last_name'] %}{{ c['first_name'] or '' }} {{ c['last_name'] or '' }}{% if c['company'] %} — {{ c['company'] }}{% endif %}{% else %}{{ c['company'] or c['name'] }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="simple-client-hint">
+      Aucun client choisi + champs vides = <strong>Client de passage</strong>.
+    </div>
+  </div>
+
+  <div class="grid two simple-new-client" id="simple-new-client">
+    <label>Prénom<input name="first_name"></label>
+    <label>Nom<input name="last_name"></label>
+    <label>Entreprise / Société<input name="company"></label>
+    <label>Téléphone<input name="phone"></label>
+    <label>E-mail<input type="email" name="email"></label>
+    <label>Adresse<input name="address_street"></label>
+    <label>Code postal<input name="postal_code"></label>
+    <label>Ville<input name="city"></label>
+  </div>
+
+  <div class="section-title">Lignes de facture</div>
+  <table class="invoice-entry-table">
+    <thead>
+      <tr><th>Type</th><th>Quantité</th><th>Désignation</th><th>Prix unitaire</th><th>Total ligne</th><th></th></tr>
+    </thead>
+    <tbody id="invoice-lines"></tbody>
+  </table>
+
+  <div class="invoice-line-actions">
+    <button type="button" id="add-service">+ Ligne prestation</button>
+    <button type="button" id="add-goods">+ Ligne marchandise</button>
+    <div class="invoice-total">Total : <strong id="grand-total">0,00 €</strong></div>
+  </div>
+
+  <div class="section-title">Règlement et remise</div>
+  <div class="grid two billing-meta">
+    <label>Mode de règlement
+      <select name="payment_mode">
+        <option value="">— Sélectionner —</option>
+        {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ'] %}
+          <option value="{{ mode }}">{{ mode }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Remise / Envoi facture
+      <input name="sent_via" list="simple-sent-via-choices"
+             placeholder="Choisir ou saisir...">
+      <datalist id="simple-sent-via-choices">
+        <option value="Facture + Suivi Papier">
+        <option value="Non Facturé">
+        <option value="Facture par Mail">
+        <option value="Facture Papier">
+      </datalist>
+    </label>
+
+    <label class="checkboxline">
+      <input type="checkbox" name="paid" checked>
+      Paiement reçu
+    </label>
+  </div>
+
+  <div class="footer-actions">
+    <button class="primary big-action" type="submit">GÉNÉRER LA FACTURE</button>
+    <a class="button" href="{{ url_for('invoices_page') }}">Annuler</a>
+  </div>
+</form>
+
+<template id="line-template">
+<tr class="invoice-line">
+  <td><select name="line_type[]"><option value="service">Prestation</option><option value="goods">Marchandise</option></select></td>
+  <td><input class="qty" type="number" min="0.01" step="0.01" name="line_qty[]" value="1"></td>
+  <td><textarea class="desc invoice-desc" name="line_desc[]" rows="2" placeholder="Désignation"></textarea></td>
+  <td><input class="price" type="number" min="0" step="0.01" name="line_price[]" value="0"></td>
+  <td class="line-total">0,00 €</td>
+  <td><button type="button" class="remove-line" title="Supprimer">×</button></td>
+</tr>
+</template>
+
+<script>
+const tbody=document.getElementById('invoice-lines');
+const tpl=document.getElementById('line-template');
+function fmt(n){return n.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';}
+function updateTotals(){
+  let grand=0;
+  document.querySelectorAll('.invoice-line').forEach(row=>{
+    const q=parseFloat(row.querySelector('.qty').value)||0;
+    const p=parseFloat(row.querySelector('.price').value)||0;
+    const t=q*p; grand+=t;
+    row.querySelector('.line-total').textContent=fmt(t);
+  });
+  document.getElementById('grand-total').textContent=fmt(grand);
+}
+function wire(row){
+  row.querySelectorAll('.qty,.price').forEach(x=>x.addEventListener('input',updateTotals));
+  row.querySelector('.remove-line').addEventListener('click',()=>{row.remove();updateTotals();});
+}
+function addLine(type){
+  const row=tpl.content.firstElementChild.cloneNode(true);
+  row.querySelector('select[name="line_type[]"]').value=type;
+  tbody.appendChild(row);wire(row);updateTotals();row.querySelector('.desc').focus();
+}
+document.getElementById('add-service').onclick=()=>addLine('service');
+document.getElementById('add-goods').onclick=()=>addLine('goods');
+addLine('service');
+
+const clientSelect=document.getElementById('simple-client-id');
+const newClient=document.getElementById('simple-new-client');
+function updateClientFields(){
+  const disabled=!!clientSelect.value;
+  newClient.classList.toggle('simple-client-disabled',disabled);
+  newClient.querySelectorAll('input').forEach(x=>x.disabled=disabled);
+}
+clientSelect.addEventListener('change',updateClientFields);
+updateClientFields();
+</script>
+{% endblock %}

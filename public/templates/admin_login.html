@@ -1,0 +1,19 @@
+{% extends "base_public.html" %}
+{% block title %}WOPR verrouillé{% endblock %}
+{% block body %}
+<div class="auth-card">
+  <img src="{{ url_for('static', filename='logo_topbar.png') }}" alt="WOPR" class="auth-logo">
+  <h1>Atelier verrouillé</h1>
+  <p>Entre ton PIN pour accéder aux clients et aux réparations.</p>
+  {% with messages = get_flashed_messages() %}{% if messages %}<div class="flash auth-error">{{ messages[0] }}</div>{% endif %}{% endwith %}
+  <form method="post" class="auth-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ next_url or '/' }}">
+    <label>PIN administrateur
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" name="pin" autocomplete="current-password" autofocus required {% if wait %}disabled{% endif %}>
+    </label>
+    <button class="primary big-action" type="submit" {% if wait %}disabled{% endif %}>DÉVERROUILLER</button>
+  </form>
+  <p class="auth-help">Après 5 PIN incorrects, les tentatives sont bloquées pendant 60 secondes.</p>
+</div>
+{% endblock %}

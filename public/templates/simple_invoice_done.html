@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Facture créée - WOPR{% endblock %}
+{% block body %}
+<div class="simple-done-card">
+  <div class="simple-done-icon">✅</div>
+  <h1>Facture créée</h1>
+
+  <div class="simple-done-info">
+    <div><strong>Client :</strong> {{ r['client_name'] }}</div>
+    <div><strong>N° facture :</strong> {{ r['invoice_no'] }}</div>
+    <div><strong>Total :</strong> {{ '%.2f'|format(total)|replace('.', ',') }} €</div>
+  </div>
+
+  <div class="simple-done-actions">
+    <select class="pdf-lang-select button primary" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+      <option value="">🌐 Voir / télécharger le PDF</option>
+      {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+    </select>
+
+    {% if r['client_email'] %}
+      <a class="button invoice-email-btn"
+         href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">
+        📧 Envoyer par mail
+      </a>
+    {% endif %}
+
+    <a class="button" href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">✏️ Modifier facture</a>
+    <a class="button" href="{{ url_for('invoices_page') }}">← Retour Factures</a>
+  </div>
+
+  {% if not r['client_email'] %}
+    <div class="simple-done-note">Aucune adresse e-mail enregistrée pour ce client.</div>
+  {% endif %}
+</div>
+{% endblock %}

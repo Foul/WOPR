@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Recherche globale - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow"><div class="banner-top">WOPR</div><div class="banner-title">Recherche globale</div></div>
+<form method="get" class="global-search-form">
+  <input type="search" name="q" value="{{ q }}" placeholder="Client, téléphone, PS5, n° facture, VistaPrint, montant..." autofocus autocomplete="off">
+  <button class="button primary" type="submit">🔎 Rechercher</button>
+  {% if q %}<a class="button" href="{{ url_for('global_search') }}">Effacer</a>{% endif %}
+</form>
+{% if q %}<p><strong>{{ total }}</strong> résultat(s) pour « {{ q }} »</p>{% endif %}
+
+{% if results.clients %}<section class="search-section"><h2>👥 Clients ({{ results.clients|length }})</h2><div class="search-cards">
+{% for c in results.clients %}<div class="search-card"><strong>{% if c.first_name or c.last_name %}{{ c.first_name or '' }} {{ c.last_name or '' }}{% else %}{{ c.company or c.name or '' }}{% endif %}</strong>{% if c.company and (c.first_name or c.last_name) %} · {{ c.company }}{% endif %}<br><span>{{ c.phone or '' }}{% if c.email %} · {{ c.email }}{% endif %}</span><div><a class="button" href="{{ url_for('client_history', client_id=c.id) }}">Historique</a> <a class="button" href="{{ url_for('client_edit', client_id=c.id) }}">Modifier</a></div></div>{% endfor %}
+</div></section>{% endif %}
+
+{% if results.repairs %}<section class="search-section"><h2>🛠️ Réparations ({{ results.repairs|length }})</h2><div class="search-cards">
+{% for r in results.repairs %}<div class="search-card"><strong>{{ r.received_date }} · {{ r.client_first_name or '' }} {{ r.client_last_name or r.client_name }}</strong><br>{{ r.device_type or '' }} {{ r.brand_model or '' }} · {{ r.status }}{% if r.invoice_no %} · {{ r.invoice_no }}{% endif %}<div><a class="button primary" href="{{ url_for('repair_detail', rid=r.id) }}">Ouvrir le dossier</a></div></div>{% endfor %}
+</div></section>{% endif %}
+
+{% if results.ledger %}<section class="search-section"><h2>🛍️ Achats / Ventes ({{ results.ledger|length }})</h2><div class="search-cards">
+{% for e in results.ledger %}<div class="search-card"><strong>{{ e.entry_date }} · {{ e.operation }} · {{ e.party or '' }}</strong><br>{{ e.description or '' }} · {{ '%.2f'|format(e.amount_ttc or 0) }} €{% if e.invoice_no %} · {{ e.invoice_no }}{% endif %}<div><a class="button" href="{{ url_for('achats_ventes_page', year=e.entry_date[:4], q=q) }}">Voir dans Achats / Ventes</a></div></div>{% endfor %}
+</div></section>{% endif %}
+
+{% if results.quotes %}<section class="search-section"><h2>📝 Devis ({{ results.quotes|length }})</h2><div class="search-cards">
+{% for d in results.quotes %}<div class="search-card"><strong>{{ d.quote_date }} · {{ d.quote_no }} · {{ d.client_name }}</strong><br>{{ d.status }}<div><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">Ouvrir le devis</a></div></div>{% endfor %}
+</div></section>{% endif %}
+
+{% if q and total == 0 %}<div class="empty-state">Aucun résultat.</div>{% endif %}
+{% endblock %}

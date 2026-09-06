@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Envoyer facture - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">📧 Envoyer la facture {{ r['invoice_no'] }}</div>
+</div>
+
+<div class="email-preview-card">
+  <div class="email-preview-meta">
+    <div><strong>Client :</strong> {{ r['client_name'] }}</div>
+    <div><strong>Expéditeur :</strong> {{ sender }}</div>
+    <div><strong>Pièce jointe :</strong> 📎 {{ r['client_name']|replace(' ', '_') }}_{{ r['invoice_no'] }}_{{ pdf_languages[pdf_lang][0] }}.pdf</div>
+  </div>
+
+  <form method="post" class="grid one">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="from_page" value="{{ from_page }}">
+    <label>Langue du PDF joint
+      <select name="lang">
+        {% for code, info in pdf_languages.items() %}
+          <option value="{{ code }}" {% if pdf_lang == code %}selected{% endif %}>{{ info[0] }} - {{ info[1] }}</option>
+        {% endfor %}
+      </select>
+      <small>Le suivi WOPR reste en français : seule la pièce jointe PDF change.</small>
+    </label>
+    <label>Destinataire
+      <input type="email" name="recipient" value="{{ recipient }}" required>
+    </label>
+    <label>Objet
+      <input name="subject" value="{{ subject }}" required>
+    </label>
+    <label>Message
+      <textarea name="body" rows="11" required>{{ body }}</textarea>
+    </label>
+    <div class="footer-actions">
+      <button class="primary email-send-btn" type="submit">📧 Envoyer la facture</button>
+      <a class="button" href="{{ cancel_url }}">Annuler</a>
+      <a class="button" href="{{ url_for('invoice_pdf', rid=r['id'], lang=pdf_lang) }}" target="_blank">Voir le PDF</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

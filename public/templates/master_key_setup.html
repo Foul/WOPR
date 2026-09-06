@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clé maître — WOPR</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+  <style>
+    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#07101d;color:#eaf4ff;font-family:system-ui,-apple-system,sans-serif;padding:24px}.card{width:min(760px,100%);background:#101d2d;border:1px solid #29415e;border-radius:18px;padding:28px;box-shadow:0 20px 60px #0008}.kicker{font:800 13px/1 monospace;letter-spacing:.18em;color:#63d8ff}.title{font-size:30px;margin:8px 0 10px}.sub{color:#a9bdd3;line-height:1.55}.choice{margin-top:20px;padding:18px;border:1px solid #2a4664;border-radius:14px;background:#0b1725}.choice h2{margin:0 0 8px;font-size:18px}.choice p{color:#a9bdd3;margin:0 0 14px;line-height:1.45}input[type=file]{width:100%;padding:10px;background:#08121e;border:1px solid #365674;border-radius:8px;color:#dbeaff}button{margin-top:12px;border:0;border-radius:9px;padding:11px 16px;font-weight:800;cursor:pointer;background:#33c9ff;color:#04111b}.secondary{background:#26384c;color:#eaf4ff}.warn{border-color:#765d2b;background:#201a0d}.path{font-family:monospace;font-size:12px;word-break:break-all;color:#7f9ab4}.flash{padding:10px 12px;background:#482727;border:1px solid #874141;border-radius:8px;margin:10px 0}</style>
+</head>
+<body>
+  <main class="card">
+    <div class="kicker">WOPR</div>
+    <h1 class="title">🔐 Clé maître introuvable</h1>
+    <p class="sub">Cette machine ne possède pas encore la clé qui chiffre les secrets WOPR (Abby, SMTP, mots de passe appareils…). Pour une installation déplacée ou portable, importe ta clé existante.</p>
+    {% with messages = get_flashed_messages() %}{% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
+    <section class="choice">
+      <h2>📥 Importer ma clé existante</h2>
+      <p>Choisis ton fichier <strong>master.key</strong>. Il sera copié dans l'emplacement sécurisé de cette machine.</p>
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="import">
+        <input type="file" name="master_key_file" accept=".key,application/octet-stream" required>
+        <button type="submit">Importer master.key</button>
+      </form>
+    </section>
+    <section class="choice warn">
+      <h2>🆕 Nouvelle installation uniquement</h2>
+      <p>Crée une nouvelle clé seulement si cette installation n'a aucun secret existant à déchiffrer. Une nouvelle clé ne pourra pas ouvrir les secrets chiffrés avec l'ancienne.</p>
+      <form method="post" onsubmit="return confirm('Créer une nouvelle clé maître ? À utiliser uniquement pour une nouvelle installation.');">
+        <input type="hidden" name="action" value="create">
+        <button class="secondary" type="submit">Créer une nouvelle clé</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

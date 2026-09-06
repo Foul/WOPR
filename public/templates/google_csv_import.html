@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Importer Google CSV - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">Importer Google Contacts CSV</div>
+</div>
+
+<div class="import-card">
+  <p>
+    Sélectionne l'export <strong>Google Contacts CSV</strong>.
+    WOPR va d'abord afficher un aperçu : aucune fiche client ne sera modifiée à cette étape.
+  </p>
+
+  <div class="import-rule-box">
+    <strong>Règle de sécurité :</strong>
+    seuls les champs actuellement vides dans WOPR seront complétés.
+    Une donnée existante ne sera jamais remplacée.
+  </div>
+
+  <form method="post" enctype="multipart/form-data" action="{{ url_for('import_google_csv_contacts') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>Export Google Contacts CSV
+      <input type="file" name="csv" accept=".csv,text/csv" required>
+    </label>
+
+    <label class="checkboxline google-label-filter">
+      <input type="checkbox" name="only_foulfix">
+      Limiter uniquement aux contacts portant le label <strong>WOPR</strong>
+    </label>
+    <small>
+      Laisse décoché pour analyser tous les contacts du CSV.
+    </small>
+
+    <div class="footer-actions">
+      <button class="primary" type="submit">Analyser le CSV</button>
+      <a class="button" href="{{ url_for('contacts_page') }}">Annuler</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

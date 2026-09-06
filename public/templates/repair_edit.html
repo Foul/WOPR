@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Modifier le suivi - {{ r['client_name'] }}{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+  <div class="banner-title">Modifier le Suivi de Réparation</div>
+</div>
+
+<form method="post" class="sheet-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <div class="section-title">Informations Client</div>
+  <div class="grid two">
+    <label>Prénom
+      <input name="first_name" value="{{ r['client_first_name'] or '' }}">
+    </label>
+
+    <label>Nom
+      <input name="last_name" value="{{ r['client_last_name'] or r['client_name'] or '' }}">
+    </label>
+
+    <label>Date
+      <input type="date" name="received_date" value="{{ r['received_date'] or '' }}">
+    </label>
+
+    <label class="wide">Adresse
+      <input name="address_street" value="{{ r['client_address_street'] or '' }}">
+    </label>
+
+    <label>Code postal
+      <input name="postal_code" value="{{ r['client_postal_code'] or '' }}">
+    </label>
+
+    <label>Ville
+      <input name="city" value="{{ r['client_city'] or '' }}">
+    </label>
+
+    <label>Téléphone
+      <input name="phone" value="{{ r['client_phone'] or '' }}">
+    </label>
+
+    <label>Courriel
+      <input type="email" name="email" value="{{ r['client_email'] or '' }}">
+    </label>
+  </div>
+
+  <div class="section-title">Détails de l'Appareil</div>
+  <div class="grid two">
+    <label>Type d'Appareil
+      <input name="device_type" value="{{ r['device_type'] or '' }}">
+    </label>
+
+    <label>Marque et Modèle
+      <input name="brand_model" value="{{ r['brand_model'] or '' }}">
+    </label>
+
+    <label>Numéro de Série
+      <input name="serial_no" value="{{ r['serial_no'] or '' }}">
+    </label>
+
+    <label>Système
+      <input name="system_name" value="{{ r['system_name'] or '' }}" placeholder="Windows 11, macOS, Linux...">
+    </label>
+
+    <label>Mot de passe
+      <div class="password-field">
+        <input type="password" name="system_password" autocomplete="new-password"
+               placeholder="{% if r['has_system_password'] %}Mot de passe enregistré — laisser vide pour conserver{% else %}Aucun mot de passe enregistré{% endif %}">
+        {% if r['has_system_password'] %}
+        <button type="button" class="password-toggle repair-secret-toggle"
+                data-reveal-url="{{ url_for('reveal_system_password', rid=r['id']) }}"
+                data-csrf="{{ csrf_token() }}" aria-label="Afficher le mot de passe">👁</button>
+        {% else %}
+        <button type="button" class="password-toggle" aria-label="Afficher le mot de passe">👁</button>
+        {% endif %}
+      </div>
+      {% if r['has_system_password'] %}<small>Le mot de passe est chiffré dans la base.</small>{% endif %}
+    </label>
+
+    <label class="wide">Accessoires
+      <textarea name="accessories" rows="2">{{ r['accessories'] or '' }}</textarea>
+    </label>
+
+    <label class="wide">État
+      <textarea name="device_state" rows="2">{{ r['device_state'] or '' }}</textarea>
+    </label>
+  </div>
+
+  <div class="section-title">Description du Problème</div>
+  <div class="grid one">
+    <label>Panne
+      <textarea name="problem" rows="4">{{ r['problem'] or '' }}</textarea>
+    </label>
+  </div>
+
+
+  <div class="section-title">Suivi de la réparation</div>
+  <div class="grid one">
+    <label>Appel Téléphonique / Suivi
+      <input name="legacy_call_note" value="{{ r['legacy_call_note'] or '' }}">
+    </label>
+  </div>
+
+  <div class="section-title">Intervention et Validation</div>
+  <div class="grid one">
+    <label>Diagnostic
+      <textarea name="diagnosis" rows="4">{{ r['diagnosis'] or '' }}</textarea>
+    </label>
+
+    <label>Intervention / Tests / Validation
+      <textarea name="tests_validation" rows="6"
+                placeholder="Intervention réalisée, tests effectués, résultat final...">{{ r['tests_validation'] or '' }}</textarea>
+    </label>
+
+    <label>Remarques
+      <textarea name="remarks" rows="3">{{ r['remarks'] or '' }}</textarea>
+    </label>
+
+    <label>Statut
+      <select name="status">
+      {% for s in ['Reçu','Diagnostic','En attente accord','En attente pièce','En réparation','Terminé','Restitué','Laissé pour pièces'] %}
+        <option {% if r['status']==s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="footer-actions">
+    <button class="primary big-action" type="submit">ENREGISTRER LES MODIFICATIONS</button>
+    <a class="button" href="{{ url_for('repair_detail', rid=r['id']) }}">Annuler</a>
+  </div>
+</form>
+{% endblock %}

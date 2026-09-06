@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Antivirus - WOPR{% endblock %}
+{% block body %}
+
+<div class="sheet-banner narrow">
+  <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+  <div class="banner-title">Antivirus</div>
+</div>
+
+<div class="av-summary">
+  <div class="av-stat"><strong>{{ entries|length }}</strong><span>lignes</span></div>
+  <div class="av-stat av-valid"><strong>{{ entries|selectattr('expiration_status','equalto','valid')|list|length }}</strong><span>valides</span></div>
+  <div class="av-stat av-soon"><strong>{{ entries|selectattr('expiration_status','equalto','soon')|list|length }}</strong><span>à renouveler ≤ 30 j</span></div>
+  <div class="av-stat av-expired"><strong>{{ entries|selectattr('expiration_status','equalto','expired')|list|length }}</strong><span>expirées</span></div>
+</div>
+
+<details class="av-add-box">
+  <summary>+ Ajouter un antivirus / renouvellement</summary>
+  <form method="post" action="{{ url_for('antivirus_add') }}" class="av-add-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>Client
+      <input name="client_name" list="av-clients" required>
+    </label>
+    <label>Mise en place
+      <input type="date" name="setup_date">
+    </label>
+    <label>Antivirus
+      <input name="antivirus_name" placeholder="Bitdefender…">
+    </label>
+    <label>Expiration
+      <input type="date" name="expiration_date">
+    </label>
+    <label>Facture
+      <input name="invoice_no">
+    </label>
+    <label>Infos
+      <input name="info" placeholder="Code / licence / remarque">
+    </label>
+    <div class="av-add-actions">
+      <button class="primary" type="submit">AJOUTER</button>
+    </div>
+  </form>
+</details>
+
+<datalist id="av-clients">
+{% for c in clients %}<option value="{{ c['name'] }}">{% endfor %}
+</datalist>
+
+<div class="sheet-wrapper">
+<table class="sheet-table av-table">
+  <colgroup>
+    <col class="av-client">
+    <col class="av-date">
+    <col class="av-product">
+    <col class="av-date">
+    <col class="av-invoice">
+    <col class="av-info">
+    <col class="av-actions">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Clients</th>
+      <th>Mise en place</th>
+      <th>Antivirus</th>
+      <th>Expiration</th>
+      <th>Facture</th>
+      <th>Infos</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for e in entries %}
+    <tr class="av-row av-{{ e['expiration_status'] }}" data-av-row="{{ e['id'] }}">
+      <td>
+        <div class="av-display"><strong>{{ e['client_name'] }}</strong></div>
+        <div class="av-edit"><input form="av-form-{{ e['id'] }}" name="client_name" list="av-clients" value="{{ e['client_name'] }}" required></div>
+      </td>
+      <td>
+        <div class="av-display">{{ e['setup_date']|frdate if false else (e['setup_date'][8:10] ~ '/' ~ e['setup_date'][5:7] ~ '/' ~ e['setup_date'][0:4] if e['setup_date'] else '') }}</div>
+        <div class="av-edit"><input form="av-form-{{ e['id'] }}" type="date" name="setup_date" value="{{ e['setup_date'] or '' }}"></div>
+      </td>
+      <td>
+        <div class="av-display av-wrap">{{ e['antivirus_name'] or '' }}</div>
+        <div class="av-edit"><input form="av-form-{{ e['id'] }}" name="antivirus_name" value="{{ e['antivirus_name'] or '' }}"></div>
+      </td>
+      <td>
+        <div class="av-display">
+          {% if e['expiration_date'] %}{{ e['expiration_date'][8:10] }}/{{ e['expiration_date'][5:7] }}/{{ e['expiration_date'][0:4] }}{% endif %}
+          {% if e['expiration_status']=='expired' %}<span class="av-badge expired">Expiré</span>
+          {% elif e['expiration_status']=='soon' %}<span class="av-badge soon">{{ e['days_left'] }} j</span>
+          {% elif e['expiration_status']=='valid' %}<span class="av-badge valid">Valide</span>{% endif %}
+        </div>
+        <div class="av-edit"><input form="av-form-{{ e['id'] }}" type="date" name="expiration_date" value="{{ e['expiration_date'] or '' }}"></div>
+      </td>
+      <td>
+        <div class="av-display av-wrap">{{ e['invoice_no'] or '' }}</div>
+        <div class="av-edit"><input form="av-form-{{ e['id'] }}" name="invoice_no" value="{{ e['invoice_no'] or '' }}"></div>
+      </td>
+      <td>
+        <div class="av-display av-wrap"><code>{{ e['info'] or '' }}</code></div>
+        <div class="av-edit"><input form="av-form-{{ e['id'] }}" name="info" value="{{ e['info'] or '' }}"></div>
+      </td>
+      <td class="av-row-actions">
+        <form id="av-form-{{ e['id'] }}" method="post" action="{{ url_for('antivirus_edit', entry_id=e['id']) }}">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        </form>
+        <div class="av-normal-actions">
+          <button class="mini-btn" type="button" data-av-edit="{{ e['id'] }}">✏️ Éditer</button>
+          <form method="post" action="{{ url_for('antivirus_delete', entry_id=e['id']) }}" onsubmit="return confirm('Supprimer cette ligne antivirus ?');">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button class="mini-btn danger-btn" type="submit">Supprimer</button>
+          </form>
+        </div>
+        <div class="av-edit-actions">
+          <button class="mini-btn primary" type="submit" form="av-form-{{ e['id'] }}">✓ Valider</button>
+          <button class="mini-btn" type="button" data-av-cancel="{{ e['id'] }}">Annuler</button>
+        </div>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7">Aucun antivirus.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+(() => {
+  const setEdit = (id, state) => {
+    const row = document.querySelector(`[data-av-row="${id}"]`);
+    if (!row) return;
+    row.classList.toggle('editing', state);
+    if (state) {
+      const f = row.querySelector('.av-edit input');
+      if (f) f.focus();
+    }
+  };
+  document.querySelectorAll('[data-av-edit]').forEach(b => b.onclick=()=>setEdit(b.dataset.avEdit,true));
+  document.querySelectorAll('[data-av-cancel]').forEach(b => b.onclick=()=>{
+    const row=document.querySelector(`[data-av-row="${b.dataset.avCancel}"]`);
+    if(row) row.querySelectorAll('.av-edit input').forEach(x=>x.value=x.defaultValue);
+    setEdit(b.dataset.avCancel,false);
+  });
+})();
+</script>
+{% endblock %}

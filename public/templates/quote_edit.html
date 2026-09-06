@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}{{ "Nouveau devis" if is_new else "Devis " ~ q['quote_no'] }} - WOPR{% endblock %}
+{% block body %}
+
+<div class="quote-editor-title">
+  <div>
+    <div class="quote-word">{{ "NOUVEAU DEVIS" if is_new else "MODIFIER DEVIS" }}</div>
+    {% if not is_new %}<div class="tiny-note">Le contenu reste modifiable ; le numéro de devis reste figé.</div>{% endif %}
+  </div>
+  <div class="quote-editor-buttons">
+    <a class="button" href="{{ url_for('quotes_page') }}">← Liste des devis</a>
+    {% if not is_new %}<a class="button primary" href="{{ url_for('quote_pdf', quote_id=q['id']) }}">Télécharger PDF</a>{% endif %}
+  </div>
+</div>
+
+<form method="post" class="quote-editor" id="quote-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+  <div class="quote-meta-grid">
+    <label>N° de devis automatique
+      <input name="quote_no" value="{{ q['quote_no'] or '' }}" readonly class="quote-auto-number">
+      <span class="tiny-note">JJMMAAAAHHMM — même logique que les factures</span>
+    </label>
+    <label>Date
+      <input type="date" name="quote_date" value="{{ q['quote_date'] or '' }}" required>
+    </label>
+    <label>Statut
+      <select name="status">
+        {% for s in ['Brouillon','Envoyé','Accepté','Refusé','Expiré','Historique'] %}
+          <option value="{{ s }}" {% if q['status']==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="section-title">Client</div>
+  <div class="quote-client-grid">
+    <input type="hidden" name="client_id" id="quote-client-id" value="{{ q['client_id'] or '' }}">
+
+    <label class="quote-wide">Client
+      <input id="quote-client-name"
+             name="client_name"
+             list="quote-client-list"
+             autocomplete="off"
+             value="{{ q['client_name'] or '' }}"
+             placeholder="Tape un nom ou choisis un client WOPR"
+             required>
+      <datalist id="quote-client-list">
+        {% for c in clients %}
+          <option value="{{ c['name']|e }}"></option>
+        {% endfor %}
+      </datalist>
+      <span class="tiny-note">Choisis un client existant ou saisis librement un nouveau nom.</span>
+    </label>
+
+    <label>Entreprise / Société
+      <input id="quote-client-company" name="client_company" value="{{ q['client_company'] or '' }}">
+    </label>
+    <label class="quote-wide">Adresse
+      <input id="quote-client-street" name="client_address_street" value="{{ q['client_address_street'] or '' }}">
+    </label>
+    <label>Code postal
+      <input id="quote-client-postal" name="client_postal_code" value="{{ q['client_postal_code'] or '' }}">
+    </label>
+    <label>Ville
+      <input id="quote-client-city" name="client_city" value="{{ q['client_city'] or '' }}">
+    </label>
+  </div>
+
+
+  {% if documents %}
+  <div class="quote-source-docs">
+    <div class="section-title">Documents historiques</div>
+    <div class="quote-source-doc-list">
+      {% for d in documents %}
+        <a class="button" target="_blank" href="{{ url_for('quote_original_real', quote_id=q['id'], doc_index=d['index']) }}">
+          PDF original {{ loop.index }} — {{ d['filename'] }}
+        </a>
+      {% endfor %}
+    </div>
+    <div class="tiny-note">Ces PDF sont lus directement depuis ton dossier WOPR/Devis. La version structurée ci-dessous reste entièrement modifiable.</div>
+  </div>
+  {% endif %}
+
+  <div class="section-title">Lignes du devis</div>
+  <div class="sheet-wrapper">
+  <table class="invoice-entry-table quote-lines-table" id="quote-lines-table">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Quantité</th>
+        <th>Désignation</th>
+        <th>Prix unitaire</th>
+        <th>Total ligne</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="quote-lines">
+      {% for line in quote_lines %}
+      <tr class="quote-line">
+        <td>
+          <select name="line_type[]">
+            <option value="service" {% if line['line_type']=='service' %}selected{% endif %}>Prestation</option>
+            <option value="goods" {% if line['line_type']=='goods' %}selected{% endif %}>Marchandise</option>
+          </select>
+        </td>
+        <td><input class="quote-qty" type="number" min="0.01" step="0.01" name="line_qty[]" value="{{ line['quantity'] }}"></td>
+        <td><textarea class="quote-desc" name="line_desc[]" rows="2">{{ line['description'] }}</textarea></td>
+        <td><input class="quote-price" type="number" step="0.01" name="line_price[]" value="{{ line['unit_price'] }}"></td>
+        <td class="quote-line-total">0,00 €</td>
+        <td><button type="button" class="remove-quote-line" title="Supprimer">×</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <div class="invoice-line-actions">
+    <button type="button" id="add-quote-service">+ Ligne prestation</button>
+    <button type="button" id="add-quote-goods">+ Ligne marchandise</button>
+    <div class="invoice-total">Total : <strong id="quote-grand-total">0,00 €</strong></div>
+  </div>
+
+  <div class="section-title">Remarques</div>
+  <label>
+    <textarea name="notes" rows="4" placeholder="Notes internes / informations complémentaires">{{ q['notes'] or '' }}</textarea>
+  </label>
+
+  <div class="sheet-note">
+    Le PDF reprend la mise en page de tes devis historiques : bandeau WOPR, bloc DEVIS, tableau bleu,
+    TVA, Net à payer, conditions et zone <strong>Bon pour accord + Signature</strong>.
+  </div>
+
+  <div class="footer-actions">
+    <button class="primary big-action" type="submit">{{ "CRÉER LE DEVIS" if is_new else "ENREGISTRER LES MODIFICATIONS" }}</button>
+  </div>
+</form>
+
+<template id="quote-line-template">
+<tr class="quote-line">
+  <td>
+    <select name="line_type[]">
+      <option value="service">Prestation</option>
+      <option value="goods">Marchandise</option>
+    </select>
+  </td>
+  <td><input class="quote-qty" type="number" min="0.01" step="0.01" name="line_qty[]" value="1"></td>
+  <td><textarea class="quote-desc" name="line_desc[]" rows="2" placeholder="Désignation"></textarea></td>
+  <td><input class="quote-price" type="number" step="0.01" name="line_price[]" value="0"></td>
+  <td class="quote-line-total">0,00 €</td>
+  <td><button type="button" class="remove-quote-line" title="Supprimer">×</button></td>
+</tr>
+</template>
+
+<script>
+(() => {
+  const clientInput = document.getElementById('quote-client-name');
+  const clientId = document.getElementById('quote-client-id');
+
+  const clients = [
+    {% for c in clients %}
+    {
+      id: {{ c['id']|int }},
+      name: {{ (c['name'] or '')|tojson }},
+      company: {{ (c['company'] or '')|tojson }},
+      street: {{ (c['address_street'] or '')|tojson }},
+      postal: {{ (c['postal_code'] or '')|tojson }},
+      city: {{ (c['city'] or '')|tojson }}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+
+  const normalizeClientName = value =>
+    (value || '').trim().toLocaleLowerCase('fr-FR');
+
+  function applyExistingClient(){
+    const key = normalizeClientName(clientInput.value);
+    const matches = clients.filter(c => normalizeClientName(c.name) === key);
+
+    if (matches.length === 1) {
+      const c = matches[0];
+      clientId.value = c.id;
+      document.getElementById('quote-client-company').value = c.company || '';
+      document.getElementById('quote-client-street').value = c.street || '';
+      document.getElementById('quote-client-postal').value = c.postal || '';
+      document.getElementById('quote-client-city').value = c.city || '';
+    } else {
+      // Saisie libre : ne jamais rattacher un ancien client par erreur.
+      clientId.value = '';
+    }
+  }
+
+  clientInput.addEventListener('change', applyExistingClient);
+  clientInput.addEventListener('blur', applyExistingClient);
+
+  const tbody = document.getElementById('quote-lines');
+  const tpl = document.getElementById('quote-line-template');
+  const fmt = n => n.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
+
+  function totals(){
+    let grand=0;
+    document.querySelectorAll('.quote-line').forEach(row=>{
+      const q=parseFloat(row.querySelector('.quote-qty').value)||0;
+      const p=parseFloat(row.querySelector('.quote-price').value)||0;
+      const t=q*p;
+      grand+=t;
+      row.querySelector('.quote-line-total').textContent=fmt(t);
+    });
+    document.getElementById('quote-grand-total').textContent=fmt(grand);
+  }
+
+  function wire(row){
+    row.querySelectorAll('.quote-qty,.quote-price').forEach(x=>x.addEventListener('input',totals));
+    row.querySelector('.remove-quote-line').addEventListener('click',()=>{row.remove();totals();});
+  }
+
+  function addLine(type){
+    const row=tpl.content.firstElementChild.cloneNode(true);
+    row.querySelector('select[name="line_type[]"]').value=type;
+    tbody.appendChild(row);
+    wire(row);
+    totals();
+    row.querySelector('.quote-desc').focus();
+  }
+
+  document.querySelectorAll('.quote-line').forEach(wire);
+  document.getElementById('add-quote-service').onclick=()=>addLine('service');
+  document.getElementById('add-quote-goods').onclick=()=>addLine('goods');
+  if(!document.querySelector('.quote-line')) addLine('service');
+  totals();
+})();
+</script>
+{% endblock %}

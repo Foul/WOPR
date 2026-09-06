@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signature WOPR</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="signbody">
+<main class="signwrap">
+  <div class="sheet-banner narrow">
+    <div class="banner-top">Signature client</div>
+    <div class="banner-title">Autorisation de Réparation</div>
+  </div>
+  {% if already_signed %}
+  <div class="signed-done"><strong>✓ Signature déjà enregistrée</strong><br>Ce lien ne permet plus de modifier la signature.</div>
+  {% else %}
+  <p class="signidentity"><strong>Client : {{ r['client_name'] }}</strong><br>Date : <span id="sigdate"></span></p>
+  <p><strong>Appareil :</strong> {{ r['device_type'] }} — {{ r['brand_model'] }}</p>
+  <p><strong>Panne :</strong> {{ r['problem'] }}</p>
+  <p class="consent">Je confirme la prise en charge de l'appareil décrit ci-dessus et autorise WOPR à effectuer le diagnostic et les opérations convenues.</p>
+  <label class="checkboxline"><input id="consent" type="checkbox"> J'accepte et je signe ci-dessous.</label>
+  <canvas id="sig" width="900" height="420"></canvas>
+  <div class="footer-actions">
+    <button id="clear">Effacer</button>
+    <button id="save" class="primary">Valider la signature</button>
+  </div>
+  <div id="msg"></div>
+  {% endif %}
+</main>
+{% if not already_signed %}
+<script>
+document.getElementById('sigdate').textContent = new Date().toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'});
+const canvas=document.getElementById('sig'), ctx=canvas.getContext('2d');
+ctx.lineWidth=4; ctx.lineCap='round';
+let drawing=false;
+function pos(e){
+  const r=canvas.getBoundingClientRect();
+  const t=e.touches?e.touches[0]:e;
+  return {x:(t.clientX-r.left)*(canvas.width/r.width), y:(t.clientY-r.top)*(canvas.height/r.height)};
+}
+function start(e){drawing=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault();}
+function move(e){if(!drawing)return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); e.preventDefault();}
+function end(e){drawing=false; e.preventDefault();}
+['mousedown','touchstart'].forEach(x=>canvas.addEventListener(x,start,{passive:false}));
+['mousemove','touchmove'].forEach(x=>canvas.addEventListener(x,move,{passive:false}));
+['mouseup','mouseleave','touchend','touchcancel'].forEach(x=>canvas.addEventListener(x,end,{passive:false}));
+document.getElementById('clear').onclick=()=>ctx.clearRect(0,0,canvas.width,canvas.height);
+document.getElementById('save').onclick=async()=>{
+  if(!document.getElementById('consent').checked){alert("Coche d'abord l'autorisation."); return;}
+  const r=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:canvas.toDataURL('image/png')})});
+  const j=await r.json();
+  document.getElementById('msg').textContent=j.ok?"Signature enregistrée ✓ Tu peux rendre le téléphone.":"Erreur";
+  if(j.ok){document.getElementById('save').disabled=true;}
+};
+</script>
+{% endif %}
+</body></html>

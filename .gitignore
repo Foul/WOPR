@@ -1,0 +1,71 @@
+# ===== WOPR — fichiers privés / sensibles =====
+
+# Données privées de l'application
+private/
+
+# Bases de données
+*.db
+*.sqlite
+*.sqlite3
+
+# Sauvegardes / exports sensibles
+backups/
+*.bak
+*.backup
+*.dump
+
+# Clés / secrets / tokens
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+*.token
+*.secret
+.env
+.env.*
+google_client_secret.json
+google_token.json
+smtp_settings.json
+abby_settings.json
+admin_pin.json
+app_secret.key
+master.key
+
+# Environnements Python
+.venv/
+venv/
+env/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache / tests / outils
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Fichiers temporaires
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# IDE / éditeurs
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Archives locales
+*.zip
+*.7z
+*.rar
+.directory

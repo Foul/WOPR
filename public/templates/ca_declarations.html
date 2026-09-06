@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}CA / Déclarations - WOPR{% endblock %}
+{% block body %}
+
+{% macro eur(v) -%}
+{{ '{:,.2f}'.format(v or 0)|replace(',', 'X')|replace('.', ',')|replace('X', ' ') }} €
+{%- endmacro %}
+
+<div class="legacy-total-sheet ca-live-sheet">
+  <div class="legacy-total-head">
+    <div class="legacy-total-logo-wrap">
+      <img src="{{ url_for('static', filename='total_logo_ods.png') }}" alt="WOPR" class="legacy-total-logo">
+    </div>
+
+    <div class="legacy-total-title-zone">
+      <div class="legacy-total-contact">
+        {{ config.website }} &nbsp;-&nbsp; {{ config.email }} &nbsp;-&nbsp; {{ config.phone }}
+      </div>
+      <div class="legacy-total-declaration">
+        Déclaration URSSAF / IMPÔTS / Formulaire 2042 C PRO
+      </div>
+      <div class="ca-sync-note">
+        Synchronisé avec le Suivi — mais chaque case reste modifiable manuellement.
+      </div>
+    </div>
+
+    <div class="legacy-total-dj">
+      <div class="dj-title">ACTIVITÉS</div>
+      <div class="dj-rule">DJ-Foul = BNC</div>
+      <div class="dj-rule">WOPR = BIC</div>
+    </div>
+  </div>
+
+  <form method="post" action="{{ url_for('total_save') }}" class="ca-edit-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+    <div class="legacy-total-table-wrap">
+      <table class="legacy-total-table ca-live-table ca-edit-table">
+        <colgroup>
+          <col class="c-label">
+          {% for _ in range(12) %}<col class="c-month">{% endfor %}
+          <col class="c-ca">
+          <col class="c-case">
+        </colgroup>
+
+        <thead>
+          <tr class="months">
+            <th></th>
+            <th>Janv.</th><th>Fév.</th><th>Mars</th><th>Avril</th>
+            <th>Mai</th><th>Juin</th><th>Juil.</th><th>Août</th>
+            <th>Sept.</th><th>Oct.</th><th>Nov.</th><th>Déc.</th>
+            <th class="ca-head">CA TTC</th>
+            <th class="case-head"></th>
+          </tr>
+          <tr class="thin-blue-line">{% for _ in range(15) %}<th></th>{% endfor %}</tr>
+        </thead>
+
+        <tbody>
+        {% for y in years %}
+          <tr>
+            <td class="row-label">{{ y.year }} BNC</td>
+            {% for v in y.bnc %}
+              {% set i = loop.index0 %}
+              <td class="money editable-ca-cell {% if y.overridden.bnc[i] %}manual-override{% endif %}"
+                  title="Valeur automatique : {{ eur(y.auto_bnc[i]) }}">
+                <input
+                  name="ca_bnc_{{ y.year }}_{{ loop.index }}"
+                  inputmode="decimal"
+                  value="{{ '%.2f'|format(v or 0) }}"
+                  aria-label="{{ y.year }} BNC mois {{ loop.index }}">
+              </td>
+            {% endfor %}
+            <td class="annual subtotal">{{ eur(y.bnc_total) }}</td>
+            <td class="case">Case 5HQ</td>
+          </tr>
+
+          <tr>
+            <td class="row-label">{{ y.year }} BIC (Presta)</td>
+            {% for v in y.service %}
+              {% set i = loop.index0 %}
+              <td class="money editable-ca-cell {% if y.overridden.service[i] %}manual-override{% endif %}"
+                  title="Valeur automatique du Suivi : {{ eur(y.auto_service[i]) }}">
+                <input
+                  name="ca_service_{{ y.year }}_{{ loop.index }}"
+                  inputmode="decimal"
+                  value="{{ '%.2f'|format(v or 0) }}"
+                  aria-label="{{ y.year }} prestations mois {{ loop.index }}">
+                {% if y.overridden.service[i] %}
+                  <small class="ca-auto-visible">Auto : {{ eur(y.auto_service[i]) }}</small>
+                {% endif %}
+              </td>
+            {% endfor %}
+            <td class="annual subtotal">{{ eur(y.service_total) }}</td>
+            <td class="case">Case 5KP</td>
+          </tr>
+
+          <tr>
+            <td class="row-label">{{ y.year }} BIC (March.)</td>
+            {% for v in y.goods %}
+              {% set i = loop.index0 %}
+              <td class="money editable-ca-cell {% if y.overridden.goods[i] %}manual-override{% endif %}"
+                  title="Valeur automatique du Suivi : {{ eur(y.auto_goods[i]) }}">
+                <input
+                  name="ca_goods_{{ y.year }}_{{ loop.index }}"
+                  inputmode="decimal"
+                  value="{{ '%.2f'|format(v or 0) }}"
+                  aria-label="{{ y.year }} marchandises mois {{ loop.index }}">
+                {% if y.overridden.goods[i] %}
+                  <small class="ca-auto-visible">Auto : {{ eur(y.auto_goods[i]) }}</small>
+                {% endif %}
+              </td>
+            {% endfor %}
+            <td class="annual subtotal">{{ eur(y.goods_total) }}</td>
+            <td class="case">Case 5KO</td>
+          </tr>
+
+          <tr class="total-row">
+            <td class="row-label">TOTAL {{ y.year }}</td>
+            {% for v in y.total %}<td class="money">{{ eur(v) }}</td>{% endfor %}
+            <td class="annual grand">{{ eur(y.grand_total) }}</td>
+            <td class="case"></td>
+          </tr>
+
+          <tr class="ca-year-controls">
+            <td colspan="15">
+              <button type="button" class="button ca-save-button" onclick="this.form.requestSubmit()">ENREGISTRER LES MODIFICATIONS</button>
+              <button type="submit" class="button" name="reset_year" value="{{ y.year }}"
+                      onclick="return confirm('Remettre toutes les cases {{ y.year }} sur les valeurs automatiques du Suivi ?')">
+                {{ y.year }} → valeurs automatiques
+              </button>
+              {% set ns = namespace(count=0) %}
+              {% for flag in y.overridden.bnc %}{% if flag %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+              {% for flag in y.overridden.service %}{% if flag %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+              {% for flag in y.overridden.goods %}{% if flag %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+              {% if ns.count %}
+                <span class="ca-manual-info">{{ ns.count }} case(s) corrigée(s) manuellement</span>
+              {% else %}
+                <span class="ca-auto-info">100 % automatique</span>
+              {% endif %}
+            </td>
+          </tr>
+
+          {% if not loop.last %}<tr class="year-gap"><td colspan="15"></td></tr>{% endif %}
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+
+  <div class="ca-help">
+    <strong>Principe :</strong> les valeurs viennent automatiquement du Suivi.
+    Tu peux néanmoins corriger n’importe quelle case. Une case corrigée est entourée en orange.
+    Si tu remets exactement la valeur automatique, elle repasse automatiquement en synchro.
+    Une facture rouge non réglée reste hors CA jusqu’à son encaissement.
+  </div>
+</div>
+
+{% endblock %}

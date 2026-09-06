@@ -1,0 +1,11 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WOPR
+Comment=Lancer WOPR
+Icon=wopr-start
+Terminal=false
+Exec=bash -c 'd="$1"; d="${d#file://}"; d="${d//%20/ }"; root="$(dirname "$d")"; exec bash "$root/public/scripts/lancer_wopr.sh" --background' _ %k
+Categories=Office;Utility;
+StartupNotify=true

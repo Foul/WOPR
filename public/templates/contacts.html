@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Clients - {{ business_name }}{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">Clients</div>
+</div>
+
+<form method="get" action="{{ url_for('contacts_page') }}" class="client-search-bar">
+  <div class="client-search-input-wrap">
+    <span class="client-search-icon">⌕</span>
+    <input
+      type="search"
+      name="q"
+      value="{{ q or '' }}"
+      placeholder="Rechercher : nom, prénom, entreprise, téléphone, e-mail, ville..."
+      autocomplete="off"
+      autofocus>
+  </div>
+  <button class="button primary" type="submit">RECHERCHER</button>
+  {% if q %}
+    <a class="button" href="{{ url_for('contacts_page') }}">Effacer</a>
+    <span class="client-search-count">{{ clients|length }} résultat(s) sur {{ total_clients }}</span>
+  {% else %}
+    <span class="client-search-count">{{ total_clients }} client(s)</span>
+  {% endif %}
+</form>
+
+<div class="contacts-toolbar">
+  <a class="button primary" href="{{ url_for('import_google_csv_contacts') }}">Importer Google CSV</a>
+  {% if safe_duplicate_groups %}
+    <form method="post" action="{{ url_for('contacts_merge_safe_duplicates') }}" class="inline-form"
+          onsubmit="return confirm('Fusionner uniquement les doublons exacts sans téléphone/e-mail contradictoires ?');">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="button" type="submit">Fusionner doublons sûrs ({{ safe_duplicate_groups }})</button>
+    </form>
+  {% endif %}
+  <a class="button" href="{{ url_for('import_proton_contacts') }}">Importer Proton VCF</a>
+  <a class="button" href="{{ url_for('export_google_contacts') }}">Exporter Google CSV</a>
+  <a class="button" href="{{ url_for('export_proton_contacts') }}">Exporter Proton CSV</a>
+  <a class="button" href="{{ url_for('export_vcard_contacts') }}">Exporter VCard universel</a>
+</div>
+
+<div class="google-panel">
+  <h2>Google Contacts — groupe {{ google_contact_group }}</h2>
+  {% if not google_libs_ok %}
+    <p class="sync-error">Bibliothèques Google manquantes : relance <code>pip install -r requirements.txt</code>.</p>
+  {% elif google_connected %}
+    <p><span class="sync-ok">● Connecté</span> — les nouveaux clients et les modifications sont synchronisés automatiquement.</p>
+    <div class="contacts-toolbar">
+      <form method="post" action="{{ url_for('contacts_sync_google') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="primary" type="submit">Synchroniser tous les clients maintenant</button></form>
+      <form method="post" action="{{ url_for('google_disconnect') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button type="submit">Déconnecter Google</button></form>
+    </div>
+  {% else %}
+    {% if not google_client_secret %}
+      <p>Première installation uniquement : ajoute le fichier OAuth JSON téléchargé depuis Google Cloud.</p>
+      <form method="post" enctype="multipart/form-data" action="{{ url_for('google_credentials_upload') }}" class="credential-upload">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="credentials" accept="application/json,.json" required>
+        <button class="primary" type="submit">Enregistrer le fichier Google</button>
+      </form>
+    {% else %}
+      <p>La configuration Google est présente. Il reste uniquement à autoriser WOPR sur ton compte.</p>
+      <a class="button primary" href="{{ url_for('google_connect') }}">Connecter Google Contacts</a>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="sheet-wrapper contacts-wrapper">
+<table class="sheet-table contacts-table contacts-table-compact">
+  <colgroup>
+    <col class="contact-col-first-name"><col class="contact-col-last-name">
+    <col class="contact-col-company">
+    <col class="contact-col-phone"><col class="contact-col-email">
+    <col class="contact-col-address"><col class="contact-col-notes"><col class="contact-col-google"><col class="contact-col-actions">
+  </colgroup>
+  <thead><tr><th>Prénom</th><th>Nom</th><th>Entreprise / Société</th><th>Téléphone</th><th>E-mail</th><th>Adresse</th><th>Notes</th><th>Google</th><th>Actions</th></tr></thead>
+  <tbody>
+  {% for c in clients %}
+  <tr class="contact-row" data-client-row="{{ c['id'] }}">
+    <td>
+      <div class="contact-display"><strong>{{ c['first_name'] or '' }}</strong></div>
+      <div class="contact-edit">
+        <input form="edit-client-{{ c['id'] }}" name="first_name" value="{{ c['first_name'] or '' }}" placeholder="Prénom">
+      </div>
+    </td>
+    <td>
+      <div class="contact-display">{{ c['last_name'] or ('' if c['company'] else (c['name'] or '')) }}</div>
+      <div class="contact-edit">
+        <input form="edit-client-{{ c['id'] }}" name="last_name" value="{{ c['last_name'] or '' }}" placeholder="Nom">
+        <button class="swap-name-btn" type="button" data-swap-name="{{ c['id'] }}" title="Inverser Prénom / Nom">⇄ Inverser</button>
+      </div>
+    </td>
+    <td>
+      <div class="contact-display contact-break">{{ c['company'] or '' }}</div>
+      <div class="contact-edit">
+        <input form="edit-client-{{ c['id'] }}" name="company" value="{{ c['company'] or '' }}" placeholder="Entreprise / Société">
+      </div>
+    </td>
+    <td>
+      <div class="contact-display contact-break">{{ c['phone'] or '' }}</div>
+      <div class="contact-edit"><input form="edit-client-{{ c['id'] }}" name="phone" value="{{ c['phone'] or '' }}"></div>
+    </td>
+    <td>
+      <div class="contact-display contact-break">{{ c['email'] or '' }}</div>
+      <div class="contact-edit"><input form="edit-client-{{ c['id'] }}" type="email" name="email" value="{{ c['email'] or '' }}"></div>
+    </td>
+    <td>
+      <div class="contact-display compact-address">
+        {% set pc_city = (((c['postal_code'] or '') ~ ' ' ~ (c['city'] or ''))|trim) %}
+        {% if c['address_street'] and (c['address_street']|trim|lower) != (pc_city|lower) %}
+          {{ c['address_street'] }}{% if pc_city %}<br>{% endif %}
+        {% endif %}
+        {% if pc_city %}{{ pc_city }}{% endif %}
+      </div>
+      <div class="contact-edit contact-address-edit">
+        <input form="edit-client-{{ c['id'] }}" name="address_street" value="{{ c['address_street'] or '' }}" placeholder="Adresse">
+        <div class="contact-cp-city">
+          <input form="edit-client-{{ c['id'] }}" name="postal_code" value="{{ c['postal_code'] or '' }}" placeholder="CP">
+          <input form="edit-client-{{ c['id'] }}" name="city" value="{{ c['city'] or '' }}" placeholder="Ville">
+        </div>
+      </div>
+    </td>
+    <td>
+      <div class="contact-display client-note-preview" title="{{ c['notes'] or '' }}">{% if c['notes'] %}{{ c['notes'][:70] }}{% if c['notes']|length > 70 %}…{% endif %}{% endif %}</div>
+      <div class="contact-edit"><textarea form="edit-client-{{ c['id'] }}" name="notes" rows="3">{{ c['notes'] or '' }}</textarea></div>
+    </td>
+    <td class="contact-cell-google">
+      {% if c['google_sync_status']=='Synchronisé' %}<span class="sync-ok">● Synchronisé</span>
+      {% elif c['google_sync_status']=='Erreur' %}<span class="sync-error" title="{{ c['google_sync_error'] or '' }}">● Erreur</span>
+      {% else %}<span class="sync-wait">● {{ c['google_sync_status'] or 'À synchroniser' }}</span>{% endif %}
+    </td>
+    <td class="client-actions contact-cell-actions">
+      <form id="edit-client-{{ c['id'] }}" method="post" action="{{ url_for('client_edit', client_id=c['id']) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      </form>
+      <div class="contact-normal-actions">
+        <a class="mini-btn" href="{{ url_for('client_history', client_id=c['id']) }}">Historique</a>
+        {% if c['phone'] %}
+          <a class="mini-btn" href="{{ url_for('client_message_from_client', client_id=c['id']) }}" title="Préparer un message client">💬 SMS</a>
+        {% endif %}
+        <button class="mini-btn" type="button" data-edit-client="{{ c['id'] }}">Modifier</button>
+        <a class="mini-btn danger-btn" href="{{ url_for('client_delete', client_id=c['id']) }}">Supprimer</a>
+      </div>
+      <div class="contact-edit-actions">
+        <button class="mini-btn primary" type="submit" form="edit-client-{{ c['id'] }}">Enregistrer</button>
+        <button class="mini-btn" type="button" data-cancel-client="{{ c['id'] }}">Annuler</button>
+      </div>
+    </td>
+  </tr>
+  {% else %}
+    <tr><td colspan="9">
+      {% if q %}Aucun client trouvé pour « {{ q }} ».{% else %}Aucun client.{% endif %}
+    </td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+(() => {
+  const setEditing=(id,on)=>{
+    const row=document.querySelector(`[data-client-row="${id}"]`);
+    if(!row)return;
+    row.classList.toggle('editing',on);
+    if(on){const first=row.querySelector('.contact-edit input, .contact-edit textarea'); if(first)first.focus();}
+  };
+  document.querySelectorAll('[data-edit-client]').forEach(b=>b.addEventListener('click',()=>setEditing(b.dataset.editClient,true)));
+
+  document.querySelectorAll('[data-swap-name]').forEach(button=>{
+    button.addEventListener('click',()=>{
+      const id=button.dataset.swapName;
+      const row=document.querySelector(`[data-client-row="${id}"]`);
+      if(!row)return;
+      const last=row.querySelector('input[name="last_name"]');
+      const first=row.querySelector('input[name="first_name"]');
+      if(!last || !first)return;
+      const tmp=last.value;
+      last.value=first.value;
+      first.value=tmp;
+      last.focus();
+    });
+  });
+  document.querySelectorAll('[data-cancel-client]').forEach(b=>b.addEventListener('click',()=>{
+    const row=document.querySelector(`[data-client-row="${b.dataset.cancelClient}"]`);
+    if(row) row.querySelectorAll('input:not([type="hidden"]),textarea').forEach(el=>el.value=el.defaultValue);
+    setEditing(b.dataset.cancelClient,false);
+  }));
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Abby - {{ business_name }}{% endblock %}
+{% block body %}
+
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">🔵 Abby</div>
+</div>
+
+<div class="abby-grid">
+  <section class="abby-card">
+    <h2>Connexion API</h2>
+    <p class="tiny-note">
+      🔐 La clé API est <strong>chiffrée sur disque</strong>. La clé maître de chiffrement est stockée hors du dossier WOPR.
+      Elle n'est déchiffrée qu'au moment d'un appel Abby ou lorsque tu demandes explicitement à l'afficher.
+    </p>
+
+    <form method="post" action="{{ url_for('abby_settings_save') }}" class="grid one">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+      <label class="checkboxline">
+        <input type="checkbox" name="abby_enabled" {% if abby.enabled %}checked{% endif %}>
+        Activer l'intégration Abby
+      </label>
+
+      <label>Clé API Abby
+        <div class="password-field">
+          <input type="password"
+                 name="abby_api_key"
+                 value=""
+                 autocomplete="off"
+                 spellcheck="false"
+                 placeholder="{{ 'Clé API Abby' if api_key_configured else 'suk-…' }}">
+          <button type="button" class="password-toggle abby-key-toggle"
+                  data-reveal-url="{{ url_for('abby_api_key_reveal') }}"
+                  data-csrf="{{ csrf_token() }}"
+                  aria-label="Afficher la clé">👁</button>
+        </div>
+      </label>
+
+      <div class="footer-actions">
+        <button class="primary" type="submit">Enregistrer</button>
+      </div>
+    </form>
+
+    <form method="post" action="{{ url_for('abby_test') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="button" type="submit" {% if not api_key_configured %}disabled{% endif %}>
+        🔌 Tester la connexion
+      </button>
+    </form>
+
+    {% if abby.last_test_at %}
+      <div class="abby-status {% if abby.last_test_ok %}abby-ok{% else %}abby-error{% endif %}">
+        <strong>{{ '✓' if abby.last_test_ok else '✗' }}</strong>
+        {{ abby.last_test_message }}
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="abby-card">
+    <h2>👥 Clients</h2>
+    <div class="abby-stats">
+      <div><strong>{{ stats['total'] or 0 }}</strong><span>Clients {{ business_name }}</span></div>
+      <div><strong>{{ stats['linked'] or 0 }}</strong><span>Reliés à Abby</span></div>
+      <div><strong>{{ stats['errors'] or 0 }}</strong><span>Erreurs</span></div>
+    </div>
+
+    <p>
+      {{ business_name }} reste la source principale. La première synchronisation
+      <strong>rattache les clients déjà présents chez Abby</strong> et crée seulement
+      ceux qui n'existent pas encore.
+    </p>
+
+    <form method="post" action="{{ url_for('abby_sync_clients') }}"
+          onsubmit="return confirm('Synchroniser les clients {{ business_name }} vers Abby ?');">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="primary big-action" type="submit"
+              {% if not api_key_configured or not abby.enabled %}disabled{% endif %}>
+        🔄 Synchroniser les clients
+      </button>
+    </form>
+
+    {% if abby.last_sync_at %}
+      <div class="tiny-note abby-last-sync">
+        Dernière synchro : {{ abby.last_sync_summary }}
+      </div>
+    {% endif %}
+
+    {% if recent_errors %}
+      <details class="abby-errors">
+        <summary>Voir les dernières erreurs</summary>
+        {% for c in recent_errors %}
+          <div class="abby-error-line">
+            <strong>{{ c['company'] or c['name'] }}</strong>
+            <span>{{ c['abby_sync_error'] }}</span>
+          </div>
+        {% endfor %}
+      </details>
+    {% endif %}
+  </section>
+
+  <section class="abby-card abby-supplier-card">
+    <h2>📥 Factures fournisseurs reçues</h2>
+    <p>
+      Abby permet de télécharger chaque facture reçue en <strong>PDF ou XML</strong>.
+      L'API publique ne documente pas encore leur lecture automatique ; WOPR
+      importe donc directement les <strong>XML téléchargés depuis Abby</strong>.
+    </p>
+
+    <form method="post"
+          action="{{ url_for('abby_import_supplier_invoices') }}"
+          enctype="multipart/form-data"
+          class="abby-import-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+      <label>Factures XML Abby
+        <input type="file"
+               name="supplier_xml"
+               accept=".xml,text/xml,application/xml"
+               multiple
+               required>
+      </label>
+
+      <button class="primary big-action" type="submit">
+        📥 Importer dans Achats / Ventes
+      </button>
+    </form>
+
+    <div class="abby-waiting">
+      WOPR récupère automatiquement : <strong>fournisseur, n° de facture,
+      date et montant TTC</strong>, évite les doublons et conserve le XML original
+      dans le dossier Factures/Fournisseurs.
+    </div>
+
+    <p class="tiny-note">
+      Tu peux sélectionner plusieurs XML en une seule fois. Dès qu'Abby expose
+      officiellement les factures reçues par API, ce bloc pourra devenir 100 % automatique.
+    </p>
+  </section>
+</div>
+
+{% endblock %}

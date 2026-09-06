@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Modifier {{ client['name'] }} - WOPR{% endblock %}
+{% block body %}
+
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">Modifier le client</div>
+</div>
+
+<form method="post" class="sheet-form client-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <div class="client-tabs" role="tablist" aria-label="Fiche client">
+    <button type="button" class="client-tab active" data-tab="coords" role="tab" aria-selected="true">Coordonnées</button>
+    <button type="button" class="client-tab" data-tab="notes" role="tab" aria-selected="false">
+      Notes{% if client['notes'] %} <span class="note-dot">●</span>{% endif %}
+    </button>
+  </div>
+
+  <section class="client-tab-panel active" data-panel="coords" role="tabpanel">
+    <div class="grid two">
+      <label>Prénom
+        <input name="first_name" value="{{ client['first_name'] or '' }}" placeholder="Prénom">
+      </label>
+
+      <label>Nom
+        <input name="last_name" value="{{ client['last_name'] or '' }}" placeholder="Nom">
+      </label>
+
+      <label class="wide">Entreprise / Société
+        <input name="company" value="{{ client['company'] or '' }}" placeholder="Ex. : Gîte d'Isabelle, LYDELEC 24...">
+        <small class="field-help">Pour une entreprise, tu peux laisser Prénom et Nom vides : ce champ devient le nom principal de la fiche.</small>
+      </label>
+
+      <label class="wide">Adresse
+        <input name="address_street" value="{{ client['address_street'] or '' }}">
+      </label>
+
+      <label>Code postal
+        <input name="postal_code" value="{{ client['postal_code'] or '' }}">
+      </label>
+
+      <label>Ville
+        <input name="city" value="{{ client['city'] or '' }}">
+      </label>
+
+      <label>Téléphone
+        <input name="phone" value="{{ client['phone'] or '' }}">
+      </label>
+
+      <label>Courriel
+        <input type="email" name="email" value="{{ client['email'] or '' }}">
+      </label>
+    </div>
+  </section>
+
+  <section class="client-tab-panel" data-panel="notes" role="tabpanel" hidden>
+    <label>Notes
+      <textarea name="notes" rows="12" placeholder="Ex. : préfère être contacté par SMS, appeler après 17h, client professionnel...">{{ client['notes'] or '' }}</textarea>
+    </label>
+    <div class="sheet-note">
+      Note libre liée au client. Elle est conservée dans WOPR et synchronisée dans la note du contact Google.
+    </div>
+  </section>
+
+  <div class="sheet-note">
+    Si Google Contacts est connecté, les modifications seront synchronisées automatiquement dans le contact associé.
+  </div>
+
+  <div class="footer-actions">
+    <button class="primary big-action" type="submit">ENREGISTRER</button>
+    <a class="button" href="{{ url_for('contacts_page') }}">Annuler</a>
+  </div>
+</form>
+
+<script>
+(() => {
+  const tabs = document.querySelectorAll('.client-tab');
+  const panels = document.querySelectorAll('.client-tab-panel');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tab;
+      tabs.forEach(t => {
+        const active = t === tab;
+        t.classList.toggle('active', active);
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      panels.forEach(panel => {
+        const active = panel.dataset.panel === target;
+        panel.classList.toggle('active', active);
+        panel.hidden = !active;
+      });
+    });
+  });
+})();
+</script>
+
+{% endblock %}

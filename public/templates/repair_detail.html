@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}{{ r['client_name'] }} - {{ r['dossier_no'] }}{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+  <div class="banner-title">Fiche de suivi réparation</div>
+</div>
+
+<div class="sheet-note dossier-line">
+  <div>Dossier <strong>{{ r['dossier_no'] }}</strong> — Statut : <strong>{{ r['status'] }}</strong>
+    {% if r['returned_at'] %}
+      <span class="returned-at-inline">· Restitué le {{ r['returned_at'][8:10] }}/{{ r['returned_at'][5:7] }}/{{ r['returned_at'][0:4] }}</span>
+    {% endif %}
+  </div>
+  {% if not client_mode %}
+  <div class="dossier-actions">
+    <a class="button edit-followup-btn" href="{{ url_for('repair_edit', rid=r['id']) }}">MODIFIER LE SUIVI</a>
+    {% if not r['invoice_no'] %}
+      <a class="button primary invoice-main-btn" href="{{ url_for('repair_close', rid=r['id']) }}">FACTURER</a>
+    {% else %}
+      <a class="button primary invoice-main-btn" href="{{ url_for('repair_close', rid=r['id']) }}">MODIFIER FACTURE</a>
+      <select class="pdf-lang-select button invoice-main-btn" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+        <option value="">🌐 PDF {{ r['invoice_no'] }}</option>
+        {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+      </select>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="section-title">Informations Client et Appareil</div>
+<table class="sheet-table compact">
+  <tbody>
+    <tr>
+      <th>Prénom</th><td>{{ r['client_first_name'] or '' }}</td>
+      <th>Nom</th><td>{{ r['client_last_name'] or r['client_name'] or '' }}</td>
+    </tr>
+    <tr><th>Date</th><td>{{ r['received_date'] }}</td><th></th><td></td></tr>
+    <tr><th>Téléphone</th><td>{{ r['client_phone'] }}</td><th>Courriel</th><td>{{ r['client_email'] }}</td></tr>
+    <tr><th>Adresse</th><td colspan="3" class="postal-address">
+      <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><br>
+      {{ r['client_address_street'] or '' }}<br>
+      {% if r['client_postal_code'] or r['client_city'] %}{{ r['client_postal_code'] or '' }} {{ r['client_city'] or '' }}{% endif %}
+    </td></tr>
+    <tr><th>Appareil</th><td>{{ r['device_type'] }}</td><th>Marque / modèle</th><td>{{ r['brand_model'] }}</td></tr>
+    <tr><th>N° série</th><td>{{ r['serial_no'] }}</td><th>Accessoires</th><td>{{ r['accessories'] }}</td></tr>
+    <tr><th>Système</th><td>{{ r['system_name'] or '—' }}</td><th>Mot de passe</th><td>
+      {% if r['has_system_password'] %}
+      <div class="password-field detail-secret-field">
+        <input type="password" value="" readonly placeholder="••••••••">
+        <button type="button" class="password-toggle repair-secret-toggle"
+                data-reveal-url="{{ url_for('reveal_system_password', rid=r['id']) }}"
+                data-csrf="{{ csrf_token() }}" aria-label="Afficher le mot de passe">👁</button>
+      </div>
+      {% else %}—{% endif %}
+    </td></tr>
+    <tr><th>État</th><td colspan="3">{{ r['device_state'] }}</td></tr>
+    <tr><th>Panne</th><td colspan="3">{{ r['problem'] }}</td></tr>
+  </tbody>
+</table>
+
+<div class="split">
+  <div>
+    <div class="section-title">Signature Client</div>
+    <div class="signature-box">
+      {% if r['signature_path'] %}
+        <div class="ok">✓ Signature enregistrée</div>
+        <div><strong>Client :</strong> {{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</div>
+        <div><strong>Date :</strong> {{ r['signature_at'] }}</div>
+        <div class="path">{{ r['signature_path'] }}</div>
+      {% else %}
+        <img class="qr" src="{{ url_for('qr_png', rid=r['id']) }}">
+        <p>Scanne ce QR code avec ton téléphone, puis fais signer le client au doigt.</p>
+        <div class="path">{{ sign_url }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not client_mode %}
+  <div>
+    <div class="section-title">Facturation</div>
+    <table class="sheet-table compact">
+      <tbody>
+        <tr><th>Facture</th><td>{{ r['invoice_no'] or '—' }}</td></tr>
+        <tr><th>Désignation prestation</th><td>{{ r['service_description'] or '—' }}</td></tr>
+        <tr><th>Pièce / marchandise</th><td>{{ r['goods_description'] or '—' }}</td></tr>
+        <tr><th>Prestation</th><td>{% if r['service_amount'] %}{{ '%.2f'|format(r['service_amount']) }} €{% else %}—{% endif %}</td></tr>
+        <tr><th>Marchandise</th><td>{% if r['goods_amount'] %}{{ '%.2f'|format(r['goods_amount']) }} €{% else %}—{% endif %}</td></tr>
+        <tr>
+          <th>Total / Mode</th>
+          <td>
+            {{ '%.2f'|format((r['service_amount'] or 0) + (r['goods_amount'] or 0))|replace('.', ',') }} €
+            · {% if r['payment_mode'] == 'MIXTE' %}Mixte · {{ r['payment_method'] or '—' }}{% else %}{{ r['payment_mode'] or r['payment_method'] or '—' }}{% endif %}
+            · {{ 'Payé' if r['paid'] else 'À régler' }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+{% if client_mode %}
+<div class="client-mode-confirm">
+  <strong>✓ Dossier créé.</strong>
+  Seules les informations de cette prise en charge sont affichées.
+</div>
+<div class="footer-actions">
+  <select class="pdf-lang-select button" aria-label="Langue PDF suivi" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+    <option value="">🌐 PDF prise en charge</option>
+    {% for code, info in pdf_languages.items() %}<option value="{{ url_for('intake_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+  </select>
+</div>
+{% else %}
+<form method="post" action="{{ url_for('repair_update', rid=r['id']) }}" class="sheet-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <div class="section-title">Intervention et Validation</div>
+  <div class="grid one">
+    <label>Diagnostic<textarea name="diagnosis" rows="4">{{ r['diagnosis'] or '' }}</textarea></label>
+    <label>Intervention / Tests / Validation
+      <textarea name="tests_validation" rows="6"
+                placeholder="Intervention réalisée, tests effectués, résultat final...">{{ r['tests_validation'] or '' }}</textarea>
+    </label>
+    <label>Remarques<textarea name="remarks" rows="3">{{ r['remarks'] or '' }}</textarea></label>
+    <label>Statut
+      <select name="status">
+      {% for s in ['Reçu','Diagnostic','En attente accord','En attente pièce','En réparation','Terminé','Restitué','Laissé pour pièces'] %}
+        <option {% if r['status']==s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+      </select>
+    </label>
+    {% if r['invoice_no'] and (r['accounting_status'] == 'red' or not r['paid']) %}
+    <div class="payment-restitution-box">
+      <strong>Règlement à la restitution</strong>
+      <label>Mode de règlement
+        <select name="payment_mode" class="payment-mode-select">
+          <option value="">— choisir —</option>
+          {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ','MIXTE'] %}
+            <option value="{{ mode }}" {% if r['payment_mode']==mode %}selected{% endif %}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="payment-mix-fields" data-payment-mix hidden>
+        <div class="payment-mix-title">Paiement mixte — répartis le total exact de la facture</div>
+        <div class="payment-mix-grid">
+          <label>Espèces €<input inputmode="decimal" name="payment_ESP" placeholder="0,00"></label>
+          <label>CB €<input inputmode="decimal" name="payment_CB" placeholder="0,00"></label>
+          <label>Virement €<input inputmode="decimal" name="payment_VIR" placeholder="0,00"></label>
+          <label>PayPal €<input inputmode="decimal" name="payment_PAY" placeholder="0,00"></label>
+          <label>Bitcoin €<input inputmode="decimal" name="payment_BTC" placeholder="0,00"></label>
+          <label>Chèque €<input inputmode="decimal" name="payment_CHQ" placeholder="0,00"></label>
+        </div>
+        <small>La somme doit être exactement égale au total de la facture.</small>
+      </div>
+      <label class="checkline">
+        <input type="checkbox" name="payment_received_now" value="1">
+        Paiement reçu aujourd’hui — comptabiliser dans le mois en cours
+      </label>
+      <small>Si le suivi est d’un mois précédent, la ligne passera automatiquement en jaune et le CA sera affecté au mois d’encaissement.</small>
+    </div>
+    {% endif %}
+  </div>
+  <div class="footer-actions">
+    <button type="submit">Enregistrer le suivi</button>
+  </div>
+</form>
+
+<div class="footer-actions">
+  <a class="button edit-followup-btn" href="{{ url_for('repair_edit', rid=r['id']) }}">Modifier le suivi</a>
+  {% if r['client_phone'] %}
+    <a class="button client-message-btn" href="{{ url_for('client_message', rid=r['id']) }}">💬 Message client</a>
+  {% endif %}
+  <select class="pdf-lang-select button" aria-label="Langue PDF suivi" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+    <option value="">🌐 PDF prise en charge</option>
+    {% for code, info in pdf_languages.items() %}<option value="{{ url_for('intake_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+  </select>
+  {% if not r['invoice_no'] %}
+    <a class="button primary" href="{{ url_for('repair_close', rid=r['id']) }}">FACTURER</a>
+  {% endif %}
+  {% if r['client_email'] and r['status'] == 'Laissé pour pièces' %}
+    <a class="button primary" href="{{ url_for('followup_email', rid=r['id']) }}">📧 Envoyer suivi + photos</a>
+  {% endif %}
+  {% if r['invoice_no'] %}
+    <a class="button primary" href="{{ url_for('repair_close', rid=r['id']) }}">Modifier facture</a>
+    <select class="pdf-lang-select button" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+      <option value="">🌐 PDF facture {{ r['invoice_no'] }}</option>
+      {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+    </select>
+    {% if r['client_email'] %}
+      <a class="button" href="{{ url_for('invoice_email', rid=r['id']) }}">📧 Envoyer la facture</a>
+    {% endif %}
+    {% if r['client_phone'] %}
+{% endif %}
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+

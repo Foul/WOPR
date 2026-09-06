@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Historique client - WOPR{% endblock %}
+{% block body %}
+<div class="client-history-page">
+  <div class="history-hero">
+    <div class="history-identity">
+      <div class="history-kicker">👤 HISTORIQUE CLIENT</div>
+      <h1>{% if client.first_name or client.last_name %}{{ client.first_name or '' }} {{ client.last_name or '' }}{% else %}{{ client.company or client.name }}{% endif %}</h1>
+      {% if client.company and (client.first_name or client.last_name) %}<div class="history-company">{{ client.company }}</div>{% endif %}
+      <div class="history-contact">
+        {% if client.phone %}<span>📞 {{ client.phone }}</span>{% endif %}
+        {% if client.phone %}
+          <a class="button" href="{{ url_for('client_message_from_client', client_id=client.id) }}">💬 SMS</a>
+        {% endif %}
+        {% if client.email %}<span>✉️ {{ client.email }}</span>{% endif %}
+      </div>
+      <div class="history-actions">
+        <a class="button" href="{{ url_for('contacts_page') }}">← Clients</a>
+        <a class="button" href="{{ url_for('client_edit', client_id=client.id) }}">✏️ Modifier la fiche</a>
+      </div>
+    </div>
+    <div class="history-summary-note">
+      {% if last_date %}<span>Dernier dossier</span><strong>{{ last_date }}</strong>{% else %}<span>Aucun dossier enregistré</span>{% endif %}
+    </div>
+  </div>
+
+  <div class="history-stat-grid">
+    <div class="history-stat-card"><span>Dossiers</span><strong>{{ repairs|length }}</strong><small>historique complet</small></div>
+    <div class="history-stat-card"><span>Devis</span><strong>{{ quotes|length }}</strong><small>enregistrés</small></div>
+    <div class="history-stat-card"><span>Total dossiers</span><strong>{{ '%.2f'|format(total_billed) }} €</strong><small>source : Suivi</small></div>
+    <div class="history-stat-card"><span>Encaissé</span><strong>{{ '%.2f'|format(total_paid) }} €</strong><small>source : Suivi</small></div>
+  </div>
+
+  {% if active_repairs or to_return or unpaid_total > 0 %}
+  <section class="history-watch">
+    <div class="history-section-title"><span>👀</span><div><h2>À surveiller</h2><p>Ce qui mérite ton attention sur ce client.</p></div></div>
+    <div class="history-watch-grid">
+      {% if active_repairs %}<div class="watch-item"><strong>{{ active_repairs|length }}</strong><span>dossier(s) actif(s)</span></div>{% endif %}
+      {% if to_return %}<div class="watch-item watch-return"><strong>{{ to_return|length }}</strong><span>à restituer</span></div>{% endif %}
+      {% if unpaid_total > 0 %}<div class="watch-item watch-unpaid"><strong>{{ '%.2f'|format(unpaid_total) }} €</strong><span>non encaissé</span></div>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="history-panel">
+    <div class="history-section-title"><span>🛠️</span><div><h2>Réparations / factures</h2><p>{{ repairs|length }} dossier(s), du plus récent au plus ancien.</p></div></div>
+    {% if repairs %}
+    <div class="table-wrap history-table-wrap"><table class="history-table"><thead><tr><th>Date</th><th>Appareil</th><th>Problème / intervention</th><th>État</th><th>Facture</th><th>Montant</th><th>Actions</th></tr></thead><tbody>
+    {% for r in repairs %}
+      <tr>
+        <td class="nowrap">{{ r.received_date }}</td>
+        <td><strong>{{ r.device_type or '—' }}</strong>{% if r.brand_model %}<div class="cell-muted">{{ r.brand_model }}</div>{% endif %}</td>
+        <td class="history-problem">{{ r.problem or '—' }}</td>
+        <td><span class="history-status status-{{ (r.status or '')|lower|replace(' ', '-')|replace('é','e')|replace('è','e')|replace('à','a') }}">{{ r.status }}</span></td>
+        <td>{% if r.invoice_no %}<strong>{{ r.invoice_no }}</strong>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
+        <td class="nowrap"><strong>{{ '%.2f'|format((r.service_amount or 0)+(r.goods_amount or 0)) }} €</strong>{% if r.paid %}<div class="paid-mark">✓ encaissé</div>{% endif %}</td>
+        <td class="history-row-actions"><a class="button" href="{{ url_for('repair_detail', rid=r.id) }}">📂 Dossier</a>{% if r.invoice_no %}<a class="button" href="{{ url_for('invoice_pdf', rid=r.id) }}" target="_blank">📄 Facture</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
+    {% else %}<div class="history-empty">Aucun dossier pour ce client.</div>{% endif %}
+  </section>
+
+  <section class="history-panel">
+    <div class="history-section-title"><span>📝</span><div><h2>Devis</h2><p>Historique des propositions commerciales.</p></div></div>
+    {% if quotes %}
+    <div class="table-wrap history-table-wrap"><table class="history-table"><thead><tr><th>Date</th><th>N° devis</th><th>État</th><th>Action</th></tr></thead><tbody>
+      {% for d in quotes %}<tr><td>{{ d.quote_date }}</td><td><strong>{{ d.quote_no }}</strong></td><td><span class="history-status">{{ d.status }}</span></td><td><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">📂 Ouvrir</a></td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<div class="history-empty">Aucun devis pour ce client.</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

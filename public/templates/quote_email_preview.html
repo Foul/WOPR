@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Envoyer devis - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">📧 Envoyer le devis {{ q['quote_no'] }}</div>
+</div>
+
+<div class="email-preview-card">
+  <div class="email-preview-meta">
+    <div><strong>Client :</strong> {{ q['client_name'] }}</div>
+    <div><strong>Expéditeur :</strong> {{ sender }}</div>
+    <div><strong>Pièce jointe :</strong> 📎 {{ q['client_name'] }}_{{ q['quote_no'] }}.pdf</div>
+  </div>
+
+  <form method="post" class="grid one">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+    <label>Destinataire
+      <input type="email" name="recipient" value="{{ recipient }}" required>
+    </label>
+
+    <label>Objet
+      <input name="subject" value="{{ subject }}" required>
+    </label>
+
+    <label>Message
+      <textarea name="body" rows="11" required>{{ body }}</textarea>
+    </label>
+
+    <div class="footer-actions">
+      <button class="primary email-send-btn" type="submit">📧 Envoyer le devis</button>
+      <a class="button" href="{{ cancel_url }}">Annuler</a>
+      <a class="button" href="{{ url_for('quote_pdf', quote_id=q['id']) }}" target="_blank">Voir le PDF</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

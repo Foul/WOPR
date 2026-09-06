@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Factures - WOPR{% endblock %}
+
+{% block body %}
+<div class="banner">
+  <div>
+    <div class="banner-title">Factures</div>
+    <div class="banner-sub">Dernières factures en premier</div>
+  </div>
+  <a class="button primary" href="{{ url_for('simple_invoice_new') }}">➕ Facture simple</a>
+</div>
+
+{% if unpaid_only %}
+<div class="sheet-note" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+  <strong>💳 Affichage : factures impayées uniquement</strong>
+  <a class="mini-btn" href="{{ url_for('invoices_page') }}">Voir toutes les factures</a>
+</div>
+{% endif %}
+
+<form method="get" action="{{ url_for('invoices_page') }}" class="invoice-search-bar">
+  <input type="search"
+         name="q"
+         value="{{ q or '' }}"
+         placeholder="Rechercher facture, client, date, mode de paiement..."
+         autocomplete="off">
+  <button class="button primary" type="submit">RECHERCHER</button>
+  {% if q %}
+    <a class="button" href="{{ url_for('invoices_page') }}">Effacer</a>
+  {% endif %}
+</form>
+
+<div class="table-scroll">
+<table class="invoice-list-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>N° facture</th>
+      <th>Client</th>
+      <th>Total</th>
+      <th>Mode</th>
+      <th>Date encaissée</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in invoices %}
+    <tr>
+      <td class="invoice-list-date">
+        {% if r['invoice_date'] %}{{ r['invoice_date'][8:10] }}/{{ r['invoice_date'][5:7] }}/{{ r['invoice_date'][0:4] }}{% endif %}
+      </td>
+      <td>
+        <a class="invoice-number-edit-link"
+           href="{{ url_for('repair_close', rid=r['id'], return='factures') }}"
+           title="Modifier la facture">
+          {{ r['invoice_no'] }}
+        </a>
+        {% if r['historical'] %}
+          <span class="legacy-mini">ODS</span>
+        {% endif %}
+        {% if r['simple_invoice'] %}
+          <span class="simple-invoice-mini">SIMPLE</span>
+        {% endif %}
+      </td>
+      <td><strong>{{ r['client_name'] }}</strong></td>
+      <td class="invoice-list-total">{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €</td>
+      <td class="invoice-list-mode">
+        {% if r['payment_mode_display'] %}<span class="payment-mode-badge">{{ r['payment_mode_display'] }}</span>{% else %}—{% endif %}
+      </td>
+      <td class="invoice-list-accounting-date">
+        {% if r['accounting_date'] %}
+          {{ r['accounting_date'][8:10] }}/{{ r['accounting_date'][5:7] }}/{{ r['accounting_date'][0:4] }}
+        {% elif r['accounting_status']=='red' %}
+          <strong class="invoice-unpaid">En attente</strong>
+        {% else %}
+          <span class="invoice-date-unknown">Date inconnue</span>
+        {% endif %}
+      </td>
+      <td class="invoice-list-actions">
+        <a class="mini-btn invoice-edit-direct"
+           href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">
+          Modifier facture
+        </a>
+        <select class="pdf-lang-select mini-btn" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+          <option value="">🌐 Facture PDF</option>
+          {% for code, info in pdf_languages.items() %}
+            <option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>
+          {% endfor %}
+        </select>
+        {% if r['client_email'] %}
+        <a class="mini-btn invoice-email-btn" href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">📧 Envoyer</a>
+        {% else %}
+        <span class="invoice-email-missing" title="Aucune adresse e-mail client">📧 —</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr>
+      <td colspan="7">{% if q %}Aucune facture trouvée.{% else %}Aucune facture.{% endif %}</td>
+    </tr>
+  {% endfor %}
+
+  </tbody>
+</table>
+</div>
+{% endblock %}

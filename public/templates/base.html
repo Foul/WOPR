@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}WOPR{% endblock %}</title>
+<link rel="icon" type="image/png" sizes="any" href="{{ url_for('static', filename='favicon.png') }}?v={{ app_version }}">
+<link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}?v={{ app_version }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}?v={{ app_version }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<script>
+(function(){
+  try {
+    if (localStorage.getItem('wopr-theme') === '8bit') {
+      document.body.classList.add('theme-8bit');
+    }
+  } catch (e) {}
+})();
+</script>
+
+<header class="topbar">
+  <div class="brand-zone">
+    <a class="brand brand-link" href="{{ url_for('home') }}" title="Retour à l'accueil Atelier">
+      <img src="{{ url_for('static', filename='logo_topbar.png') }}" alt="WOPR" class="brand-logo brand-logo-normal">
+      <img src="{{ url_for('static', filename='logo_topbar_8bit.png') }}" alt="WOPR" class="brand-logo brand-logo-8bit" aria-hidden="true">
+    </a>
+    <span class="api-version-badge" id="woprApiTrigger" title="Version de WOPR API">API v{{ app_version }}</span>
+    <button type="button" class="theme-toggle" id="themeToggle" title="Basculer entre le thème normal et le thème 8-bits" aria-label="Changer de thème">
+      <span class="theme-toggle-icon">🕹️</span><span class="theme-toggle-label">8-BIT</span>
+    </button>
+  </div>
+  {% if client_mode %}
+  <nav class="topnav client-mode-nav">
+    <div class="client-mode-badge">👤 Mode Client — confidentialité activée</div>
+    <form class="nav-lock-form" method="post" action="{{ url_for('admin_lock') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="lock-btn" type="submit">🔒 Retour atelier</button>
+    </form>
+  </nav>
+  {% else %}
+  <nav class="topnav">
+    <a class="nav-btn nav-atelier {% if request.endpoint == 'atelier_dashboard' %}active{% endif %}" href="{{ url_for('atelier_dashboard') }}">
+      <span class="nav-ico">🛠️</span><span>Atelier</span>
+    </a>
+    <a class="nav-btn nav-global-search {% if request.endpoint == 'global_search' %}active{% endif %}" href="{{ url_for('global_search') }}" title="Recherche globale">
+      <span class="nav-ico">🔎</span><span>Recherche</span>
+    </a>
+    <a class="navbtn navbtn-new" href="{{ url_for('repair_new') }}">
+      <span class="nav-ico">➕</span><span>Nouvelle réparation</span>
+    </a>
+    <a class="nav-btn nav-simple-invoice {% if request.endpoint == 'simple_invoice_new' %}active{% endif %}" href="{{ url_for('simple_invoice_new') }}">
+      <span class="nav-ico">🧾</span><span>Facture simple</span>
+    </a>
+    <a class="nav-btn nav-suivi {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+      <span class="nav-ico">📋</span><span>Suivi</span>
+    </a>
+    <a class="nav-btn nav-factures {% if request.endpoint in ['invoices_page','invoice_pdf','repair_close'] %}active{% endif %}" href="{{ url_for('invoices_page') }}">
+      <span class="nav-ico">🧾</span><span>Factures</span>
+    </a>
+    <a class="nav-btn nav-devis {% if request.endpoint in ['quotes_page','quote_new','quote_edit','quote_delete','quote_pdf'] %}active{% endif %}" href="{{ url_for('quotes_page') }}">
+      <span class="nav-ico">📝</span><span>Devis</span>
+    </a>
+    <a class="nav-btn nav-clients {% if request.endpoint in ['contacts_page', 'import_proton_contacts', 'import_proton_preview', 'client_edit', 'client_delete'] %}active{% endif %}" href="{{ url_for('contacts_page') }}">
+      <span class="nav-ico">👥</span><span>Clients</span>
+    </a>
+    <a class="nav-btn nav-achats {% if request.endpoint in ['achats_ventes_page', 'achats_ventes_add', 'achats_ventes_edit', 'achats_ventes_delete'] %}active{% endif %}" href="{{ url_for('achats_ventes_page') }}">
+      <span class="nav-ico">🛍️</span><span>Achats / Ventes</span>
+    </a>
+    <a class="nav-btn nav-antivirus {% if request.endpoint in ['antivirus_page','antivirus_add','antivirus_edit','antivirus_delete'] %}active{% endif %}" href="{{ url_for('antivirus_page') }}">
+      <span class="nav-ico">🛡️</span><span>Antivirus</span>
+    </a>
+    <a class="nav-btn nav-abby {% if request.endpoint and request.endpoint.startswith('abby_') %}active{% endif %}" href="{{ url_for('abby_page') }}" title="Abby" aria-label="Abby">
+      <img src="{{ url_for('static', filename='abby_logo.svg') }}" alt="Abby" class="abby-nav-logo">
+    </a>
+    <a class="nav-btn nav-securite {% if request.endpoint == 'security_page' %}active{% endif %}" href="{{ url_for('security_page') }}">
+      <span class="nav-ico">🔐</span><span>Sécurité</span>
+    </a>
+    <a class="nav-btn nav-ca {% if request.endpoint == 'total_page' %}active{% endif %}" href="{{ url_for('total_page') }}">
+      <span class="nav-ico">📊</span><span>CA / Déclarations</span>
+    </a>
+    <form class="nav-lock-form" method="post" action="{{ url_for('admin_lock') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="lock-btn" type="submit"><span class="nav-ico">🔒</span><span>Verrouiller</span></button>
+    </form>
+  </nav>
+  {% endif %}
+</header>
+<main class="page">
+{% with messages = get_flashed_messages() %}
+  {% if messages %}<div class="flash">{{ messages[0] }}</div>{% endif %}
+{% endwith %}
+{% block body %}{% endblock %}
+</main>
+
+<script>
+(function(){
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  function refreshLabel(){
+    const active = document.body.classList.contains('theme-8bit');
+    const label = btn.querySelector('.theme-toggle-label');
+    if (label) label.textContent = active ? 'NORMAL' : '8-BIT';
+    btn.classList.toggle('active', active);
+    btn.title = active ? 'Revenir au thème normal' : 'Passer au thème 8-bits';
+  }
+  refreshLabel();
+  btn.addEventListener('click', function(){
+    const active = document.body.classList.toggle('theme-8bit');
+    try { localStorage.setItem('wopr-theme', active ? '8bit' : 'normal'); } catch (e) {}
+    refreshLabel();
+  });
+})();
+</script>
+
+<script>
+(function(){
+  function refreshPaymentMix(select){
+    const form = select.closest('form');
+    if (!form) return;
+    const box = form.querySelector('[data-payment-mix]');
+    if (!box) return;
+    box.hidden = select.value !== 'MIXTE';
+  }
+  document.querySelectorAll('.payment-mode-select').forEach(refreshPaymentMix);
+  document.addEventListener('change', function(e){
+    if (e.target && e.target.classList.contains('payment-mode-select')) refreshPaymentMix(e.target);
+  });
+})();
+</script>
+
+<script>
+document.addEventListener('click', async function (event) {
+  // Champs modifiables : password <-> text
+  const passwordButton = event.target.closest('.password-toggle');
+  if (passwordButton) {
+    const field = passwordButton.closest('.password-field');
+    if (!field) return;
+
+    const input = field.querySelector('input');
+    if (!input) return;
+
+    // Mot de passe appareil : même principe qu'Abby, jamais injecté dans le HTML initial.
+    if (passwordButton.classList.contains('repair-secret-toggle')) {
+      if (input.type === 'text') {
+        input.type = 'password';
+        if (input.dataset.serverRevealed === '1') {
+          input.value = '';
+          input.dataset.serverRevealed = '0';
+        }
+        passwordButton.textContent = '👁';
+        passwordButton.setAttribute('aria-label', 'Afficher le mot de passe');
+        return;
+      }
+      // Si un nouveau mot de passe a été saisi dans le formulaire d'édition, on affiche simplement la saisie.
+      if (input.value && input.dataset.serverRevealed !== '1') {
+        input.type = 'text';
+        passwordButton.textContent = '🙈';
+        passwordButton.setAttribute('aria-label', 'Masquer le mot de passe');
+        return;
+      }
+      try {
+        const response = await fetch(passwordButton.dataset.revealUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-CSRF-Token': passwordButton.dataset.csrf || ''
+          },
+          credentials: 'same-origin',
+          body: '_csrf_token=' + encodeURIComponent(passwordButton.dataset.csrf || '')
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        input.value = data.system_password || '';
+        input.dataset.serverRevealed = '1';
+        input.type = 'text';
+        passwordButton.textContent = '🙈';
+        passwordButton.setAttribute('aria-label', 'Masquer le mot de passe');
+      } catch (err) {
+        alert("Impossible d'afficher le mot de passe.");
+      }
+      return;
+    }
+
+    // Abby : la vraie clé n'est jamais injectée dans le HTML initial.
+    // Elle est demandée au serveur uniquement au clic sur l'œil.
+    if (passwordButton.classList.contains('abby-key-toggle')) {
+      if (input.type === 'text') {
+        input.type = 'password';
+        // Si c'était la clé existante révélée depuis le serveur, on la retire du DOM en la remasquant.
+        // Une nouvelle clé saisie manuellement reste, elle, dans le champ pour pouvoir être enregistrée.
+        if (input.dataset.serverRevealed === '1') {
+          input.value = '';
+          input.dataset.serverRevealed = '0';
+        }
+        passwordButton.textContent = '👁';
+        passwordButton.setAttribute('aria-label', 'Afficher la clé');
+        return;
+      }
+      // Une nouvelle clé vient d'être saisie : l'œil ne contacte pas le serveur, il affiche simplement la saisie.
+      if (input.value) {
+        input.type = 'text';
+        input.dataset.serverRevealed = '0';
+        passwordButton.textContent = '🙈';
+        passwordButton.setAttribute('aria-label', 'Masquer la clé');
+        return;
+      }
+      try {
+        const response = await fetch(passwordButton.dataset.revealUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-CSRF-Token': passwordButton.dataset.csrf || ''
+          },
+          credentials: 'same-origin',
+          body: '_csrf_token=' + encodeURIComponent(passwordButton.dataset.csrf || '')
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        input.value = data.api_key || '';
+        input.dataset.serverRevealed = '1';
+        input.type = 'text';
+        passwordButton.textContent = '🙈';
+        passwordButton.setAttribute('aria-label', 'Masquer la clé');
+      } catch (err) {
+        alert("Impossible d'afficher la clé API Abby.");
+      }
+      return;
+    }
+
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    passwordButton.textContent = show ? '🙈' : '👁';
+    passwordButton.setAttribute(
+      'aria-label',
+      show ? 'Masquer le mot de passe' : 'Afficher le mot de passe'
+    );
+    return;
+  }
+
+  // Fiche de suivi : valeur affichée en lecture seule
+  const revealButton = event.target.closest('.reveal-secret');
+  if (revealButton) {
+    const cell = revealButton.closest('td');
+    if (!cell) return;
+
+    const secret = cell.querySelector('.secret-value');
+    if (!secret) return;
+
+    const isHidden = secret.dataset.visible !== '1';
+    if (isHidden) {
+      secret.textContent = secret.dataset.secret || '';
+      secret.dataset.visible = '1';
+      revealButton.textContent = '🙈 Masquer';
+      revealButton.setAttribute('aria-label', 'Masquer le mot de passe');
+    } else {
+      secret.textContent = '••••••••';
+      secret.dataset.visible = '0';
+      revealButton.textContent = '👁 Afficher';
+      revealButton.setAttribute('aria-label', 'Afficher le mot de passe');
+    }
+  }
+});
+</script>
+
+
+<!-- Easter egg WOPR : 10 clics rapides sur le badge API -->
+<div id="woprEgg" class="wopr-egg" aria-hidden="true">
+  <div class="wopr-crt" role="dialog" aria-modal="true" aria-label="WOPR Tic-Tac-Toe">
+    <div class="wopr-scanlines" aria-hidden="true"></div>
+    <button type="button" class="wopr-close" id="woprClose" aria-label="Fermer">×</button>
+    <div class="wopr-terminal">
+      <div class="wopr-title">WOPR // GAME SESSION</div>
+      <div class="wopr-line" id="woprMessage">SHALL WE PLAY A GAME?</div>
+      <div class="wopr-subline">TIC-TAC-TOE // YOU: X // WOPR: O</div>
+
+      <div class="wopr-board-wrap">
+        <div class="wopr-board" id="woprBoard" aria-label="Morpion">
+          {% for i in range(9) %}<button type="button" class="wopr-cell" data-cell="{{ i }}" aria-label="Case {{ i + 1 }}"></button>{% endfor %}
+        </div>
+
+        <div class="wopr-end-screen" id="woprEndScreen" aria-hidden="true">
+          <div class="wopr-end-label">ENDGAME ANALYSIS</div>
+          <div class="wopr-end-result" id="woprEndResult"></div>
+          <div class="wopr-end-message" id="woprEndMessage"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const trigger = document.getElementById('woprApiTrigger');
+  const egg = document.getElementById('woprEgg');
+  if (!trigger || !egg) return;
+
+  const boardEl = document.getElementById('woprBoard');
+  const msgEl = document.getElementById('woprMessage');
+  const closeBtn = document.getElementById('woprClose');
+  const endScreen = document.getElementById('woprEndScreen');
+  const endResult = document.getElementById('woprEndResult');
+  const endMessage = document.getElementById('woprEndMessage');
+  const cells = Array.from(boardEl.querySelectorAll('.wopr-cell'));
+  const endSampleUrl = {{ url_for('wopr_end_sequence_audio')|tojson }};
+
+  let endSample = null;
+  let clicks = [];
+  let board = Array(9).fill('');
+  let finished = false;
+  let woprThinking = false;
+
+  document.body.classList.remove('wopr-open');
+  egg.setAttribute('aria-hidden', 'true');
+
+  function beep(freq, duration){
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.035, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+      osc.onended = () => ctx.close();
+    } catch(e) {}
+  }
+
+  async function playEndSampleAndReturn(){
+    try {
+      if (!endSample) {
+        const response = await fetch(endSampleUrl, {credentials: 'same-origin'});
+        if (!response.ok) {
+          setTimeout(closeEgg, 1800);
+          return;
+        }
+        const blob = await response.blob();
+        endSample = new Audio(URL.createObjectURL(blob));
+        endSample.preload = 'auto';
+      }
+
+      // Laisse respirer la fin du sample avant de revenir à WOPR.
+      endSample.onended = () => setTimeout(closeEgg, 2800);
+      endSample.onerror = () => setTimeout(closeEgg, 1200);
+      endSample.currentTime = 0;
+
+      const p = endSample.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => setTimeout(closeEgg, 1800));
+      }
+    } catch(e) {
+      setTimeout(closeEgg, 1800);
+    }
+  }
+
+  function stopEndSample(){
+    try {
+      if (endSample) {
+        endSample.pause();
+        endSample.currentTime = 0;
+        endSample.onended = null;
+        endSample.onerror = null;
+      }
+    } catch(e) {}
+  }
+
+  function hideEndScreen(){
+    endScreen.classList.remove('is-visible');
+    endScreen.setAttribute('aria-hidden', 'true');
+  }
+
+  function showEndScreen(result){
+    if (result === 'DRAW') {
+      endResult.textContent = 'STALEMATE';
+      endMessage.textContent = 'A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY.';
+    } else if (result === 'O') {
+      endResult.textContent = 'WOPR VICTORY';
+      endMessage.textContent = 'SIMULATION COMPLETE.';
+    } else {
+      endResult.textContent = 'HUMAN VICTORY';
+      endMessage.textContent = 'ANOMALY DETECTED.';
+    }
+
+    endScreen.classList.add('is-visible');
+    endScreen.setAttribute('aria-hidden', 'false');
+  }
+
+  function openEgg(){
+    stopEndSample();
+    hideEndScreen();
+    board = Array(9).fill('');
+    finished = false;
+    woprThinking = false;
+    render();
+
+    document.body.classList.add('wopr-open');
+    egg.setAttribute('aria-hidden', 'false');
+    msgEl.textContent = 'SHALL WE PLAY A GAME?';
+
+    beep(520, .08);
+    setTimeout(() => beep(680, .08), 100);
+  }
+
+  function closeEgg(){
+    stopEndSample();
+    document.body.classList.remove('wopr-open');
+    egg.setAttribute('aria-hidden', 'true');
+    clicks = [];
+  }
+
+  trigger.addEventListener('click', function(e){
+    e.preventDefault();
+    const now = Date.now();
+    clicks = clicks.filter(t => now - t < 4000);
+    clicks.push(now);
+
+    if (clicks.length >= 10) {
+      clicks = [];
+      openEgg();
+    }
+  });
+
+  function winner(b){
+    const wins = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    for (const [a,c,d] of wins) {
+      if (b[a] && b[a] === b[c] && b[a] === b[d]) return b[a];
+    }
+    return b.every(Boolean) ? 'DRAW' : null;
+  }
+
+  function minimax(b, maximizing, depth){
+    const result = winner(b);
+    if (result === 'O') return {score: 10 - depth};
+    if (result === 'X') return {score: depth - 10};
+    if (result === 'DRAW') return {score: 0};
+
+    let best = {score: maximizing ? -Infinity : Infinity, index: -1};
+
+    for (let i = 0; i < 9; i++) {
+      if (b[i]) continue;
+      b[i] = maximizing ? 'O' : 'X';
+      const r = minimax(b, !maximizing, depth + 1);
+      b[i] = '';
+
+      if ((maximizing && r.score > best.score) || (!maximizing && r.score < best.score)) {
+        best = {score: r.score, index: i};
+      }
+    }
+
+    return best;
+  }
+
+  function render(){
+    cells.forEach((cell, i) => {
+      cell.textContent = board[i];
+      cell.disabled = !!board[i] || finished || woprThinking;
+    });
+  }
+
+  function finish(result){
+    finished = true;
+
+    if (result === 'DRAW') {
+      msgEl.textContent = 'GAME COMPLETE // NO WINNER';
+    } else if (result === 'O') {
+      msgEl.textContent = 'GAME COMPLETE // WOPR WINS';
+    } else {
+      msgEl.textContent = 'GAME COMPLETE // HUMAN WINS';
+    }
+
+    beep(result === 'DRAW' ? 440 : (result === 'O' ? 250 : 820), .16);
+    render();
+
+    setTimeout(function(){
+      showEndScreen(result);
+      playEndSampleAndReturn();
+    }, 380);
+  }
+
+  function woprMove(){
+    if (finished) return;
+
+    woprThinking = true;
+    render();
+    msgEl.textContent = 'WOPR IS THINKING...';
+
+    setTimeout(function(){
+      const move = minimax(board.slice(), true, 0).index;
+      if (move >= 0) board[move] = 'O';
+
+      woprThinking = false;
+      beep(310, .05);
+
+      const result = winner(board);
+      if (result) {
+        finish(result);
+      } else {
+        msgEl.textContent = 'YOUR MOVE.';
+        render();
+      }
+    }, 430);
+  }
+
+  function playerMove(i){
+    if (finished || woprThinking || board[i]) return;
+
+    board[i] = 'X';
+    beep(760, .04);
+    render();
+
+    const result = winner(board);
+    if (result) {
+      finish(result);
+      return;
+    }
+
+    woprMove();
+  }
+
+  cells.forEach((cell, i) => {
+    cell.addEventListener('click', () => playerMove(i));
+  });
+
+  closeBtn.addEventListener('click', function(e){
+    e.preventDefault();
+    e.stopPropagation();
+    closeEgg();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && document.body.classList.contains('wopr-open')) {
+      closeEgg();
+    }
+  });
+
+  render();
+})();
+</script>
+
+</body>
+</html>

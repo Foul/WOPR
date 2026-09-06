@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% block title %}Achats / Ventes {{ year }} - WOPR{% endblock %}
+{% block body %}
+<div class="ledger-audit-shortcut">
+  <a class="button" href="{{ url_for('supplier_documents_audit') }}">🔍 Vérifier les justificatifs liés</a>
+</div>
+
+
+<div class="ledger-head">
+  <div class="sheet-banner ledger-banner">
+    <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+    <div class="banner-title">Achats – Ventes {{ year }}</div>
+  </div>
+
+  <div class="ledger-year-switch">
+    {% if year == 2026 %}
+      <span class="ledger-year-current">2026</span>
+      <details class="ledger-archive">
+        <summary>Archives</summary>
+        <a href="{{ url_for('achats_ventes_page', year=2025) }}">2025</a>
+      </details>
+    {% else %}
+      <a class="button primary" href="{{ url_for('achats_ventes_page', year=2026) }}">← Retour 2026</a>
+      <span class="ledger-year-archive">Archive 2025</span>
+    {% endif %}
+  </div>
+</div>
+
+{% if year in [2025, 2026] %}
+<div class="ledger-history-note">
+  <strong>🔒 Chiffres de vente / CA : source unique = Suivi.</strong> Les PDF sont uniquement des justificatifs et ne sont jamais lus pour calculer un montant.
+</div>
+{% endif %}
+
+<div class="ledger-summary">
+  <div class="ledger-summary-card">
+    <span>Achats {{ year }}</span>
+    <strong>{{ '%.2f'|format(purchases_total)|replace('.', ',') }} €</strong>
+  </div>
+  <div class="ledger-summary-card">
+    <span>CA encaissé {{ year }} <small>(Suivi)</small></span>
+    <strong>{{ '%.2f'|format(sales_total)|replace('.', ',') }} €</strong>
+  </div>
+  <div class="ledger-summary-card {% if balance_total < 0 %}negative{% endif %}">
+    <span>Solde achats / CA Suivi</span>
+    <strong>{{ '%.2f'|format(balance_total)|replace('.', ',') }} €</strong>
+  </div>
+</div>
+
+<div class="ledger-documents-summary">
+  <div>
+    <strong>📄 Factures fournisseurs : {{ supplier_docs_count }} liée(s)</strong>
+    <span>• {{ supplier_docs_missing }} achat(s) sans justificatif</span>
+  </div>
+  <small>Les fichiers existants restent dans tes dossiers <strong>Fournisseurs</strong> et gardent leur nom. Les bons de commande et anciens numéros internes Amazon/eBay ne sont plus considérés comme des factures fournisseur.</small>
+  <form method="get" action="{{ url_for('achats_ventes_page') }}" class="ledger-search-form">
+    <input type="hidden" name="year" value="{{ year }}">
+    <input type="search" name="q" value="{{ search_q or '' }}" placeholder="Fournisseur, facture, article, montant…" aria-label="Rechercher dans Achats / Ventes">
+    <button class="button" type="submit">🔎 Rechercher</button>
+    {% if search_q %}
+      <a class="button" href="{{ url_for('achats_ventes_page', year=year) }}">✕ Effacer</a>
+    {% endif %}
+  </form>
+  {% if search_q %}
+    <small><strong>{{ search_count }}</strong> résultat(s) pour « {{ search_q }} ».</small>
+  {% endif %}
+</div>
+
+<details class="ledger-add-box">
+  <summary>+ Ajouter une opération</summary>
+  <form method="post" enctype="multipart/form-data" action="{{ url_for('achats_ventes_add') }}" class="ledger-add-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+    <label>Opération
+      <select name="operation" required>
+        <option value="Achat">Achat</option>
+        <option value="Vente">Vente</option>
+      </select>
+    </label>
+
+    <label>Fournisseur / client
+      <input name="party">
+    </label>
+
+    <label>Date
+      <input type="date" name="entry_date" value="{{ today }}" required>
+    </label>
+
+    <label class="wide">Articles et Quantité
+      <textarea name="description" rows="2"></textarea>
+    </label>
+
+    <label>Règlement TTC
+      <input name="amount_ttc" inputmode="decimal" placeholder="0,00" required>
+    </label>
+
+    <label>Type
+      <select name="payment_type">
+        <option value=""></option>
+        <option>CB</option>
+        <option>Espèces</option>
+        <option>Virement</option>
+        <option>Paypal</option>
+        <option>BTC</option>
+        <option>Autre</option>
+      </select>
+    </label>
+
+    <label>Facture N°
+      <input name="invoice_no">
+    </label>
+
+    <label class="wide ledger-document-field">Facture fournisseur (optionnel)
+      <input type="file" name="supplier_document" accept=".pdf,.xml,.jpg,.jpeg,.png,application/pdf,text/xml,image/jpeg,image/png">
+      <small>Rangée dans le dossier Fournisseurs du mois. Nom proposé : FOURNISSEUR_NumeroFacture.ext (ex. SLE-FRANCE_20260903-0006.pdf).</small>
+    </label>
+
+    <label class="wide">Remarques
+      <textarea name="remarks" rows="2"></textarea>
+    </label>
+
+    <div class="wide ledger-form-actions">
+      <button class="primary" type="submit">AJOUTER</button>
+    </div>
+  </form>
+</details>
+
+<div class="ledger-months">
+{% for month in months %}
+  <section class="ledger-month">
+    <div class="ledger-month-title">
+      <span>{{ month['name'] }}</span>
+      <div>
+        Achat : <strong>{{ '%.2f'|format(month['purchases'])|replace('.', ',') }} €</strong>
+        &nbsp; • &nbsp;
+        CA Suivi : <strong>{{ '%.2f'|format(month['sales'])|replace('.', ',') }} €</strong>
+      </div>
+    </div>
+
+    <div class="sheet-wrapper">
+      <table class="sheet-table ledger-table">
+        <colgroup>
+          <col class="ledger-op">
+          <col class="ledger-party">
+          <col class="ledger-date">
+          <col class="ledger-description">
+          <col class="ledger-amount">
+          <col class="ledger-payment">
+          <col class="ledger-invoice">
+          <col class="ledger-document">
+          <col class="ledger-remarks">
+          <col class="ledger-actions">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Opérations</th>
+            <th>Fournisseurs / clients</th>
+            <th>Dates</th>
+            <th>Articles et Quantité</th>
+            <th>Règlement TTC</th>
+            <th>Type</th>
+            <th>Facture N°</th>
+            <th>Justificatif</th>
+            <th>Remarques</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for e in month['entries'] %}
+          <tr class="ledger-row ledger-row-{{ e['operation']|lower }}" data-ledger-row="{{ e['id'] }}">
+            <td>
+              <div class="ledger-display"><strong class="operation-{{ e['operation']|lower }}">{{ e['operation'] }}</strong></div>
+              <div class="ledger-edit">
+                <select name="operation" form="ledger-edit-{{ e['id'] }}">
+                  <option value="Achat" {% if e['operation']=='Achat' %}selected{% endif %}>Achat</option>
+                  <option value="Vente" {% if e['operation']=='Vente' %}selected{% endif %}>Vente</option>
+                </select>
+              </div>
+            </td>
+
+            <td>
+              <div class="ledger-display">{{ e['party'] or '' }}</div>
+              <div class="ledger-edit"><input name="party" form="ledger-edit-{{ e['id'] }}" value="{{ e['party'] or '' }}"></div>
+            </td>
+
+            <td>
+              <div class="ledger-display">{{ e['entry_date'][8:10] }}/{{ e['entry_date'][5:7] }}/{{ e['entry_date'][0:4] }}</div>
+              <div class="ledger-edit"><input type="date" name="entry_date" form="ledger-edit-{{ e['id'] }}" value="{{ e['entry_date'] }}"></div>
+            </td>
+
+            <td>
+              <div class="ledger-display ledger-wrap">{{ e['description'] or '' }}</div>
+              <div class="ledger-edit"><textarea name="description" form="ledger-edit-{{ e['id'] }}" rows="2">{{ e['description'] or '' }}</textarea></div>
+            </td>
+
+            <td class="ledger-money">
+              <div class="ledger-display">{{ '%.2f'|format(e['amount_ttc'] or 0)|replace('.', ',') }} €</div>
+              <div class="ledger-edit"><input name="amount_ttc" form="ledger-edit-{{ e['id'] }}" value="{{ '%.2f'|format(e['amount_ttc'] or 0)|replace('.', ',') }}"></div>
+            </td>
+
+            <td>
+              <div class="ledger-display">{{ e['payment_type'] or '' }}</div>
+              <div class="ledger-edit">
+                <select name="payment_type" form="ledger-edit-{{ e['id'] }}">
+                  {% for p in ['', 'CB', 'Espèces', 'Virement', 'Paypal', 'BTC', 'Autre'] %}
+                    <option value="{{ p }}" {% if e['payment_type']==p %}selected{% endif %}>{{ p }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </td>
+
+            <td>
+              <div class="ledger-display ledger-wrap">{{ e['invoice_no'] or '' }}</div>
+              <div class="ledger-edit"><input name="invoice_no" form="ledger-edit-{{ e['id'] }}" value="{{ e['invoice_no'] or '' }}"></div>
+            </td>
+
+            <td class="ledger-document-cell">
+              {% if e['operation']=='Achat' %}
+                {% if e['document_path'] %}
+                  <a class="mini-btn ledger-doc-link" href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture fournisseur">📄 Ouvrir</a>
+                {% else %}
+                  <form method="post" enctype="multipart/form-data" action="{{ url_for('achats_ventes_document_add', entry_id=e['id']) }}" class="ledger-attach-form">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <label class="mini-btn ledger-attach-btn" title="Joindre la facture fournisseur">📎 Joindre
+                      <input type="file" name="supplier_document" accept=".pdf,.xml,.jpg,.jpeg,.png,application/pdf,text/xml,image/jpeg,image/png" onchange="this.form.submit()">
+                    </label>
+                  </form>
+                {% endif %}
+              {% else %}
+                {% if e['invoice_no'] %}
+                  <a class="mini-btn ledger-doc-link" href="{{ url_for('achats_ventes_sale_invoice_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture de vente client">📄 Ouvrir</a>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              {% endif %}
+            </td>
+
+            <td>
+              <div class="ledger-display ledger-wrap">{{ e['remarks'] or '' }}</div>
+              <div class="ledger-edit"><textarea name="remarks" form="ledger-edit-{{ e['id'] }}" rows="2">{{ e['remarks'] or '' }}</textarea></div>
+            </td>
+
+            <td class="ledger-row-actions">
+              <form id="ledger-edit-{{ e['id'] }}" method="post" action="{{ url_for('achats_ventes_edit', entry_id=e['id']) }}">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              </form>
+
+              <div class="ledger-normal-actions">
+                <button type="button" class="mini-btn ledger-edit-btn" data-ledger-edit="{{ e['id'] }}">Modifier</button>
+                <form method="post" action="{{ url_for('achats_ventes_delete', entry_id=e['id']) }}" onsubmit="return confirm('Supprimer définitivement cette ligne ?');">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="mini-btn danger-btn">Supprimer</button>
+                </form>
+              </div>
+
+              <div class="ledger-edit-actions">
+                <button type="submit" form="ledger-edit-{{ e['id'] }}" class="mini-btn primary">Enregistrer</button>
+                <button type="button" class="mini-btn" data-ledger-cancel="{{ e['id'] }}">Annuler</button>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr class="ledger-empty-row">
+            <td colspan="10">Aucune opération pour {{ month['name'] }}.</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endfor %}
+</div>
+
+<script>
+(() => {
+  function setEdit(id, editing) {
+    const row = document.querySelector(`[data-ledger-row="${id}"]`);
+    if (!row) return;
+    row.classList.toggle('editing', editing);
+    if (editing) {
+      const field = row.querySelector('.ledger-edit input, .ledger-edit select, .ledger-edit textarea');
+      if (field) field.focus();
+    }
+  }
+
+  document.querySelectorAll('[data-ledger-edit]').forEach(btn => {
+    btn.addEventListener('click', () => setEdit(btn.dataset.ledgerEdit, true));
+  });
+
+  document.querySelectorAll('[data-ledger-cancel]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = document.querySelector(`[data-ledger-row="${btn.dataset.ledgerCancel}"]`);
+      if (row) {
+        row.querySelectorAll('.ledger-edit input, .ledger-edit select, .ledger-edit textarea').forEach(el => {
+          if (el.tagName === 'SELECT') {
+            [...el.options].forEach(opt => opt.selected = opt.defaultSelected);
+          } else {
+            el.value = el.defaultValue;
+          }
+        });
+      }
+      setEdit(btn.dataset.ledgerCancel, false);
+    });
+  });
+})();
+</script>
+
+{% endblock %}
