@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/wopr-logo.png" alt="WOPR" width="260">
+</p>
+
 # WOPR
 
 **Workflow d’Organisation et de Pilotage des Réparations**
