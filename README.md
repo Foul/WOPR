@@ -1,5 +1,6 @@
 <p align="center">
   <img src="docs/images/wopr-logo.png" alt="WOPR" width="260">
+  <img src="docs/images/wopr-terminal.png" alt="WOPR Terminal" width="260">
 </p>
 
 # WOPR
