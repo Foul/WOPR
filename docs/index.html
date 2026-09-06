@@ -123,6 +123,48 @@
         h1 { font-size: 2.1rem; }
         .hero { padding-top: 30px; }
     }
+
+    .screenshots {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 22px;
+    }
+    .shot {
+        background: white;
+        border: 1px solid #d9e0e6;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    .shot img {
+        width: 100%;
+        display: block;
+        height: auto;
+    }
+    .shot p {
+        margin: 0;
+        padding: 10px 12px;
+        color: #536776;
+        font-size: .92rem;
+    }
+    .install {
+        margin-top: 22px;
+        background: white;
+        border: 1px solid #d9e0e6;
+        border-radius: 10px;
+        padding: 22px 24px;
+    }
+    .install h2 { margin-top: 0; color: #287fc5; }
+    .install ol { margin-bottom: 18px; }
+    .install code {
+        background: #eef3f7;
+        padding: 2px 5px;
+        border-radius: 4px;
+    }
+    @media (max-width: 850px) {
+        .screenshots { grid-template-columns: 1fr; }
+    }
+
 </style>
 </head>
 <body>
@@ -177,6 +219,36 @@
             <h3>🔌 Intégrations</h3>
             <p>Abby, SMTP, Google Contacts et autres fonctions optionnelles selon la configuration.</p>
         </article>
+    </section>
+
+
+    <section class="screenshots" aria-label="Aperçus de WOPR">
+        <div class="shot">
+            <img src="images/capture-atelier.png" alt="Aperçu anonymisé du tableau de bord Atelier de WOPR">
+            <p>Tableau de bord atelier : dossiers à suivre, règlements et activité du mois.</p>
+        </div>
+        <div class="shot">
+            <img src="images/capture-dossier.png" alt="Aperçu anonymisé d’un dossier de réparation WOPR">
+            <p>Dossier de réparation : informations client, diagnostic, statut et actions.</p>
+        </div>
+        <div class="shot">
+            <img src="images/capture-achats-ventes.png" alt="Aperçu anonymisé du module Achats/Ventes de WOPR">
+            <p>Achats / Ventes : suivi des justificatifs, règlements et synthèse.</p>
+        </div>
+    </section>
+
+    <section class="install">
+        <h2>Installation / téléchargement</h2>
+        <ol>
+            <li>Téléchargez la dernière version depuis la page <strong>Releases</strong> GitHub.</li>
+            <li>Décompressez WOPR dans le dossier de votre choix.</li>
+            <li>Installez les dépendances Python indiquées dans <code>public/requirements.txt</code>.</li>
+            <li>Lancez WOPR avec le lanceur adapté à votre système.</li>
+        </ol>
+        <div class="buttons">
+            <a class="button dark" href="https://github.com/Foul/WOPR/releases/latest" target="_blank" rel="noopener">⬇ Télécharger la dernière version</a>
+            <a class="button" href="documentation.html">Voir la documentation complète</a>
+        </div>
     </section>
 
     <section class="why">
