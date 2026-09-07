@@ -3635,3 +3635,132 @@ body.wopr-open #woprEgg{
 @media (max-width:560px){
   .wopr-board-wrap{width:min(340px,86vw)}
 }
+
+/* ===== Correctif responsive navigation — écrans portables / mise à l'échelle Windows =====
+   La navigation ne dépend plus d'un affichage 4K : elle se réorganise proprement
+   sans chevauchement, y compris en thème 8-bit. */
+@media (max-width: 1900px){
+  .topbar{
+    align-items:flex-start;
+  }
+  .topnav{
+    width:100%;
+    margin-left:0;
+    margin-top:8px;
+    justify-content:flex-start;
+    gap:7px;
+  }
+  .nav-btn,
+  .navbtn.navbtn-new,
+  .lock-btn{
+    min-height:40px;
+    padding:0 10px!important;
+    gap:6px;
+    font-size:12px!important;
+  }
+  .nav-ico{
+    width:20px;
+    height:20px;
+    flex:0 0 20px;
+    font-size:12px;
+  }
+}
+
+@media (max-width: 1600px){
+  .topnav{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(128px,1fr));
+    align-items:stretch;
+    gap:7px;
+  }
+  .topnav .nav-btn,
+  .topnav .navbtn.navbtn-new,
+  .topnav .nav-lock-form,
+  .topnav .lock-btn{
+    width:100%;
+    min-width:0!important;
+    max-width:none!important;
+    margin:0!important;
+  }
+  .topnav .nav-lock-form{
+    display:block;
+  }
+}
+
+/* Le thème 8-bit avait volontairement nowrap + des largeurs minimales fixes.
+   Sur un écran portable avec mise à l'échelle Windows, cela faisait se chevaucher
+   les skins pixel-art. On autorise désormais une vraie disposition responsive. */
+@media (max-width: 1900px){
+  body.theme-8bit .topbar{
+    min-height:auto!important;
+    flex-wrap:wrap!important;
+    align-items:flex-start!important;
+    gap:10px!important;
+  }
+  body.theme-8bit .brand-zone{
+    width:100%!important;
+    flex:0 0 100%!important;
+  }
+  body.theme-8bit .topnav{
+    width:100%!important;
+    flex:0 0 100%!important;
+    margin:0!important;
+    padding:4px 0 6px!important;
+    justify-content:flex-start!important;
+    flex-wrap:wrap!important;
+    overflow:visible!important;
+    gap:8px!important;
+  }
+  body.theme-8bit .topbar .topnav .nav-btn,
+  body.theme-8bit .topbar .topnav .lock-btn{
+    flex:1 1 112px!important;
+    min-width:112px!important;
+    max-width:160px!important;
+    min-height:60px!important;
+    margin:0!important;
+  }
+  body.theme-8bit .topbar .topnav .navbtn.navbtn-new{
+    flex:1 1 145px!important;
+    min-width:145px!important;
+    max-width:185px!important;
+    min-height:60px!important;
+    margin:0!important;
+  }
+  body.theme-8bit .nav-atelier{
+    margin-right:0!important;
+  }
+  body.theme-8bit .nav-lock-form{
+    flex:1 1 120px!important;
+    min-width:120px!important;
+    max-width:165px!important;
+    margin:0!important;
+  }
+}
+
+@media (max-width: 1600px){
+  body.theme-8bit .topnav{
+    display:grid!important;
+    grid-template-columns:repeat(auto-fit,minmax(122px,1fr))!important;
+    gap:8px!important;
+  }
+  body.theme-8bit .topbar .topnav .nav-btn,
+  body.theme-8bit .topbar .topnav .lock-btn,
+  body.theme-8bit .topbar .topnav .navbtn.navbtn-new,
+  body.theme-8bit .nav-lock-form{
+    width:100%!important;
+    min-width:0!important;
+    max-width:none!important;
+    margin:0!important;
+  }
+  body.theme-8bit .nav-lock-form{
+    display:block!important;
+  }
+}
+
+@media (max-width: 900px){
+  .topnav,
+  body.theme-8bit .topnav{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  }
+}
+

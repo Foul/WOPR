@@ -1,3 +1,1 @@
-@echo off
-set "ROOT=%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%public\scripts\arreter_wopr_windows.ps1"
+@echo off\r\nset "ROOT=%~dp0"\r\nset "PWSH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe"\r\nif exist "%PWSH%" (\r\n  "%PWSH%" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%public\\scripts\\arreter_wopr_windows.ps1"\r\n) else (\r\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%public\\scripts\\arreter_wopr_windows.ps1"\r\n)\r\n

@@ -94,7 +94,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.193"
+APP_VERSION = "2.3.194"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -659,6 +659,17 @@ app.config.update(
     SESSION_REFRESH_EACH_REQUEST=True,
     MAX_CONTENT_LENGTH=8 * 1024 * 1024,
 )
+
+
+# Force explicitement UTF-8 pour toutes les pages HTML.
+# Certains navigateurs Windows peuvent sinon interpréter les accents en Windows-1252
+# lorsque l'en-tête HTTP ne précise pas le charset.
+@app.after_request
+def force_utf8_html(response):
+    content_type = response.headers.get("Content-Type", "")
+    if content_type.lower().startswith("text/html"):
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
 
 def cfg():
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))

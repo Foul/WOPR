@@ -1,8 +1,8 @@
 # WOPR - Manuel utilisateur
 
 **Workflow d’Organisation et de Pilotage des Réparations**  
-Version documentée : **2.3.193**  
-Documentation mise à jour : **6 septembre 2026**
+Version documentée : **2.3.194**  
+Documentation mise à jour : **7 septembre 2026**
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -14,7 +14,7 @@ WOPR signifie **Workflow d’Organisation et de Pilotage des Réparations**.
 
 WOPR est une application locale de gestion d’atelier destinée à centraliser le cycle complet d’une réparation : réception du matériel, suivi, client, devis, facture, encaissement, restitution, documents, contacts, achats, justificatifs et suivi administratif.
 
-Cette documentation correspond à la version **2.3.193** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
+Cette documentation correspond à la version **2.3.194** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -40,7 +40,7 @@ Le paquet fournit `WOPR.desktop` et `Arreter-WOPR.desktop`. Le lanceur appelle l
 
 ### Windows
 
-Le paquet fournit `WOPR-Windows.cmd` / `WOPR-Windows.vbs` ainsi que leurs équivalents d’arrêt. Les lanceurs utilisent PowerShell et les scripts contenus dans `public/scripts/`.
+Le paquet fournit `WOPR-Windows.cmd` / `WOPR-Windows.vbs` ainsi que leurs équivalents d’arrêt. Les lanceurs utilisent PowerShell et les scripts contenus dans `public/scripts/`. Le lancement affiche une fenêtre de progression pendant l’initialisation, bloque les doubles démarrages et ouvre le navigateur uniquement lorsque WOPR répond. Les messages et pages HTML utilisent explicitement UTF-8 sous Windows.
 
 ### Accès local
 
@@ -69,7 +69,7 @@ La barre principale regroupe les accès suivants :
 - **CA / Déclarations** : synthèse du chiffre d’affaires.
 - **Verrouiller** : retour en mode protégé.
 
-L’interface propose également un thème normal et un thème 8-bit.
+L’interface propose également un thème normal et un thème 8-bit. La navigation est responsive et se réorganise automatiquement sur les écrans portables ou avec une mise à l’échelle Windows élevée.
 
 ## 5. Tableau de bord Atelier
 

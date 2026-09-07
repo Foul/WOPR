@@ -1,6 +1,6 @@
 Option Explicit
 
-Dim fso, shell, root, ps1, q, command
+Dim fso, shell, root, ps1, q, command, psExe
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 
@@ -13,6 +13,11 @@ If Not fso.FileExists(ps1) Then
     WScript.Quit 1
 End If
 
-command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " & q & ps1 & q
-' 0 = fenêtre cachée ; False = ne pas bloquer WScript.
-shell.Run command, 0, False
+psExe = shell.ExpandEnvironmentStrings("%ProgramFiles%\PowerShell\7\pwsh.exe")
+If Not fso.FileExists(psExe) Then
+    psExe = "powershell.exe"
+End If
+
+command = q & psExe & q & " -NoProfile -ExecutionPolicy Bypass -File " & q & ps1 & q
+' 1 = fen�tre normale et visible ; elle se ferme quand le script se termine.
+shell.Run command, 1, False

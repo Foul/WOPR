@@ -1,15 +1,10 @@
-<p align="center">
-  <img src="docs/images/wopr-logo.png" alt="WOPR" width="260">
-  <img src="docs/images/wopr-terminal.png" alt="WOPR Terminal" width="260">
-</p>
-
 # WOPR
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
 WOPR est une application locale de gestion d’atelier pour suivre les réparations, clients, devis, factures, encaissements, restitutions, achats, justificatifs et tâches administratives.
 
-**Version documentée : 2.3.192**
+**Version documentée : 2.3.194**
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -28,6 +23,11 @@ WOPR est une application locale de gestion d’atelier pour suivre les réparati
 - e-mails via SMTP et messages client ;
 - sécurité locale, sauvegardes et diagnostic de portabilité ;
 - PDF multilingues.
+
+
+### Windows
+
+Le lanceur `WOPR-Windows.vbs` affiche désormais une fenêtre de progression pendant l’initialisation, évite les doubles lancements et n’ouvre le navigateur qu’une fois WOPR prêt. La navigation s’adapte également aux écrans portables, en mode normal comme en 8-bit.
 
 ## Documentation
 
