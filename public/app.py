@@ -94,7 +94,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.194"
+APP_VERSION = "2.3.195"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -508,6 +508,186 @@ PDF_FREE_TEXT_EXTRA = {
 for _lang, _entries in PDF_FREE_TEXT_EXTRA.items():
     PDF_FREE_TEXT.setdefault(_lang, {}).update(_entries)
 
+
+# V2.3.195 - Complément de traduction des textes techniques réellement saisis
+# dans les factures et feuilles de suivi. Les libellés structurés étaient déjà
+# complets dans les 5 langues ; ce bloc couvre les phrases libres fréquentes.
+PDF_FREE_TEXT_REPAIR_EXTRA = {
+    "en": {
+        "Diagnostic et tentative de Réparation": "Diagnosis and attempted repair",
+        "Détail sur feuille de suivi": "Details on the service report",
+        "Composant HS": "Faulty component",
+        "Condensateur coté affichage HS et remplacé": "Faulty display-side capacitor replaced",
+        "Condensateur côté affichage HS et remplacé": "Faulty display-side capacitor replaced",
+        "Carte mère nettoyé au niveau du composant brulé.": "Motherboard cleaned around the burnt component.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Motherboard cleaned around the burnt component.",
+        "Composant brulé remplacé et ressoudé.": "Burnt component replaced and resoldered.",
+        "Composant brûlé remplacé et ressoudé.": "Burnt component replaced and resoldered.",
+        "Toujours pas de démarrage": "Still does not start",
+        "ne consomme rien": "draws no current",
+        "Court circuit": "Short circuit",
+        "Court-circuit": "Short circuit",
+        "PCB abimée": "Damaged PCB",
+        "PCB abîmée": "Damaged PCB",
+        "Non réparable sans changer la Carte mère.": "Not repairable without replacing the motherboard.",
+        "Non réparable sans changer la carte mère.": "Not repairable without replacing the motherboard.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Returned with the components replaced, but the PC still does not power on.",
+        "composant brulé": "burnt component",
+        "composant brûlé": "burnt component",
+        "remplacé": "replaced",
+        "ressoudé": "resoldered",
+        "démarrage": "startup",
+        "allumage": "power-on",
+        "nettoyé": "cleaned",
+        "nettoyée": "cleaned",
+        "abimée": "damaged",
+        "abîmée": "damaged",
+        "sans changer": "without replacing",
+        "tentative de": "attempted",
+        "Détail sur": "Details on",
+        "feuille de suivi": "service report",
+    },
+    "uk": {
+        "Diagnostic et tentative de Réparation": "Діагностика та спроба ремонту",
+        "Détail sur feuille de suivi": "Деталі у звіті про ремонт",
+        "Composant HS": "Несправний компонент",
+        "Condensateur coté affichage HS et remplacé": "Несправний конденсатор з боку дисплея замінено",
+        "Condensateur côté affichage HS et remplacé": "Несправний конденсатор з боку дисплея замінено",
+        "Carte mère nettoyé au niveau du composant brulé.": "Материнську плату очищено в зоні згорілого компонента.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Материнську плату очищено в зоні згорілого компонента.",
+        "Composant brulé remplacé et ressoudé.": "Згорілий компонент замінено та перепаяно.",
+        "Composant brûlé remplacé et ressoudé.": "Згорілий компонент замінено та перепаяно.",
+        "Toujours pas de démarrage": "Пристрій усе ще не запускається",
+        "ne consomme rien": "не споживає струм",
+        "Court circuit": "Коротке замикання",
+        "Court-circuit": "Коротке замикання",
+        "PCB abimée": "Пошкоджена друкована плата",
+        "PCB abîmée": "Пошкоджена друкована плата",
+        "Non réparable sans changer la Carte mère.": "Ремонт неможливий без заміни материнської плати.",
+        "Non réparable sans changer la carte mère.": "Ремонт неможливий без заміни материнської плати.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Повернено із заміненими компонентами, але ПК усе ще не вмикається.",
+        "composant brulé": "згорілий компонент",
+        "composant brûlé": "згорілий компонент",
+        "remplacé": "замінено",
+        "ressoudé": "перепаяно",
+        "démarrage": "запуск",
+        "allumage": "увімкнення",
+        "nettoyé": "очищено",
+        "nettoyée": "очищено",
+        "abimée": "пошкоджена",
+        "abîmée": "пошкоджена",
+        "sans changer": "без заміни",
+        "tentative de": "спроба",
+        "Détail sur": "Деталі у",
+        "feuille de suivi": "звіті про ремонт",
+    },
+    "es": {
+        "Diagnostic et tentative de Réparation": "Diagnóstico e intento de reparación",
+        "Détail sur feuille de suivi": "Detalles en la hoja de seguimiento",
+        "Composant HS": "Componente defectuoso",
+        "Condensateur coté affichage HS et remplacé": "Condensador del lado de la pantalla defectuoso y sustituido",
+        "Condensateur côté affichage HS et remplacé": "Condensador del lado de la pantalla defectuoso y sustituido",
+        "Carte mère nettoyé au niveau du composant brulé.": "Placa base limpiada alrededor del componente quemado.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Placa base limpiada alrededor del componente quemado.",
+        "Composant brulé remplacé et ressoudé.": "Componente quemado sustituido y resoldado.",
+        "Composant brûlé remplacé et ressoudé.": "Componente quemado sustituido y resoldado.",
+        "Toujours pas de démarrage": "Sigue sin arrancar",
+        "ne consomme rien": "no consume corriente",
+        "Court circuit": "Cortocircuito",
+        "Court-circuit": "Cortocircuito",
+        "PCB abimée": "PCB dañada",
+        "PCB abîmée": "PCB dañada",
+        "Non réparable sans changer la Carte mère.": "No se puede reparar sin sustituir la placa base.",
+        "Non réparable sans changer la carte mère.": "No se puede reparar sin sustituir la placa base.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Devuelto con los componentes sustituidos, pero el PC sigue sin encender.",
+        "composant brulé": "componente quemado",
+        "composant brûlé": "componente quemado",
+        "remplacé": "sustituido",
+        "ressoudé": "resoldado",
+        "démarrage": "arranque",
+        "allumage": "encendido",
+        "nettoyé": "limpiado",
+        "nettoyée": "limpiada",
+        "abimée": "dañada",
+        "abîmée": "dañada",
+        "sans changer": "sin sustituir",
+        "tentative de": "intento de",
+        "Détail sur": "Detalles en",
+        "feuille de suivi": "hoja de seguimiento",
+    },
+    "de": {
+        "Diagnostic et tentative de Réparation": "Diagnose und Reparaturversuch",
+        "Détail sur feuille de suivi": "Details im Servicebericht",
+        "Composant HS": "Defektes Bauteil",
+        "Condensateur coté affichage HS et remplacé": "Defekter Kondensator auf der Displayseite ersetzt",
+        "Condensateur côté affichage HS et remplacé": "Defekter Kondensator auf der Displayseite ersetzt",
+        "Carte mère nettoyé au niveau du composant brulé.": "Mainboard im Bereich des verbrannten Bauteils gereinigt.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Mainboard im Bereich des verbrannten Bauteils gereinigt.",
+        "Composant brulé remplacé et ressoudé.": "Verbranntes Bauteil ersetzt und neu verlötet.",
+        "Composant brûlé remplacé et ressoudé.": "Verbranntes Bauteil ersetzt und neu verlötet.",
+        "Toujours pas de démarrage": "Startet weiterhin nicht",
+        "ne consomme rien": "nimmt keinen Strom auf",
+        "Court circuit": "Kurzschluss",
+        "Court-circuit": "Kurzschluss",
+        "PCB abimée": "Beschädigte Leiterplatte",
+        "PCB abîmée": "Beschädigte Leiterplatte",
+        "Non réparable sans changer la Carte mère.": "Ohne Austausch des Mainboards nicht reparierbar.",
+        "Non réparable sans changer la carte mère.": "Ohne Austausch des Mainboards nicht reparierbar.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Mit ersetzten Bauteilen zurückgegeben, der PC lässt sich jedoch weiterhin nicht einschalten.",
+        "composant brulé": "verbranntes Bauteil",
+        "composant brûlé": "verbranntes Bauteil",
+        "remplacé": "ersetzt",
+        "ressoudé": "neu verlötet",
+        "démarrage": "Start",
+        "allumage": "Einschalten",
+        "nettoyé": "gereinigt",
+        "nettoyée": "gereinigt",
+        "abimée": "beschädigt",
+        "abîmée": "beschädigt",
+        "sans changer": "ohne Austausch",
+        "tentative de": "Versuch einer",
+        "Détail sur": "Details im",
+        "feuille de suivi": "Servicebericht",
+    },
+    "it": {
+        "Diagnostic et tentative de Réparation": "Diagnosi e tentativo di riparazione",
+        "Détail sur feuille de suivi": "Dettagli nel rapporto di assistenza",
+        "Composant HS": "Componente guasto",
+        "Condensateur coté affichage HS et remplacé": "Condensatore lato display guasto e sostituito",
+        "Condensateur côté affichage HS et remplacé": "Condensatore lato display guasto e sostituito",
+        "Carte mère nettoyé au niveau du composant brulé.": "Scheda madre pulita nella zona del componente bruciato.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Scheda madre pulita nella zona del componente bruciato.",
+        "Composant brulé remplacé et ressoudé.": "Componente bruciato sostituito e risaldato.",
+        "Composant brûlé remplacé et ressoudé.": "Componente bruciato sostituito e risaldato.",
+        "Toujours pas de démarrage": "Continua a non avviarsi",
+        "ne consomme rien": "non assorbe corrente",
+        "Court circuit": "Cortocircuito",
+        "Court-circuit": "Cortocircuito",
+        "PCB abimée": "PCB danneggiata",
+        "PCB abîmée": "PCB danneggiata",
+        "Non réparable sans changer la Carte mère.": "Non riparabile senza sostituire la scheda madre.",
+        "Non réparable sans changer la carte mère.": "Non riparabile senza sostituire la scheda madre.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Restituito con i componenti sostituiti, ma il PC continua a non accendersi.",
+        "composant brulé": "componente bruciato",
+        "composant brûlé": "componente bruciato",
+        "remplacé": "sostituito",
+        "ressoudé": "risaldato",
+        "démarrage": "avvio",
+        "allumage": "accensione",
+        "nettoyé": "pulito",
+        "nettoyée": "pulita",
+        "abimée": "danneggiata",
+        "abîmée": "danneggiata",
+        "sans changer": "senza sostituire",
+        "tentative de": "tentativo di",
+        "Détail sur": "Dettagli nel",
+        "feuille de suivi": "rapporto di assistenza",
+    },
+}
+
+for _lang, _entries in PDF_FREE_TEXT_REPAIR_EXTRA.items():
+    PDF_FREE_TEXT.setdefault(_lang, {}).update(_entries)
+
 def pdf_lang(value=None):
     lang = str(value if value is not None else request.args.get("lang", "fr")).strip().lower()
     return lang if lang in PDF_LANGUAGES else "fr"
@@ -692,6 +872,15 @@ def business_signature():
     if ident["website"]:
         lines.append(ident["website"])
     return "\n".join(lines)
+
+
+def message_signature():
+    """Signature courte réservée aux messages clients."""
+    ident = business_identity()
+    first_name = ident["owner"].split()[0] if ident["owner"] else ""
+    if first_name and ident["name"]:
+        return f"{first_name} / {ident['name']}"
+    return first_name or ident["name"]
 
 
 SECRET_PREFIX = "enc:v1:"
@@ -8273,7 +8462,7 @@ def client_message_from_client(client_id):
 
     salutation = f"Bonjour {display_name}," if display_name else "Bonjour,"
     ident = business_identity()
-    footer = ident["signature"]
+    footer = message_signature()
 
     templates = {
         "libre": f"{salutation}\n\n\n\n{footer}",
@@ -8337,7 +8526,7 @@ def client_message(rid):
     device = " ".join(x for x in device_bits if x).strip() or "votre matériel"
 
     ident = business_identity()
-    footer = ident["signature"]
+    footer = message_signature()
     status = str(r.get("status") or "").strip()
 
     templates = {
