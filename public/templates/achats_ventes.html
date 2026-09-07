@@ -302,6 +302,58 @@
       setEdit(btn.dataset.ledgerCancel, false);
     });
   });
+
+  function normalizeAmountField(input) {
+    if (!input) return true;
+    const raw = String(input.value || '').trim();
+    const cleaned = raw
+      .replace(/\u00a0/g, '')
+      .replace(/\s+/g, '')
+      .replace(/€/g, '')
+      .replace(',', '.');
+
+    if (!cleaned || !/^[+-]?(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(cleaned)) {
+      input.setCustomValidity('Montant invalide. Exemple : 11,33 ou 11,33 €');
+      input.reportValidity();
+      input.focus();
+      return false;
+    }
+
+    const amount = Number(cleaned);
+    if (!Number.isFinite(amount)) {
+      input.setCustomValidity('Montant invalide. Exemple : 11,33 ou 11,33 €');
+      input.reportValidity();
+      input.focus();
+      return false;
+    }
+
+    input.setCustomValidity('');
+    // On retire espaces et symbole € mais on conserve la virgule française :
+    // le serveur sait déjà convertir la virgule en point.
+    input.value = raw.replace(/\u00a0/g, '').replace(/\s+/g, '').replace(/€/g, '');
+    return true;
+  }
+
+  document.querySelectorAll('input[name="amount_ttc"]').forEach(input => {
+    input.addEventListener('input', () => input.setCustomValidity(''));
+  });
+
+  document.addEventListener('submit', event => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+
+    let amountInput = null;
+
+    if (form.classList.contains('ledger-add-form')) {
+      amountInput = form.querySelector('input[name="amount_ttc"]');
+    } else if (form.id && form.id.startsWith('ledger-edit-')) {
+      amountInput = document.querySelector(`input[name="amount_ttc"][form="${form.id}"]`);
+    }
+
+    if (amountInput && !normalizeAmountField(amountInput)) {
+      event.preventDefault();
+    }
+  }, true);
 })();
 </script>
 
