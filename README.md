@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="docs/images/wopr-logo.png" alt="WOPR" width="260">
+  <img src="docs/images/wopr-terminal.png" alt="WOPR Terminal" width="260">
+</p>
+
 # WOPR
 
 **Workflow d’Organisation et de Pilotage des Réparations**
@@ -23,7 +28,6 @@ WOPR est une application locale de gestion d’atelier pour suivre les réparati
 - e-mails via SMTP et messages client ;
 - sécurité locale, sauvegardes et diagnostic de portabilité ;
 - PDF multilingues.
-
 
 ### Windows
 
