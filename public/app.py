@@ -11717,7 +11717,7 @@ def global_search():
             "COALESCE(r.device_type,'')",
             "COALESCE(r.brand_model,'')",
             "COALESCE(r.serial_no,'')",
-            "COALESCE(r.system,'')",
+            "COALESCE(r.system_name,'')",
             "COALESCE(r.problem,'')",
             "COALESCE(r.diagnosis,'')",
             "COALESCE(r.status,'')",

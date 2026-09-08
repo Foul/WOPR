@@ -1,5 +1,14 @@
 # Changelog de la documentation
 
+## 2.3.203 - ajustement visuel recherche 8-bit
+- Refonte du champ de recherche de la barre supérieure en thème **8-bit** pour l'intégrer visuellement aux boutons pixel-art.
+- Le correctif SQL `system_name` est inclus dans ce paquet.
+- La version reste volontairement **2.3.203** jusqu'à validation de la release.
+
+## 2.3.203 - correctif recherche globale
+- Correction d'une erreur SQL dans la recherche globale : le champ système des réparations utilise `system_name`.
+- Ce correctif conserve la version 2.3.203 afin de remplacer la release défectueuse plutôt que créer une nouvelle version.
+
 ## 2.3.203 - 8 septembre 2026 - recherche globale accélérée
 - La recherche globale est désormais accessible directement depuis la barre supérieure : saisie + Entrée, sans ouvrir d'abord la page Recherche.
 - Les recherches **multi-mots** fonctionnent même lorsque les mots sont répartis entre plusieurs champs (`Benoit Gaucher`, marque + modèle, etc.).
