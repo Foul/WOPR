@@ -1,5 +1,9 @@
 # Changelog de la documentation
 
+## 2.3.198 - 8 septembre 2026 - bouton Nouvelle réparation en thème 8-bit
+- Le bouton **Nouvelle réparation** placé dans Atelier utilise désormais exactement le skin pixel-art du thème 8-bit.
+- Les thèmes Normal, Dark et WOPR restent inchangés.
+
 ## 2.3.197 - 8 septembre 2026 - sauvegardes dans Sécurité
 - Regroupement de **Sauvegardes** et **Sauvegarde automatique** dans une seule box.
 - Le statut de la sauvegarde quotidienne, le bouton de sauvegarde manuelle et la liste des sauvegardes sont désormais réunis au même endroit.

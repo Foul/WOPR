@@ -4036,3 +4036,72 @@ body.theme-terminal .page .atelier-panel-overdue{
   border-color:#1ba946!important;
 }
 body.theme-terminal .page .atelier-panel-overdue .atelier-panel-title h2{color:#b7ffbe!important}
+
+
+/* ===== V2.3.198 — bouton Nouvelle réparation 8-bit dans Atelier ===== */
+/* Le bouton a quitté la topbar en 2.3.196 : on lui applique explicitement
+   le même skin pixel-art que l'ancien bouton de menu. */
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new{
+  position:relative!important;
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  min-height:64px!important;
+  min-width:148px!important;
+  padding:0 8px!important;
+  gap:7px!important;
+  border:0!important;
+  border-image:none!important;
+  border-radius:0!important;
+  outline:0!important;
+  box-shadow:none!important;
+  clip-path:none!important;
+  background-color:transparent!important;
+  background-image:url("pixel_btn_new_v2.png")!important;
+  background-size:100% 100%!important;
+  background-repeat:no-repeat!important;
+  background-position:center!important;
+  overflow:hidden!important;
+  color:#fff!important;
+  text-decoration:none!important;
+  text-shadow:2px 2px 0 #000!important;
+  font-size:11px!important;
+  font-weight:900!important;
+  line-height:1.05!important;
+  letter-spacing:0!important;
+  text-transform:uppercase!important;
+  white-space:normal!important;
+}
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new::before,
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new::after{
+  display:none!important;
+  content:none!important;
+  background:none!important;
+}
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new > *{
+  position:relative!important;
+  z-index:2!important;
+}
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new .nav-ico{
+  width:auto!important;
+  height:auto!important;
+  min-width:26px!important;
+  flex:0 0 auto!important;
+  margin-right:1px!important;
+  border:0!important;
+  outline:0!important;
+  background:none!important;
+  background-image:none!important;
+  box-shadow:none!important;
+  font-size:22px!important;
+  line-height:1!important;
+  filter:drop-shadow(2px 2px 0 #000)!important;
+}
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new:hover{
+  filter:brightness(1.08)!important;
+  transform:translate(1px,1px)!important;
+}
+body.theme-8bit .page .atelier-head .navbtn.navbtn-new:active{
+  filter:brightness(.92)!important;
+  transform:translate(3px,3px)!important;
+}
