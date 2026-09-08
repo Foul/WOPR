@@ -13,9 +13,13 @@
 <script>
 (function(){
   try {
-    if (localStorage.getItem('wopr-theme') === '8bit') {
-      document.body.classList.add('theme-8bit');
-    }
+    const theme = localStorage.getItem('wopr-theme') || 'normal';
+    const classes = {
+      dark: 'theme-dark',
+      terminal: 'theme-terminal',
+      '8bit': 'theme-8bit'
+    };
+    if (classes[theme]) document.body.classList.add(classes[theme]);
   } catch (e) {}
 })();
 </script>
@@ -27,9 +31,16 @@
       <img src="{{ url_for('static', filename='logo_topbar_8bit.png') }}" alt="WOPR" class="brand-logo brand-logo-8bit" aria-hidden="true">
     </a>
     <span class="api-version-badge" id="woprApiTrigger" title="Version de WOPR API">API v{{ app_version }}</span>
-    <button type="button" class="theme-toggle" id="themeToggle" title="Basculer entre le thème normal et le thème 8-bits" aria-label="Changer de thème">
-      <span class="theme-toggle-icon">🕹️</span><span class="theme-toggle-label">8-BIT</span>
-    </button>
+    <label class="theme-picker" title="Choisir le thème WOPR">
+      <span class="theme-picker-icon" aria-hidden="true">🎨</span>
+      <span class="sr-only">Thème</span>
+      <select id="themeSelect" aria-label="Choisir le thème">
+        <option value="normal">NORMAL</option>
+        <option value="dark">DARK</option>
+        <option value="terminal">WOPR</option>
+        <option value="8bit">8-BIT</option>
+      </select>
+    </label>
   </div>
   {% if client_mode %}
   <nav class="topnav client-mode-nav">
@@ -96,20 +107,33 @@
 
 <script>
 (function(){
-  const btn = document.getElementById('themeToggle');
-  if (!btn) return;
-  function refreshLabel(){
-    const active = document.body.classList.contains('theme-8bit');
-    const label = btn.querySelector('.theme-toggle-label');
-    if (label) label.textContent = active ? 'NORMAL' : '8-BIT';
-    btn.classList.toggle('active', active);
-    btn.title = active ? 'Revenir au thème normal' : 'Passer au thème 8-bits';
+  const select = document.getElementById('themeSelect');
+  if (!select) return;
+
+  const themeClasses = ['theme-dark', 'theme-terminal', 'theme-8bit'];
+  const classForTheme = {
+    dark: 'theme-dark',
+    terminal: 'theme-terminal',
+    '8bit': 'theme-8bit'
+  };
+
+  function currentTheme(){
+    try { return localStorage.getItem('wopr-theme') || 'normal'; }
+    catch (e) { return 'normal'; }
   }
-  refreshLabel();
-  btn.addEventListener('click', function(){
-    const active = document.body.classList.toggle('theme-8bit');
-    try { localStorage.setItem('wopr-theme', active ? '8bit' : 'normal'); } catch (e) {}
-    refreshLabel();
+
+  function applyTheme(theme){
+    themeClasses.forEach(cls => document.body.classList.remove(cls));
+    if (classForTheme[theme]) document.body.classList.add(classForTheme[theme]);
+    select.value = theme;
+    try { localStorage.setItem('wopr-theme', theme); } catch (e) {}
+  }
+
+  const saved = currentTheme();
+  applyTheme(['normal','dark','terminal','8bit'].includes(saved) ? saved : 'normal');
+
+  select.addEventListener('change', function(){
+    applyTheme(select.value);
   });
 })();
 </script>

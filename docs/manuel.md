@@ -69,7 +69,7 @@ La barre principale regroupe les accès suivants :
 - **CA / Déclarations** : synthèse du chiffre d’affaires.
 - **Verrouiller** : retour en mode protégé.
 
-L’interface propose également un thème normal et un thème 8-bit. La navigation est responsive et se réorganise automatiquement sur les écrans portables ou avec une mise à l’échelle Windows élevée.
+L’interface propose quatre thèmes mémorisés localement dans le navigateur : **Normal**, **Dark**, **WOPR / Terminal** et **8-bit**. Le thème Dark privilégie un affichage sombre moderne ; le thème WOPR / Terminal utilise une présentation noire et vert phosphore tout en conservant les couleurs métier importantes. La navigation reste responsive et se réorganise automatiquement sur les écrans portables ou avec une mise à l’échelle Windows élevée.
 
 ## 5. Tableau de bord Atelier
 

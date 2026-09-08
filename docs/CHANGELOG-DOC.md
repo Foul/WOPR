@@ -1,5 +1,12 @@
 # Changelog de la documentation
 
+## 2.3.195 - 8 septembre 2026 - thèmes d'affichage
+- Ajout du thème **Dark**, sombre et moderne.
+- Ajout du thème **WOPR / Terminal**, noir et vert phosphore.
+- Le sélecteur permet de choisir entre Normal, Dark, WOPR / Terminal et 8-bit.
+- Le choix du thème est mémorisé localement dans le navigateur.
+- Les couleurs métier du Suivi restent visibles dans les nouveaux thèmes.
+
 ## 6 septembre 2026 - documentation 2.3.192
 
 - reconstruction complète à partir du ZIP public WOPR 2.3.192 ;
