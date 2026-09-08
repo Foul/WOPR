@@ -4208,7 +4208,7 @@ body.theme-8bit .topbar-search{
   max-width:330px!important;
   height:64px!important;
   min-height:64px!important;
-  padding:11px 12px 10px!important;
+  padding:8px 12px!important;
   border:0!important;
   border-radius:0!important;
   background:#0d1b25!important;
@@ -4217,24 +4217,14 @@ body.theme-8bit .topbar-search{
     inset 0 0 0 6px #2b4d63,
     3px 3px 0 #05090c!important;
 }
-body.theme-8bit .topbar-search::before{
-  content:"SEARCH"!important;
-  position:absolute!important;
-  left:12px!important;
-  top:4px!important;
-  color:#64cfff!important;
-  font:900 7px/1 "Courier New",monospace!important;
-  letter-spacing:1px!important;
-  text-shadow:1px 1px 0 #000!important;
-}
 body.theme-8bit .topbar-search-icon{
-  margin-top:5px!important;
+  margin-top:0!important;
   color:#ffd45a!important;
   filter:drop-shadow(1px 1px 0 #000)!important;
 }
 body.theme-8bit .topbar-search input{
-  height:31px!important;
-  margin-top:5px!important;
+  height:34px!important;
+  margin-top:0!important;
   padding:4px 7px!important;
   border:2px solid #061018!important;
   outline:2px solid #5c8199!important;
@@ -4242,7 +4232,7 @@ body.theme-8bit .topbar-search input{
   background:#d9e7ec!important;
   color:#08131a!important;
   box-shadow:inset 2px 2px 0 #8ca5b3,inset -2px -2px 0 #fff!important;
-  font:900 10px/1.1 "Courier New",monospace!important;
+  font:900 11px/1.1 "Courier New",monospace!important;
   text-transform:none!important;
 }
 body.theme-8bit .topbar-search input::placeholder{
@@ -4250,10 +4240,10 @@ body.theme-8bit .topbar-search input::placeholder{
   opacity:1!important;
 }
 body.theme-8bit .topbar-search button{
-  flex:0 0 34px!important;
-  width:34px!important;
-  height:31px!important;
-  margin-top:5px!important;
+  flex:0 0 36px!important;
+  width:36px!important;
+  height:34px!important;
+  margin-top:0!important;
   padding:0!important;
   border:2px solid #061018!important;
   outline:2px solid #5c8199!important;
@@ -4280,4 +4270,84 @@ body.theme-8bit .topbar-search button:active{
 @media(max-width:900px){
   .topbar-search{order:20;width:100%;max-width:none;min-width:0}
   body.theme-8bit .topbar-search{height:58px!important;min-height:58px!important;max-width:none!important}
+}
+
+
+/* ===== V2.3.203 — thème WOPR : topbar réellement sur une seule ligne ===== */
+/* Le problème vient de la largeur cumulée du menu en police monospace :
+   la topbar flex passait naturellement à la ligne. */
+@media (min-width: 1450px){
+  body.theme-terminal .topbar{
+    flex-wrap:nowrap!important;
+    gap:8px!important;
+    padding:8px 14px!important;
+  }
+
+  body.theme-terminal .brand-zone{
+    flex:0 0 auto!important;
+    gap:6px!important;
+  }
+
+  body.theme-terminal .brand-logo{
+    height:48px!important;
+    max-width:190px!important;
+  }
+
+  body.theme-terminal .api-version-badge{
+    min-height:32px!important;
+    padding:0 8px!important;
+    font-size:11px!important;
+  }
+
+  body.theme-terminal .theme-picker{
+    min-height:34px!important;
+    gap:5px!important;
+    padding:3px 5px!important;
+  }
+
+  body.theme-terminal .theme-picker select{
+    min-width:78px!important;
+    padding:5px 22px 5px 6px!important;
+    font-size:10px!important;
+  }
+
+  body.theme-terminal .topnav{
+    flex:1 1 auto!important;
+    min-width:0!important;
+    margin-left:auto!important;
+    margin-right:0!important;
+    display:flex!important;
+    flex-wrap:nowrap!important;
+    justify-content:flex-end!important;
+    gap:5px!important;
+  }
+
+  body.theme-terminal .topbar .nav-btn,
+  body.theme-terminal .topbar .navbtn,
+  body.theme-terminal .topbar .lock-btn{
+    flex:0 0 auto!important;
+    min-height:36px!important;
+    padding:0 8px!important;
+    gap:5px!important;
+    font-size:11px!important;
+    white-space:nowrap!important;
+  }
+
+  body.theme-terminal .topbar-search{
+    flex:0 1 205px!important;
+    min-width:170px!important;
+    max-width:205px!important;
+    height:36px!important;
+    padding:2px 4px 2px 7px!important;
+  }
+
+  body.theme-terminal .topbar-search input{
+    font-size:10px!important;
+  }
+
+  body.theme-terminal .topbar-search button{
+    flex-basis:27px!important;
+    width:27px!important;
+    height:27px!important;
+  }
 }

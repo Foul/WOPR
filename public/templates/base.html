@@ -60,14 +60,14 @@
       <input type="search" name="q" value="{{ request.args.get('q','') if request.endpoint == 'global_search' else '' }}" placeholder="Client, tél., dossier, facture…" aria-label="Recherche globale WOPR" autocomplete="off">
       <button type="submit" aria-label="Rechercher">↵</button>
     </form>
-    <a class="nav-btn nav-simple-invoice {% if request.endpoint == 'simple_invoice_new' %}active{% endif %}" href="{{ url_for('simple_invoice_new') }}">
-      <span class="nav-ico">🧾</span><span>Facture simple</span>
-    </a>
     <a class="nav-btn nav-suivi {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
       <span class="nav-ico">📋</span><span>Suivi</span>
     </a>
     <a class="nav-btn nav-factures {% if request.endpoint in ['invoices_page','invoice_pdf','repair_close'] %}active{% endif %}" href="{{ url_for('invoices_page') }}">
       <span class="nav-ico">🧾</span><span>Factures</span>
+    </a>
+    <a class="nav-btn nav-simple-invoice {% if request.endpoint == 'simple_invoice_new' %}active{% endif %}" href="{{ url_for('simple_invoice_new') }}">
+      <span class="nav-ico">🧾</span><span>Facture simple</span>
     </a>
     <a class="nav-btn nav-devis {% if request.endpoint in ['quotes_page','quote_new','quote_edit','quote_delete','quote_pdf'] %}active{% endif %}" href="{{ url_for('quotes_page') }}">
       <span class="nav-ico">📝</span><span>Devis</span>
