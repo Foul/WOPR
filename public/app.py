@@ -17,6 +17,7 @@ import ssl
 import re
 import unicodedata
 import time
+import threading
 import os
 import sys
 import urllib.request
@@ -4288,6 +4289,30 @@ def sync_client_to_google(client_id):
         return False, msg
 
 
+def sync_client_to_google_async(client_id):
+    """Lance la synchronisation Google sans bloquer la requête web."""
+    try:
+        client_id = int(client_id)
+    except (TypeError, ValueError):
+        return False
+
+    def _worker():
+        try:
+            sync_client_to_google(client_id)
+        except Exception as exc:
+            try:
+                set_google_sync_state(client_id, "Erreur", error=str(exc))
+            except Exception:
+                pass
+
+    threading.Thread(
+        target=_worker,
+        name=f"wopr-google-sync-{client_id}",
+        daemon=True,
+    ).start()
+    return True
+
+
 
 def _split_escaped(value, sep=";"):
     out, cur = [], []
@@ -8315,7 +8340,7 @@ def repair_new():
         con.close()
         session["client_mode"] = True
         session["client_mode_rid"] = int(rid)
-        sync_client_to_google(client_id)
+        sync_client_to_google_async(client_id)
         return redirect(url_for("repair_detail", rid=rid))
     return render_template("repair_form.html", today=now().strftime("%Y-%m-%d"))
 
@@ -8946,7 +8971,7 @@ def repair_edit(rid):
         record_repair_status_change(con, rid, r["status"], new_status)
         con.commit()
         con.close()
-        sync_client_to_google(r["client_id"])
+        sync_client_to_google_async(r["client_id"])
         flash("Suivi modifié.")
         return redirect(url_for("repair_detail", rid=rid))
 
@@ -10188,10 +10213,7 @@ def simple_invoice_new():
         con.close()
 
         if sync_new_client_id:
-            try:
-                sync_client_to_google(sync_new_client_id)
-            except Exception:
-                pass
+            sync_client_to_google_async(sync_new_client_id)
 
         audit_event(
             "SIMPLE_INVOICE_CREATE",
@@ -11859,14 +11881,11 @@ def client_edit(client_id):
         con.commit()
         con.close()
 
-        # La fiche client reste la source principale : une modification est
-        # automatiquement poussée vers Google si la connexion est active.
+        # La fiche client reste la source principale. La synchronisation Google
+        # part en arrière-plan pour ne pas ralentir l'enregistrement ni l'interface.
         if google_credentials() is not None:
-            ok, msg = sync_client_to_google(client_id)
-            if ok:
-                flash("Client modifié et Google Contacts synchronisé.")
-            else:
-                flash(f"Client modifié. Erreur de synchro Google : {msg}")
+            sync_client_to_google_async(client_id)
+            flash("Client modifié. Synchronisation Google lancée en arrière-plan.")
         else:
             flash("Client modifié.")
 
