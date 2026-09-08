@@ -44,9 +44,13 @@
     {% endif %}
   </section>
   <section class="security-card">
-    <h2>Sauvegardes</h2>
-    <p>Une seule sauvegarde SQLite automatique est créée par jour. Les 30 derniers jours sont conservés.</p>
-    <form method="post">
+    <h2>💾 Sauvegardes</h2>
+    <p>
+      Une sauvegarde de la base est créée automatiquement à la première utilisation de WOPR chaque jour, même si l'application est restée ouverte.
+      Les <strong>30 derniers jours</strong> sont conservés dans <code>data/backups/</code>.
+    </p>
+    <div class="backup-auto-status">✓ Sauvegarde quotidienne active</div>
+    <form method="post" style="margin-top:12px;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="backup">
       <button class="primary" type="submit">Créer une sauvegarde maintenant</button>
@@ -96,15 +100,6 @@
       <button class="primary" type="submit">Enregistrer SMTP Proton</button>
     </form>
   </section>
-  <section class="security-card">
-    <h2>💾 Sauvegarde automatique</h2>
-    <p>
-      Une seule sauvegarde de la base est créée automatiquement à la première utilisation de WOPR chaque jour, même si l'application est restée ouverte.
-      Les <strong>30 derniers jours</strong> sont conservés dans <code>data/backups/</code>.
-    </p>
-    <div class="backup-auto-status">✓ Sauvegarde quotidienne active</div>
-  </section>
-
   <section class="security-card">
     <h2>🧳 Diagnostic de portabilité</h2>
     <div class="smtp-status {% if portability.ready %}ok{% else %}warn{% endif %}">

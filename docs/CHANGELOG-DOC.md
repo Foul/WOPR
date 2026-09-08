@@ -1,5 +1,9 @@
 # Changelog de la documentation
 
+## 2.3.197 - 8 septembre 2026 - sauvegardes dans Sécurité
+- Regroupement de **Sauvegardes** et **Sauvegarde automatique** dans une seule box.
+- Le statut de la sauvegarde quotidienne, le bouton de sauvegarde manuelle et la liste des sauvegardes sont désormais réunis au même endroit.
+
 ## 2.3.196 - 8 septembre 2026 - accès Nouvelle réparation
 - Suppression du doublon **Nouvelle réparation** dans la barre de navigation.
 - Le bouton est conservé sur le tableau de bord **Atelier** avec le style du bouton de menu.
