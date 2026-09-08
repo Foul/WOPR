@@ -1,20 +1,15 @@
 # Changelog de la documentation
 
-## 2.3.203 - ajustement visuel recherche 8-bit
-- Refonte du champ de recherche de la barre supérieure en thème **8-bit** pour l'intégrer visuellement aux boutons pixel-art.
-- Le correctif SQL `system_name` est inclus dans ce paquet.
-- La version reste volontairement **2.3.203** jusqu'à validation de la release.
-
-## 2.3.203 - correctif recherche globale
-- Correction d'une erreur SQL dans la recherche globale : le champ système des réparations utilise `system_name`.
-- Ce correctif conserve la version 2.3.203 afin de remplacer la release défectueuse plutôt que créer une nouvelle version.
-
-## 2.3.203 - 8 septembre 2026 - recherche globale accélérée
-- La recherche globale est désormais accessible directement depuis la barre supérieure : saisie + Entrée, sans ouvrir d'abord la page Recherche.
-- Les recherches **multi-mots** fonctionnent même lorsque les mots sont répartis entre plusieurs champs (`Benoit Gaucher`, marque + modèle, etc.).
-- Les accents, la casse et la ponctuation sont ignorés : `Benoit` retrouve `Benoît`.
-- La recherche couvre davantage de données : diagnostic, système, statut, accessoires et descriptions des lignes de devis.
-- Les recherches existantes dans clients, dossiers, achats/ventes, factures et devis restent regroupées sur la même page.
+## 2.3.203 - 9 septembre 2026 - release
+- Recherche globale directement accessible depuis la barre supérieure.
+- Recherche multi-mots, insensible aux accents, à la casse et à la ponctuation.
+- Historique client enrichi avec accès rapide aux derniers dossiers, factures et devis.
+- Rattachement sécurisé des devis historiques lorsqu'une correspondance client est non ambiguë.
+- Tableau de bord Atelier enrichi avec les dossiers actifs de plus de 14 jours.
+- Ajout des thèmes Dark et WOPR Terminal et améliorations du thème 8-bit.
+- Optimisation de la synchronisation Google Contacts et gestion du quota.
+- Ajustements d'ergonomie, de sécurité et de fiabilité.
+- Documentation HTML et PDF alignée sur la version 2.3.203.
 
 ## 2.3.202 - 8 septembre 2026 - devis historiques rattachés aux clients
 - L'historique client retrouve désormais les anciens devis créés sans `client_id`.

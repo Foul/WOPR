@@ -1,5 +1,7 @@
 # WOPR - Manuel utilisateur
 
+**Version documentée : 2.3.203**
+
 **Workflow d’Organisation et de Pilotage des Réparations**  
 Version documentée : **2.3.194**  
 Documentation mise à jour : **7 septembre 2026**
@@ -55,11 +57,11 @@ Au premier lancement, WOPR initialise les éléments locaux nécessaires. Le PIN
 La barre principale regroupe les accès suivants :
 
 - **Atelier** : tableau de bord synthétique.
-- **Recherche** : recherche globale en lecture rapide.
+- **Recherche globale** : champ directement accessible dans la barre supérieure.
 - **Nouvelle réparation** : création d’un nouveau dossier.
-- **Facture simple** : facture sans dossier de réparation classique.
 - **Suivi** : vue chronologique et comptable des réparations.
 - **Factures** : liste et gestion des factures.
+- **Facture simple** : facture sans dossier de réparation classique.
 - **Devis** : création, modification et envoi des devis.
 - **Clients** : carnet clients, imports/exports et historique.
 - **Achats / Ventes** : opérations et justificatifs.
@@ -84,7 +86,8 @@ La page **Atelier** est la vue d’accueil opérationnelle. Elle permet de voir 
 - le nombre de réparations entrées dans le mois ;
 - les matériels terminés depuis 7 jours ou plus ;
 - les règlements encore en attente ;
-- les derniers dossiers modifiés.
+- les derniers dossiers modifiés ;
+- les dossiers actifs depuis plus de 14 jours à relancer.
 
 Les cartes servent de raccourcis vers les vues détaillées correspondantes.
 
@@ -171,6 +174,12 @@ La section **Devis** permet :
 
 Les devis sont conservés séparément des factures et restent rattachables au client concerné.
 
+
+### Devis historiques
+
+L'historique client peut retrouver les anciens devis créés avant la liaison systématique par identifiant client. Le rattachement automatique n'est effectué que lorsque la correspondance avec la fiche client est non ambiguë.
+
+
 ## 10. Clients et contacts
 
 La page **Clients** centralise les coordonnées et les informations de contact.
@@ -209,6 +218,14 @@ La page **Recherche** permet une recherche transversale dans plusieurs types de 
 - devis.
 
 Les résultats proposent des raccourcis vers la fiche ou la page concernée. Cette vue est destinée à retrouver rapidement une information sans modifier les données directement.
+
+
+### Recherche directe depuis la barre supérieure
+
+La recherche globale peut être lancée directement depuis la barre supérieure. Elle accepte plusieurs mots répartis entre différents champs et ignore les différences d'accents, de casse et de ponctuation. Par exemple, `ecole martin` peut retrouver `École Martin`.
+
+La recherche porte notamment sur les clients, téléphones, courriels, numéros de dossier, appareils, problèmes, diagnostics, systèmes, statuts, accessoires, factures, devis, lignes de devis et opérations Achats/Ventes.
+
 
 ## 12. Achats / Ventes et justificatifs
 
@@ -444,15 +461,3 @@ Une clé maître perdue ne peut pas être reconstituée à partir de la document
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 
 WOPR est développé comme un outil métier de terrain, avec une priorité donnée à la simplicité d’utilisation, à la portabilité et à la conservation locale des données sensibles.
-
-
-### Devis historiques
-
-Lors de l'ouverture de l'historique d'un client, WOPR peut retrouver d'anciens devis créés avant la liaison systématique par identifiant client. Un devis sans `client_id` est rattaché automatiquement uniquement si son nom correspond sans ambiguïté à une seule fiche client. Les formes `Prénom Nom` et `Nom Prénom` sont reconnues.
-
-
-### Recherche directe depuis la barre supérieure
-
-La recherche globale peut être lancée sans quitter la page courante : saisissez directement un nom, un téléphone, un numéro de dossier, un appareil, une panne, une facture, un devis ou un montant dans le champ de recherche de la barre supérieure, puis validez avec **Entrée**.
-
-La recherche accepte plusieurs mots répartis entre différents champs et ignore les différences d'accents, de casse et de ponctuation. Ainsi, `Benoit Gaucher` peut retrouver `Benoît Gaucher` même si le prénom et le nom sont stockés séparément.
