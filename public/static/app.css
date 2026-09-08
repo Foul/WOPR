@@ -4018,3 +4018,21 @@ body.theme-terminal .page .return-wait-critical{background:#3a1111!important;col
   .theme-picker{min-height:34px;padding:3px 6px}
   .theme-picker select{min-width:84px;font-size:11px}
 }
+
+
+/* Tableau de bord Atelier - pilotage des dossiers anciens */
+.atelier-panel-overdue{
+  border-color:#ead59a;
+  background:#fffdf7;
+}
+.atelier-panel-overdue .atelier-panel-title h2{color:#765500}
+body.theme-dark .page .atelier-panel-overdue{
+  background:#1d1a12!important;
+  border-color:#66562d!important;
+}
+body.theme-dark .page .atelier-panel-overdue .atelier-panel-title h2{color:#ffd978!important}
+body.theme-terminal .page .atelier-panel-overdue{
+  background:#031008!important;
+  border-color:#1ba946!important;
+}
+body.theme-terminal .page .atelier-panel-overdue .atelier-panel-title h2{color:#b7ffbe!important}

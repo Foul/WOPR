@@ -6213,6 +6213,22 @@ def atelier_dashboard():
     attente_piece = [r for r in active_rows if str(r["status"] or "") == "En attente pièce"]
     a_restituer = [r for r in active_rows if str(r["status"] or "") == "Terminé"]
 
+    # Dossiers actifs anciens : information de pilotage, sans imposer de délai métier.
+    # On signale simplement les dossiers encore actifs reçus depuis 14 jours ou plus.
+    overdue = []
+    for r in en_cours:
+        raw_date = str(r["received_date"] or "")[:10]
+        try:
+            d = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            days = max(0, (today - d).days)
+        except Exception:
+            days = 0
+        if days >= 14:
+            item = dict(r)
+            item["days_open"] = days
+            overdue.append(item)
+    overdue.sort(key=lambda x: x["days_open"], reverse=True)
+
     reparations_mois = [
         r for r in active_rows
         if str(r["received_date"] or "")[:7] == month_prefix
@@ -6306,6 +6322,8 @@ def atelier_dashboard():
         month_name=ledger_month_name(current_month),
         en_cours_count=len(en_cours),
         attente_piece_count=len(attente_piece),
+        overdue_count=len(overdue),
+        overdue_rows=overdue[:10],
         a_restituer_count=len(a_restituer),
         unpaid_count=len(unpaid_rows),
         unpaid_total=unpaid_total,

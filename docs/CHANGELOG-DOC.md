@@ -1,5 +1,11 @@
 # Changelog de la documentation
 
+## 2.3.195 - 8 septembre 2026 - pilotage Atelier
+- Le tableau de bord signale désormais les dossiers encore actifs depuis **14 jours ou plus**.
+- Une carte affiche leur nombre immédiatement.
+- Un panneau dédié liste les dossiers concernés, leur statut, leur panne et leur ancienneté.
+- Les dossiers de **30 jours ou plus** sont visuellement renforcés.
+
 ## 2.3.195 - 8 septembre 2026 - thèmes d'affichage
 - Ajout du thème **Dark**, sombre et moderne.
 - Ajout du thème **WOPR / Terminal**, noir et vert phosphore.

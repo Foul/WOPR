@@ -77,6 +77,7 @@ La page **Atelier** est la vue d’accueil opérationnelle. Elle permet de voir 
 
 - le nombre de dossiers en cours ;
 - les réparations en attente de pièce ;
+- les dossiers encore actifs reçus depuis 14 jours ou plus, avec leur ancienneté ;
 - les matériels terminés à restituer ;
 - les factures impayées et leur montant ;
 - le chiffre d’affaires encaissé du mois ;

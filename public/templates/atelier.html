@@ -22,6 +22,12 @@
     <strong>{{ attente_piece_count }}</strong>
     <small>réparation(s)</small>
   </div>
+  <div class="atelier-kpi {% if overdue_count %}atelier-kpi-alert{% endif %}">
+    <span class="atelier-kpi-icon">⏳</span>
+    <span class="atelier-kpi-label">Dossiers +14 j</span>
+    <strong>{{ overdue_count }}</strong>
+    <small>encore actifs</small>
+  </div>
   <a class="atelier-kpi atelier-kpi-return" href="{{ url_for('index', year=current_year, a_restituer=1) }}">
     <span class="atelier-kpi-icon">✅</span>
     <span class="atelier-kpi-label">À restituer</span>
@@ -49,6 +55,28 @@
 </div>
 
 <div class="atelier-panels">
+  <section class="atelier-panel atelier-panel-wide atelier-panel-overdue">
+    <div class="atelier-panel-title">
+      <h2>⏳ Dossiers actifs à relancer</h2>
+      <span>Reçus depuis 14 jours ou plus</span>
+    </div>
+    {% if overdue_rows %}
+      <div class="atelier-list">
+      {% for r in overdue_rows %}
+        <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
+          <div>
+            <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong>
+            <span>{{ r['status'] or '' }} · {{ r['problem'] or 'Sans description' }}</span>
+          </div>
+          <b class="atelier-days {% if r['days_open'] >= 30 %}critical{% endif %}">{{ r['days_open'] }} j</b>
+        </a>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="atelier-empty">👌 Aucun dossier actif ne dépasse 14 jours.</div>
+    {% endif %}
+  </section>
+
   <section class="atelier-panel">
     <div class="atelier-panel-title">
       <h2>⏰ À surveiller</h2>
