@@ -367,17 +367,19 @@ document.addEventListener('click', async function (event) {
         endSample.preload = 'auto';
       }
 
-      // Laisse respirer la fin du sample avant de revenir à WOPR.
-      endSample.onended = () => setTimeout(closeEgg, 2800);
-      endSample.onerror = () => setTimeout(closeEgg, 1200);
+      // La séquence finale reste affichée jusqu'à fermeture volontaire.
+      // On ne ferme plus automatiquement l'easter egg : cela évite de
+      // couper la fin visuelle ou sonore sur les machines plus lentes.
+      endSample.onended = () => {};
+      endSample.onerror = () => {};
       endSample.currentTime = 0;
 
       const p = endSample.play();
       if (p && typeof p.catch === 'function') {
-        p.catch(() => setTimeout(closeEgg, 1800));
+        p.catch(() => {});
       }
     } catch(e) {
-      setTimeout(closeEgg, 1800);
+      // Même sans audio, l'écran de fin reste affiché.
     }
   }
 

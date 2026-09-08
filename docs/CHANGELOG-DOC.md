@@ -1,5 +1,9 @@
 # Changelog de la documentation
 
+## 2.3.199 - 8 septembre 2026 - fin de l'easter egg
+- La séquence finale de l'easter egg ne se ferme plus automatiquement.
+- L'écran de fin reste affiché jusqu'à fermeture volontaire avec **×** ou **Échap**, afin de ne plus couper la fin de la séquence.
+
 ## 2.3.198 - 8 septembre 2026 - bouton Nouvelle réparation en thème 8-bit
 - Le bouton **Nouvelle réparation** placé dans Atelier utilise désormais exactement le skin pixel-art du thème 8-bit.
 - Les thèmes Normal, Dark et WOPR restent inchangés.
