@@ -8790,7 +8790,7 @@ def repair_quick_edit(rid):
     """, (
         received_date,
         request.form.get("problem", "").strip(),
-        request.form.get("legacy_call_note", "").strip(),
+        r["legacy_call_note"] or "",
         invoice_text,
         invoice_no,
         service_amount,
@@ -8937,7 +8937,7 @@ def repair_edit(rid):
             new_status,
             finished_at,
             returned_at,
-            request.form.get("legacy_call_note", "").strip(),
+            r["legacy_call_note"] or "",
             followup_year,
             followup_month,
             rid

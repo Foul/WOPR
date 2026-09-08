@@ -110,7 +110,6 @@
       <th>Nom</th>
       <th>Date</th>
       <th>Panne</th>
-      {% if selected_year == 2025 %}<th>Appel Téléphonique<br><span>(Oui/rep/NJ)</span></th>{% endif %}
       <th>{% if selected_year == 2025 %}Facture N°{% else %}Facture/devis N°{% endif %}</th>
       <th>Prestations de services<br><span>BIC</span></th>
       <th>Vente de marchandises<br><span>BIC</span></th>
@@ -166,10 +165,6 @@
           <td class="{% if r['accounting_status']=='yellow' and (r['problem'] or '').lower().startswith('paiement du') %}ods-yellow-cell{% endif %}">
             {{ r['problem'] or '' }}
           </td>
-
-          {% if selected_year == 2025 %}
-            <td>{{ r['legacy_call_note'] or '' }}</td>
-          {% endif %}
 
           <td class="{% if r['accounting_status']=='yellow' and not (r['problem'] or '').lower().startswith('paiement du') %}ods-yellow-cell{% endif %}">
             {% if invoice_text %}
@@ -279,14 +274,6 @@
                 <label class="span-2">Panne
                   <input name="problem" value="{{ r['problem'] or '' }}">
                 </label>
-
-                {% if selected_year == 2025 %}
-                <label class="span-2">Appel Téléphonique / Suivi
-                  <input name="legacy_call_note" value="{{ r['legacy_call_note'] or '' }}">
-                </label>
-                {% else %}
-                <input type="hidden" name="legacy_call_note" value="{{ r['legacy_call_note'] or '' }}">
-                {% endif %}
 
                 <label>Facture / devis N°
                   <input name="legacy_invoice_text" value="{{ r['legacy_invoice_text'] or r['invoice_no'] or '' }}" placeholder="Non Facturé ou N°">
