@@ -58,9 +58,6 @@
     <a class="nav-btn nav-global-search {% if request.endpoint == 'global_search' %}active{% endif %}" href="{{ url_for('global_search') }}" title="Recherche globale">
       <span class="nav-ico">🔎</span><span>Recherche</span>
     </a>
-    <a class="navbtn navbtn-new" href="{{ url_for('repair_new') }}">
-      <span class="nav-ico">➕</span><span>Nouvelle réparation</span>
-    </a>
     <a class="nav-btn nav-simple-invoice {% if request.endpoint == 'simple_invoice_new' %}active{% endif %}" href="{{ url_for('simple_invoice_new') }}">
       <span class="nav-ico">🧾</span><span>Facture simple</span>
     </a>

@@ -1,5 +1,9 @@
 # Changelog de la documentation
 
+## 2.3.196 - 8 septembre 2026 - accès Nouvelle réparation
+- Suppression du doublon **Nouvelle réparation** dans la barre de navigation.
+- Le bouton est conservé sur le tableau de bord **Atelier** avec le style du bouton de menu.
+
 ## 2.3.195 - 8 septembre 2026 - pilotage Atelier
 - Le tableau de bord signale désormais les dossiers encore actifs depuis **14 jours ou plus**.
 - Une carte affiche leur nombre immédiatement.
