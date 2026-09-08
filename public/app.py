@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.201"
+APP_VERSION = "2.3.202"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -11723,6 +11723,51 @@ def client_history(client_id):
         SELECT * FROM repairs WHERE client_id=?
         ORDER BY received_date DESC, id DESC
     """, (client_id,)).fetchall()
+    # Les devis historiques peuvent ne pas avoir de client_id (anciens imports).
+    # On les rattache uniquement si le nom correspond sans ambiguïté à ce client.
+    def _client_name_keys(row):
+        keys = set()
+        values = [
+            row["name"],
+            row["company"],
+            f"{row['first_name'] or ''} {row['last_name'] or ''}",
+            f"{row['last_name'] or ''} {row['first_name'] or ''}",
+        ]
+        for value in values:
+            key = normalize_history_name(value)
+            if key:
+                keys.add(key)
+        return keys
+
+    client_keys = _client_name_keys(client)
+
+    # On construit l'index des noms de tous les clients pour éviter tout rattachement
+    # automatique lorsqu'un même nom peut désigner plusieurs fiches.
+    key_owners = {}
+    for c in con.execute("SELECT * FROM clients").fetchall():
+        for key in _client_name_keys(c):
+            key_owners.setdefault(key, set()).add(int(c["id"]))
+
+    legacy_quotes = con.execute("""
+        SELECT * FROM quotes
+        WHERE client_id IS NULL
+        ORDER BY quote_date DESC, id DESC
+    """).fetchall()
+
+    linked_quote_ids = []
+    for q in legacy_quotes:
+        qkey = normalize_history_name(q["client_name"])
+        if not qkey or qkey not in client_keys:
+            continue
+        owners = key_owners.get(qkey, set())
+        if owners == {int(client_id)}:
+            con.execute("UPDATE quotes SET client_id=?, updated_at=? WHERE id=? AND client_id IS NULL",
+                        (client_id, now().isoformat(timespec="seconds"), q["id"]))
+            linked_quote_ids.append(int(q["id"]))
+
+    if linked_quote_ids:
+        con.commit()
+
     quotes = con.execute("""
         SELECT * FROM quotes WHERE client_id=?
         ORDER BY quote_date DESC, id DESC

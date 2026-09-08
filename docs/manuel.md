@@ -444,3 +444,8 @@ Une clé maître perdue ne peut pas être reconstituée à partir de la document
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 
 WOPR est développé comme un outil métier de terrain, avec une priorité donnée à la simplicité d’utilisation, à la portabilité et à la conservation locale des données sensibles.
+
+
+### Devis historiques
+
+Lors de l'ouverture de l'historique d'un client, WOPR peut retrouver d'anciens devis créés avant la liaison systématique par identifiant client. Un devis sans `client_id` est rattaché automatiquement uniquement si son nom correspond sans ambiguïté à une seule fiche client. Les formes `Prénom Nom` et `Nom Prénom` sont reconnues.

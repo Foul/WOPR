@@ -1,5 +1,10 @@
 # Changelog de la documentation
 
+## 2.3.202 - 8 septembre 2026 - devis historiques rattachés aux clients
+- L'historique client retrouve désormais les anciens devis créés sans `client_id`.
+- Le rattachement automatique n'est effectué que lorsque le nom du devis correspond de façon non ambiguë à une seule fiche client.
+- Les variantes `Prénom Nom` et `Nom Prénom` sont reconnues.
+
 ## 2.3.201 - 8 septembre 2026 - historique client plus direct
 - Ajout du nombre de **factures** dans le résumé client.
 - La **dernière intervention** tient compte de la restitution ou de la fin du dossier avant la date d’entrée.
