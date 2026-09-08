@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Recherche globale - WOPR{% endblock %}
 {% block body %}
-<div class="sheet-banner narrow"><div class="banner-top">WOPR</div><div class="banner-title">Recherche globale</div></div>
+<div class="sheet-banner narrow"><div class="banner-top">WOPR</div><div class="banner-title">Recherche globale</div><div class="banner-subtitle">Multi-mots, accents et ponctuation ignorés</div></div>
 <form method="get" class="global-search-form">
-  <input type="search" name="q" value="{{ q }}" placeholder="Client, téléphone, PS5, n° facture, VistaPrint, montant..." autofocus autocomplete="off">
+  <input type="search" name="q" value="{{ q }}" placeholder="Client, téléphone, dossier, appareil, panne, facture, devis, montant..." autofocus autocomplete="off">
   <button class="button primary" type="submit">🔎 Rechercher</button>
   {% if q %}<a class="button" href="{{ url_for('global_search') }}">Effacer</a>{% endif %}
 </form>

@@ -449,3 +449,10 @@ WOPR est développé comme un outil métier de terrain, avec une priorité donn�
 ### Devis historiques
 
 Lors de l'ouverture de l'historique d'un client, WOPR peut retrouver d'anciens devis créés avant la liaison systématique par identifiant client. Un devis sans `client_id` est rattaché automatiquement uniquement si son nom correspond sans ambiguïté à une seule fiche client. Les formes `Prénom Nom` et `Nom Prénom` sont reconnues.
+
+
+### Recherche directe depuis la barre supérieure
+
+La recherche globale peut être lancée sans quitter la page courante : saisissez directement un nom, un téléphone, un numéro de dossier, un appareil, une panne, une facture, un devis ou un montant dans le champ de recherche de la barre supérieure, puis validez avec **Entrée**.
+
+La recherche accepte plusieurs mots répartis entre différents champs et ignore les différences d'accents, de casse et de ponctuation. Ainsi, `Benoit Gaucher` peut retrouver `Benoît Gaucher` même si le prénom et le nom sont stockés séparément.

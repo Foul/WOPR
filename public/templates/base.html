@@ -55,9 +55,11 @@
     <a class="nav-btn nav-atelier {% if request.endpoint == 'atelier_dashboard' %}active{% endif %}" href="{{ url_for('atelier_dashboard') }}">
       <span class="nav-ico">🛠️</span><span>Atelier</span>
     </a>
-    <a class="nav-btn nav-global-search {% if request.endpoint == 'global_search' %}active{% endif %}" href="{{ url_for('global_search') }}" title="Recherche globale">
-      <span class="nav-ico">🔎</span><span>Recherche</span>
-    </a>
+    <form class="topbar-search {% if request.endpoint == 'global_search' %}active{% endif %}" method="get" action="{{ url_for('global_search') }}" role="search">
+      <span class="topbar-search-icon" aria-hidden="true">🔎</span>
+      <input type="search" name="q" value="{{ request.args.get('q','') if request.endpoint == 'global_search' else '' }}" placeholder="Client, tél., dossier, facture…" aria-label="Recherche globale WOPR" autocomplete="off">
+      <button type="submit" aria-label="Rechercher">↵</button>
+    </form>
     <a class="nav-btn nav-simple-invoice {% if request.endpoint == 'simple_invoice_new' %}active{% endif %}" href="{{ url_for('simple_invoice_new') }}">
       <span class="nav-ico">🧾</span><span>Facture simple</span>
     </a>

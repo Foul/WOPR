@@ -1,5 +1,12 @@
 # Changelog de la documentation
 
+## 2.3.203 - 8 septembre 2026 - recherche globale accélérée
+- La recherche globale est désormais accessible directement depuis la barre supérieure : saisie + Entrée, sans ouvrir d'abord la page Recherche.
+- Les recherches **multi-mots** fonctionnent même lorsque les mots sont répartis entre plusieurs champs (`Benoit Gaucher`, marque + modèle, etc.).
+- Les accents, la casse et la ponctuation sont ignorés : `Benoit` retrouve `Benoît`.
+- La recherche couvre davantage de données : diagnostic, système, statut, accessoires et descriptions des lignes de devis.
+- Les recherches existantes dans clients, dossiers, achats/ventes, factures et devis restent regroupées sur la même page.
+
 ## 2.3.202 - 8 septembre 2026 - devis historiques rattachés aux clients
 - L'historique client retrouve désormais les anciens devis créés sans `client_id`.
 - Le rattachement automatique n'est effectué que lorsque le nom du devis correspond de façon non ambiguë à une seule fiche client.

@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.202"
+APP_VERSION = "2.3.203"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1444,9 +1444,20 @@ def sync_clients_to_abby():
     return summary
 
 
+def normalize_global_search(value):
+    """Texte canonique pour la recherche globale : accents, casse et ponctuation ignorés."""
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.casefold()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
 def db():
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
+    # Fonction SQLite locale utilisée uniquement dans les recherches.
+    con.create_function("WOPR_NORM", 1, normalize_global_search, deterministic=True)
     return con
 
 def pin_is_configured():
@@ -3020,11 +3031,7 @@ def payment_amount_from_text(text):
 
 
 def normalize_history_name(value):
-    value = unicodedata.normalize("NFKD", str(value or ""))
-    value = "".join(ch for ch in value if not unicodedata.combining(ch))
-    value = value.casefold().replace("-", " ").replace("/", " ")
-    value = re.sub(r"[^a-z0-9]+", " ", value)
-    return " ".join(value.split())
+    return normalize_global_search(str(value or "").replace("-", " ").replace("/", " "))
 
 
 
@@ -11654,59 +11661,119 @@ def import_proton_cancel():
 
 @app.route("/recherche")
 def global_search():
-    """Recherche globale WOPR, strictement en lecture seule."""
+    """Recherche globale WOPR : multi-mots, accents et ponctuation ignorés."""
     q = " ".join(str(request.args.get("q") or "").split()).strip()
     results = {"clients": [], "repairs": [], "ledger": [], "quotes": []}
+
     if q:
-        like = f"%{q}%"
+        normalized_q = normalize_global_search(q)
+        tokens = [t for t in normalized_q.split() if t][:8]
+
+        def build_where(expressions):
+            # Chaque mot saisi doit apparaître quelque part dans l'élément.
+            # Exemple : "benoit gaucher" peut matcher prénom + nom séparément.
+            token_clauses = []
+            params = []
+            for token in tokens:
+                token_clauses.append(
+                    "(" + " OR ".join(f"WOPR_NORM({expr}) LIKE ?" for expr in expressions) + ")"
+                )
+                params.extend([f"%{token}%"] * len(expressions))
+            return " AND ".join(token_clauses) if token_clauses else "1=0", params
+
         con = db()
-        results["clients"] = con.execute("""
+
+        client_expr = [
+            "COALESCE(name,'')",
+            "COALESCE(first_name,'')",
+            "COALESCE(last_name,'')",
+            "COALESCE(first_name,'') || ' ' || COALESCE(last_name,'')",
+            "COALESCE(last_name,'') || ' ' || COALESCE(first_name,'')",
+            "COALESCE(company,'')",
+            "COALESCE(phone,'')",
+            "COALESCE(email,'')",
+            "COALESCE(address_street,'')",
+            "COALESCE(postal_code,'')",
+            "COALESCE(city,'')",
+        ]
+        where, params = build_where(client_expr)
+        results["clients"] = con.execute(f"""
             SELECT * FROM clients
-            WHERE COALESCE(name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(first_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(last_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(company,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(phone,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(email,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(city,'') LIKE ? COLLATE NOCASE
-            ORDER BY updated_at DESC, id DESC LIMIT 30
-        """, (like,)*7).fetchall()
-        results["repairs"] = con.execute("""
+            WHERE {where}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 30
+        """, params).fetchall()
+
+        repair_expr = [
+            "COALESCE(r.dossier_no,'')",
+            "COALESCE(c.name,'')",
+            "COALESCE(c.first_name,'')",
+            "COALESCE(c.last_name,'')",
+            "COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')",
+            "COALESCE(c.last_name,'') || ' ' || COALESCE(c.first_name,'')",
+            "COALESCE(c.company,'')",
+            "COALESCE(c.phone,'')",
+            "COALESCE(c.email,'')",
+            "COALESCE(r.device_type,'')",
+            "COALESCE(r.brand_model,'')",
+            "COALESCE(r.serial_no,'')",
+            "COALESCE(r.system,'')",
+            "COALESCE(r.problem,'')",
+            "COALESCE(r.diagnosis,'')",
+            "COALESCE(r.status,'')",
+            "COALESCE(r.invoice_no,'')",
+            "COALESCE(r.accessories,'')",
+        ]
+        where, params = build_where(repair_expr)
+        results["repairs"] = con.execute(f"""
             SELECT r.*, c.name AS client_name, c.first_name AS client_first_name,
                    c.last_name AS client_last_name, c.phone AS client_phone
-            FROM repairs r JOIN clients c ON c.id=r.client_id
-            WHERE COALESCE(r.dossier_no,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(c.name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(c.first_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(c.last_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(c.phone,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(r.device_type,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(r.brand_model,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(r.serial_no,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(r.problem,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(r.invoice_no,'') LIKE ? COLLATE NOCASE
-            ORDER BY r.received_date DESC, r.id DESC LIMIT 50
-        """, (like,)*10).fetchall()
-        results["ledger"] = con.execute("""
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE {where}
+            ORDER BY r.received_date DESC, r.id DESC
+            LIMIT 50
+        """, params).fetchall()
+
+        ledger_expr = [
+            "COALESCE(party,'')",
+            "COALESCE(operation,'')",
+            "COALESCE(entry_date,'')",
+            "COALESCE(description,'')",
+            "COALESCE(invoice_no,'')",
+            "COALESCE(remarks,'')",
+            "COALESCE(document_original_name,'')",
+            "printf('%.2f',COALESCE(amount_ttc,0))",
+        ]
+        where, params = build_where(ledger_expr)
+        results["ledger"] = con.execute(f"""
             SELECT * FROM ledger_entries
-            WHERE COALESCE(party,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(entry_date,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(description,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(invoice_no,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(remarks,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(document_original_name,'') LIKE ? COLLATE NOCASE
-               OR printf('%.2f',COALESCE(amount_ttc,0)) LIKE ?
-            ORDER BY entry_date DESC, id DESC LIMIT 50
-        """, (like,)*7).fetchall()
-        results["quotes"] = con.execute("""
-            SELECT * FROM quotes
-            WHERE COALESCE(quote_no,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(client_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(client_company,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(notes,'') LIKE ? COLLATE NOCASE
-            ORDER BY quote_date DESC, id DESC LIMIT 30
-        """, (like,)*4).fetchall()
+            WHERE {where}
+            ORDER BY entry_date DESC, id DESC
+            LIMIT 50
+        """, params).fetchall()
+
+        quote_expr = [
+            "COALESCE(q.quote_no,'')",
+            "COALESCE(q.client_name,'')",
+            "COALESCE(q.client_company,'')",
+            "COALESCE(q.contact_name,'')",
+            "COALESCE(q.status,'')",
+            "COALESCE(q.notes,'')",
+            "COALESCE(ql.description,'')",
+        ]
+        where, params = build_where(quote_expr)
+        results["quotes"] = con.execute(f"""
+            SELECT DISTINCT q.*
+            FROM quotes q
+            LEFT JOIN quote_lines ql ON ql.quote_id=q.id
+            WHERE {where}
+            ORDER BY q.quote_date DESC, q.id DESC
+            LIMIT 30
+        """, params).fetchall()
+
         con.close()
+
     total = sum(len(v) for v in results.values())
     return render_template("global_search.html", q=q, results=results, total=total)
 
