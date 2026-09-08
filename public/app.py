@@ -7,6 +7,7 @@ import base64
 import io
 from PIL import Image, ImageOps, ImageFilter
 import json
+import hashlib
 import csv
 import socket
 import smtplib
@@ -1981,6 +1982,7 @@ def init_db():
     ensure_column(con, "clients", "google_sync_status", "TEXT")
     ensure_column(con, "clients", "google_sync_error", "TEXT")
     ensure_column(con, "clients", "google_synced_at", "TEXT")
+    ensure_column(con, "clients", "google_sync_hash", "TEXT")
     ensure_column(con, "clients", "notes", "TEXT")
     ensure_column(con, "clients", "proton_uid", "TEXT")
     ensure_column(con, "clients", "proton_imported_at", "TEXT")
@@ -4222,6 +4224,12 @@ def google_contact_body(client):
     return body
 
 
+def google_contact_sync_hash(body):
+    """Empreinte stable des données WOPR destinées à Google Contacts."""
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def set_google_sync_state(client_id, status, resource_name=None, error=""):
     con = db()
     if resource_name is None:
@@ -4237,16 +4245,27 @@ def set_google_sync_state(client_id, status, resource_name=None, error=""):
 def sync_client_to_google(client_id):
     if not cfg().get("google_sync_enabled", True):
         return False, "Synchronisation Google désactivée"
-    service = google_service()
-    if not service:
-        set_google_sync_state(client_id, "À connecter", error="Google n'est pas encore connecté")
-        return False, "Google n'est pas encore connecté"
 
     con = db()
     client = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
     con.close()
     if not client:
         return False, "Client introuvable"
+
+    body = google_contact_body(client)
+    current_hash = google_contact_sync_hash(body)
+    previous_hash = (client["google_sync_hash"] or "").strip()
+    resource_name = (client["google_resource_name"] or "").strip()
+
+    # Rien n'a changé depuis le dernier envoi : zéro appel à Google.
+    if resource_name and previous_hash and previous_hash == current_hash:
+        set_google_sync_state(client_id, "Synchronisé")
+        return True, "Aucune modification à synchroniser"
+
+    service = google_service()
+    if not service:
+        set_google_sync_state(client_id, "À connecter", error="Google n'est pas encore connecté")
+        return False, "Google n'est pas encore connecté"
 
     try:
         group_resource = google_find_group(service)
@@ -4255,11 +4274,9 @@ def sync_client_to_google(client_id):
             set_google_sync_state(client_id, "Erreur", error=msg)
             return False, msg
 
-        resource_name = client["google_resource_name"]
         if not resource_name:
             resource_name = google_find_existing_contact(service, client)
 
-        body = google_contact_body(client)
         if resource_name:
             try:
                 latest = google_execute_with_retry(service.people().get(
@@ -4290,11 +4307,19 @@ def sync_client_to_google(client_id):
                 body={"resourceNamesToAdd": [resource_name]}
             ).execute()
         except HttpError as e:
-            # Certaines réponses signalent que le contact est déjà membre ; le contact reste synchronisé.
             if getattr(e.resp, "status", None) not in (400, 409):
                 raise
 
         set_google_sync_state(client_id, "Synchronisé", resource_name=resource_name)
+
+        # On mémorise uniquement une synchro réellement réussie.
+        con = db()
+        con.execute(
+            "UPDATE clients SET google_sync_hash=? WHERE id=?",
+            (current_hash, client_id),
+        )
+        con.commit()
+        con.close()
         return True, "Synchronisé"
     except Exception as e:
         msg = str(e)
