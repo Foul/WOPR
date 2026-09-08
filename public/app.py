@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.199"
+APP_VERSION = "2.3.200"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -5649,7 +5649,7 @@ def admin_login():
 def admin_lock():
     audit_event("LOCK", "Verrouillage manuel", request.remote_addr)
     session.clear()
-    return redirect(url_for("admin_login"))
+    return redirect(url_for("admin_login", next=url_for("atelier_dashboard")))
 
 
 @app.route("/security", methods=["GET", "POST"])

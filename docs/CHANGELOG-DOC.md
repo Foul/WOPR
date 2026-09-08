@@ -1,5 +1,8 @@
 # Changelog de la documentation
 
+## 2.3.200 - 8 septembre 2026 - retour Atelier après verrouillage
+- Après un verrouillage manuel puis saisie du PIN, WOPR revient désormais directement sur **Atelier** au lieu de **Suivi**.
+
 ## 2.3.199 - 8 septembre 2026 - fin de l'easter egg
 - La séquence finale de l'easter egg ne se ferme plus automatiquement.
 - L'écran de fin reste affiché jusqu'à fermeture volontaire avec **×** ou **Échap**, afin de ne plus couper la fin de la séquence.
