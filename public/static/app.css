@@ -4105,3 +4105,63 @@ body.theme-8bit .page .atelier-head .navbtn.navbtn-new:active{
   filter:brightness(.92)!important;
   transform:translate(3px,3px)!important;
 }
+
+
+/* ===== V2.3.201 — historique client plus direct ===== */
+.history-summary-note small{
+  display:block;margin-top:5px;opacity:.82;line-height:1.35
+}
+.history-summary-link{
+  display:inline-block;margin-top:12px;color:#dcecff!important;font-size:.82rem;font-weight:800;text-decoration:none
+}
+.history-summary-link:hover{text-decoration:underline}
+.history-stat-grid{grid-template-columns:repeat(5,minmax(150px,1fr))}
+.history-quick-panel{background:#f9fbfe}
+.history-quick-grid{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px
+}
+.history-quick-card{
+  min-width:0;padding:16px 17px;border:1px solid #dbe3ee;border-radius:12px;background:#fff;
+  display:flex;flex-direction:column;align-items:flex-start
+}
+.history-quick-label{
+  display:block;margin-bottom:7px;color:#65768a;font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.045em
+}
+.history-quick-card strong{font-size:1.04rem;line-height:1.3}
+.history-quick-card small{margin-top:4px;color:#7a8797}
+.history-quick-card p{
+  width:100%;margin:10px 0 13px;color:#566474;font-size:.88rem;line-height:1.4;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical
+}
+.history-quick-card .button{margin-top:auto}
+
+body.theme-dark .page .history-quick-panel,
+body.theme-dark .page .history-quick-card{
+  background:#151b23!important;color:#e6edf3!important;border-color:#334155!important
+}
+body.theme-dark .page .history-quick-label,
+body.theme-dark .page .history-quick-card small,
+body.theme-dark .page .history-quick-card p{color:#9fb0c1!important}
+
+body.theme-terminal .page .history-quick-panel,
+body.theme-terminal .page .history-quick-card{
+  background:#020b04!important;color:#9cff9c!important;border-color:#159b3b!important;
+  box-shadow:0 0 10px rgba(39,227,95,.05)!important
+}
+body.theme-terminal .page .history-quick-label,
+body.theme-terminal .page .history-quick-card small,
+body.theme-terminal .page .history-quick-card p{color:#75c982!important}
+body.theme-terminal .page .history-summary-link{color:#9cff9c!important}
+
+body.theme-8bit .page .history-quick-panel,
+body.theme-8bit .page .history-quick-card{
+  background:#fff!important;color:var(--text)!important
+}
+
+@media(max-width:1180px){
+  .history-stat-grid{grid-template-columns:repeat(3,1fr)}
+  .history-quick-grid{grid-template-columns:1fr}
+}
+@media(max-width:650px){
+  .history-stat-grid{grid-template-columns:1fr}
+}

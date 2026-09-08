@@ -193,6 +193,12 @@ Fonctions disponibles :
 
 L’historique client regroupe les éléments utiles pour retrouver rapidement dossiers, factures, devis et situations à surveiller.
 
+La fiche d’historique affiche désormais immédiatement :
+- le nombre de dossiers, factures et devis ;
+- la dernière intervention réelle connue ;
+- un accès direct au dernier dossier, à la dernière facture et au dernier devis ;
+- les montants cumulés et les éventuels éléments à surveiller.
+
 ## 11. Recherche globale
 
 La page **Recherche** permet une recherche transversale dans plusieurs types de données :

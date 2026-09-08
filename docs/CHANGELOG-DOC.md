@@ -1,5 +1,11 @@
 # Changelog de la documentation
 
+## 2.3.201 - 8 septembre 2026 - historique client plus direct
+- Ajout du nombre de **factures** dans le résumé client.
+- La **dernière intervention** tient compte de la restitution ou de la fin du dossier avant la date d’entrée.
+- Ajout d’un bloc **Accès rapide** vers le dernier dossier, la dernière facture et le dernier devis.
+- Les tableaux complets restent disponibles juste en dessous.
+
 ## 2.3.200 - 8 septembre 2026 - retour Atelier après verrouillage
 - Après un verrouillage manuel puis saisie du PIN, WOPR revient désormais directement sur **Atelier** au lieu de **Suivi**.
 

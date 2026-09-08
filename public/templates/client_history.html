@@ -20,16 +20,67 @@
       </div>
     </div>
     <div class="history-summary-note">
-      {% if last_date %}<span>Dernier dossier</span><strong>{{ last_date }}</strong>{% else %}<span>Aucun dossier enregistré</span>{% endif %}
+      {% if last_repair %}
+        <span>Dernière intervention</span>
+        <strong>{{ last_intervention_date }}</strong>
+        <small>{{ last_repair.device_type or 'Appareil' }}{% if last_repair.brand_model %} · {{ last_repair.brand_model }}{% endif %}</small>
+        <a class="history-summary-link" href="{{ url_for('repair_detail', rid=last_repair.id) }}">Ouvrir le dossier →</a>
+      {% else %}
+        <span>Aucun dossier enregistré</span>
+      {% endif %}
     </div>
   </div>
 
   <div class="history-stat-grid">
     <div class="history-stat-card"><span>Dossiers</span><strong>{{ repairs|length }}</strong><small>historique complet</small></div>
+    <div class="history-stat-card"><span>Factures</span><strong>{{ invoice_count }}</strong><small>numéros distincts</small></div>
     <div class="history-stat-card"><span>Devis</span><strong>{{ quotes|length }}</strong><small>enregistrés</small></div>
     <div class="history-stat-card"><span>Total dossiers</span><strong>{{ '%.2f'|format(total_billed) }} €</strong><small>source : Suivi</small></div>
     <div class="history-stat-card"><span>Encaissé</span><strong>{{ '%.2f'|format(total_paid) }} €</strong><small>source : Suivi</small></div>
   </div>
+
+  {% if last_repair or last_invoice or last_quote %}
+  <section class="history-panel history-quick-panel">
+    <div class="history-section-title"><span>⚡</span><div><h2>Accès rapide</h2><p>Les derniers éléments utiles, sans parcourir tout l’historique.</p></div></div>
+    <div class="history-quick-grid">
+      <div class="history-quick-card">
+        <span class="history-quick-label">Dernière intervention</span>
+        {% if last_repair %}
+          <strong>{{ last_repair.device_type or 'Appareil' }}{% if last_repair.brand_model %} · {{ last_repair.brand_model }}{% endif %}</strong>
+          <small>{{ last_intervention_date }} · {{ last_repair.status or '—' }}</small>
+          <p>{{ last_repair.problem or 'Aucune description' }}</p>
+          <a class="button" href="{{ url_for('repair_detail', rid=last_repair.id) }}">📂 Ouvrir le dossier</a>
+        {% else %}
+          <span class="cell-muted">Aucune intervention</span>
+        {% endif %}
+      </div>
+
+      <div class="history-quick-card">
+        <span class="history-quick-label">Dernière facture</span>
+        {% if last_invoice %}
+          <strong>{{ last_invoice.invoice_no }}</strong>
+          <small>{{ last_invoice.received_date }} · {{ '%.2f'|format((last_invoice.service_amount or 0)+(last_invoice.goods_amount or 0)) }} €</small>
+          <p>{{ last_invoice.device_type or 'Facture client' }}{% if last_invoice.brand_model %} · {{ last_invoice.brand_model }}{% endif %}</p>
+          <a class="button" href="{{ url_for('invoice_pdf', rid=last_invoice.id) }}" target="_blank">📄 Ouvrir la facture</a>
+        {% else %}
+          <span class="cell-muted">Aucune facture</span>
+        {% endif %}
+      </div>
+
+      <div class="history-quick-card">
+        <span class="history-quick-label">Dernier devis</span>
+        {% if last_quote %}
+          <strong>{{ last_quote.quote_no }}</strong>
+          <small>{{ last_quote.quote_date }} · {{ last_quote.status or '—' }}</small>
+          <p>{{ last_quote.notes or 'Aucune note' }}</p>
+          <a class="button" href="{{ url_for('quote_edit', quote_id=last_quote.id) }}">📝 Ouvrir le devis</a>
+        {% else %}
+          <span class="cell-muted">Aucun devis</span>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
 
   {% if active_repairs or to_return or unpaid_total > 0 %}
   <section class="history-watch">

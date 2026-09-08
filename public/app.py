@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.200"
+APP_VERSION = "2.3.201"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -11740,10 +11740,45 @@ def client_history(client_id):
     active_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation", "Terminé"}
     active_repairs = [r for r in repairs if str(r["status"] or "") in active_statuses]
     to_return = [r for r in repairs if str(r["status"] or "") == "Terminé"]
-    last_date = repairs[0]["received_date"] if repairs else None
-    return render_template("client_history.html", client=client, repairs=repairs, quotes=quotes,
-                           total_billed=total_billed, total_paid=total_paid, unpaid_total=unpaid_total,
-                           active_repairs=active_repairs, to_return=to_return, last_date=last_date)
+
+    invoice_repairs = [r for r in repairs if str(r["invoice_no"] or "").strip()]
+    invoice_numbers = []
+    seen_invoice_numbers = set()
+    for r in invoice_repairs:
+        no = str(r["invoice_no"] or "").strip()
+        if no and no not in seen_invoice_numbers:
+            seen_invoice_numbers.add(no)
+            invoice_numbers.append(no)
+
+    def _repair_activity_date(row):
+        # La dernière interaction réelle est plus utile qu'une simple date d'entrée.
+        for key in ("returned_at", "finished_at", "received_date", "created_at"):
+            value = str(row[key] or "").strip()
+            if value:
+                return value[:10]
+        return ""
+
+    last_repair = max(repairs, key=_repair_activity_date) if repairs else None
+    last_intervention_date = _repair_activity_date(last_repair) if last_repair else None
+    last_invoice = invoice_repairs[0] if invoice_repairs else None
+    last_quote = quotes[0] if quotes else None
+
+    return render_template(
+        "client_history.html",
+        client=client,
+        repairs=repairs,
+        quotes=quotes,
+        total_billed=total_billed,
+        total_paid=total_paid,
+        unpaid_total=unpaid_total,
+        active_repairs=active_repairs,
+        to_return=to_return,
+        invoice_count=len(invoice_numbers),
+        last_repair=last_repair,
+        last_intervention_date=last_intervention_date,
+        last_invoice=last_invoice,
+        last_quote=last_quote,
+    )
 
 
 
