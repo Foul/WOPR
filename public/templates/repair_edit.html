@@ -122,6 +122,10 @@
       {% endfor %}
       </select>
     </label>
+    <label>Date de restitution
+      <input type="date" name="returned_at" value="{{ (r['returned_at'] or '')[:10] }}">
+      <small>Modifiable si la restitution a été enregistrée plus tard que la remise réelle au client.</small>
+    </label>
   </div>
 
   <div class="footer-actions">

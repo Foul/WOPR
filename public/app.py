@@ -8896,8 +8896,17 @@ def repair_edit(rid):
         # Sur l'écran Suivi, le statut est volontairement manuel.
         # La logique "paiement = Restitué" reste dans les écrans d'encaissement/facture.
         returned_at = r["returned_at"] if "returned_at" in r.keys() else None
+        requested_returned_at = request.form.get("returned_at", "").strip()
         if new_status == "Restitué":
-            if r["status"] != "Restitué" or not returned_at:
+            if requested_returned_at:
+                try:
+                    datetime.strptime(requested_returned_at, "%Y-%m-%d")
+                    returned_at = requested_returned_at
+                except ValueError:
+                    flash("Date de restitution invalide.")
+                    con.close()
+                    return redirect(url_for("repair_edit", rid=rid))
+            elif r["status"] != "Restitué" or not returned_at:
                 returned_at = now().date().isoformat()
         else:
             returned_at = None
@@ -9070,8 +9079,17 @@ def repair_update(rid):
         finished_at = None
 
     returned_at = current["returned_at"]
+    requested_returned_at = request.form.get("returned_at", "").strip()
     if new_status == "Restitué":
-        if current["status"] != "Restitué" or not returned_at:
+        if requested_returned_at:
+            try:
+                datetime.strptime(requested_returned_at, "%Y-%m-%d")
+                returned_at = requested_returned_at
+            except ValueError:
+                con.close()
+                flash("Date de restitution invalide.")
+                return redirect(url_for("repair_detail", rid=rid))
+        elif current["status"] != "Restitué" or not returned_at:
             returned_at = now().date().isoformat()
     else:
         returned_at = None
@@ -9080,7 +9098,7 @@ def repair_update(rid):
     if payment_received_now:
         # V2.3.85 — encaisser signifie que le matériel a été rendu au client.
         new_status = "Restitué"
-        if current["status"] != "Restitué" or not returned_at:
+        if not returned_at:
             returned_at = now().date().isoformat()
         if not finished_at:
             finished_at = now().isoformat(timespec="seconds")
