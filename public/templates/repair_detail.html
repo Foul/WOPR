@@ -35,12 +35,10 @@
       <th>Prénom</th><td>{{ r['client_first_name'] or '' }}</td>
       <th>Nom</th><td>{{ r['client_last_name'] or r['client_name'] or '' }}</td>
     </tr>
-    {% if r['client_company'] %}
     <tr>
-      <th>Entreprise</th><td colspan="3"><strong>{{ r['client_company'] }}</strong></td>
+      <th>Date</th><td>{{ r['received_date'] }}</td>
+      <th>Entreprise</th><td>{% if r['client_company'] %}<strong>{{ r['client_company'] }}</strong>{% else %}—{% endif %}</td>
     </tr>
-    {% endif %}
-    <tr><th>Date</th><td>{{ r['received_date'] }}</td><th></th><td></td></tr>
     <tr><th>Téléphone</th><td>{{ r['client_phone'] }}</td><th>Courriel</th><td>{{ r['client_email'] }}</td></tr>
     <tr><th>Adresse</th><td colspan="3" class="postal-address">
       {% if r['client_company'] %}<strong>{{ r['client_company'] }}</strong><br>{% endif %}
