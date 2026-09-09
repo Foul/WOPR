@@ -30,7 +30,12 @@
     <label class="wide">Entreprise<input id="client-company" name="company" autocomplete="organization"></label>
     <label>Date<input type="date" name="received_date" value="{{ today }}" required></label>
     <label class="wide">Adresse<input id="client-address" name="address_street"></label>
-    <label>Code postal<input id="client-postal-code" name="postal_code" inputmode="numeric"></label>
+    <label>Code postal
+      <input id="client-postal-code" name="postal_code" inputmode="numeric" maxlength="5"
+             data-postal-autocomplete
+             data-city-target="client-city"
+             data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}">
+    </label>
     <label>Ville<input id="client-city" name="city"></label>
     <label>Téléphone<input id="client-phone" name="phone"></label>
     <label>Courriel<input id="client-email" type="email" name="email"></label>
@@ -63,6 +68,7 @@
   </div>
 </form>
 
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 <script>
 (() => {
   const clients = {{ clients|tojson }};

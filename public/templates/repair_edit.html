@@ -31,11 +31,15 @@
     </label>
 
     <label>Code postal
-      <input name="postal_code" value="{{ r['client_postal_code'] or '' }}">
+      <input id="client-postal-code" name="postal_code" value="{{ r['client_postal_code'] or '' }}"
+             inputmode="numeric" maxlength="5"
+             data-postal-autocomplete
+             data-city-target="client-city"
+             data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}">
     </label>
 
     <label>Ville
-      <input name="city" value="{{ r['client_city'] or '' }}">
+      <input id="client-city" name="city" value="{{ r['client_city'] or '' }}">
     </label>
 
     <label>Téléphone
@@ -129,4 +133,5 @@
     <a class="button" href="{{ url_for('repair_detail', rid=r['id']) }}">Annuler</a>
   </div>
 </form>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 {% endblock %}
