@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WOPR - Documentation 2.3.203</title>
-<meta name="description" content="Documentation officielle WOPR 2.3.203 - Workflow d’Organisation et de Pilotage des Réparations.">
+<title>WOPR - Documentation 2.3.210</title>
+<meta name="description" content="Documentation officielle WOPR 2.3.210 - Workflow d’Organisation et de Pilotage des Réparations.">
 <style>
 :root{--bg:#f4f7fa;--ink:#12202e;--blue:#2187d5;--line:#d7e1e9;--muted:#607386}
 *{box-sizing:border-box}body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
@@ -27,67 +27,125 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <img src="images/wopr-logo.png" alt="WOPR">
 <h1>Documentation WOPR</h1>
 <p>Workflow d’Organisation et de Pilotage des Réparations</p>
-<span class="version">Version 2.3.203</span>
+<span class="version">Version 2.3.210</span>
 <div class="credit">Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.</div>
 </div></header>
-<main><h1>WOPR - Manuel utilisateur</h1>
-<p><strong>Version documentée : 2.3.203</strong></p>
-<p><strong>Workflow d’Organisation et de Pilotage des Réparations</strong></p>
-<p>Version documentée : <strong>2.3.194</strong></p>
-<p>Documentation mise à jour : <strong>7 septembre 2026</strong></p>
-<blockquote>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.</blockquote>
-<p>---</p>
-<h2>1. Présentation</h2>
-<p>WOPR signifie <strong>Workflow d’Organisation et de Pilotage des Réparations</strong>.</p>
-<p>WOPR est une application locale de gestion d’atelier destinée à centraliser le cycle complet d’une réparation : réception du matériel, suivi, client, devis, facture, encaissement, restitution, documents, contacts, achats, justificatifs et suivi administratif.</p>
-<p>Cette documentation correspond à la version <strong>2.3.194</strong> du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.</p>
-<blockquote>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.</blockquote>
-<h2>2. Principes importants</h2>
+<main><h1 id="wopr---manuel-utilisateur">WOPR - Manuel utilisateur</h1>
+<p><strong>Version documentée : 2.3.210</strong></p>
+<p><strong>Workflow d’Organisation et de Pilotage des
+Réparations</strong><br />
+Version documentée : <strong>2.3.210</strong><br />
+Documentation mise à jour : <strong>9 septembre 2026</strong></p>
+<blockquote>
+<p>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour
+l’assistance au développement, à la documentation et aux tests.</p>
+</blockquote>
+<hr />
+<h2 id="1-présentation">1. Présentation</h2>
+<p>WOPR signifie <strong>Workflow d’Organisation et de Pilotage des
+Réparations</strong>.</p>
+<p>WOPR est une application locale de gestion d’atelier destinée à
+centraliser le cycle complet d’une réparation : réception du matériel,
+suivi, client, devis, facture, encaissement, restitution, documents,
+contacts, achats, justificatifs et suivi administratif.</p>
+<p>Cette documentation correspond à la version <strong>2.3.210</strong>
+du paquet public fourni. Elle est volontairement indépendante de
+l’application : elle peut être publiée sur GitHub, sur un site web, ou
+distribuée sous forme de PDF.</p>
+<blockquote>
+<p>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour
+l’assistance au développement, à la documentation et aux tests.</p>
+</blockquote>
+<h2 id="2-principes-importants">2. Principes importants</h2>
 <ul>
-<li>WOPR fonctionne comme une application web locale, avec une interface dans le navigateur.</li>
-<li>Les données métier sont séparées du code public dans le dossier <code>private/</code>.</li>
-<li><strong>L’identité de l’entreprise est privée et configurable</strong> : nom commercial, responsable, coordonnées, informations légales, logo de facture et paramètres de messagerie ne sont pas codés en dur dans le cœur public.</li>
-<li>Un dépôt public ne doit jamais contenir <code>private/</code>, la base SQLite, les sauvegardes, les clés, les jetons, les signatures ou les documents clients.</li>
-<li>Les documents gérés par WOPR sont organisés dans la partie privée : Factures, Devis et Suivi de réparation.</li>
-<li>Le <strong>Suivi</strong> est la source de vérité pour le chiffre d’affaires et les montants comptables. Les PDF restent des justificatifs et ne sont pas relus pour recalculer le CA.</li>
-<li>Les fonctions optionnelles (Google Contacts, Abby, SMTP Proton, KDE Connect) peuvent être utilisées uniquement si elles sont configurées.</li>
+<li>WOPR fonctionne comme une application web locale, avec une interface
+dans le navigateur.</li>
+<li>Les données métier sont séparées du code public dans le dossier
+<code>private/</code>.</li>
+<li><strong>L’identité de l’entreprise est privée et
+configurable</strong> : nom commercial, responsable, coordonnées,
+informations légales, logo de facture et paramètres de messagerie ne
+sont pas codés en dur dans le cœur public.</li>
+<li>Un dépôt public ne doit jamais contenir <code>private/</code>, la
+base SQLite, les sauvegardes, les clés, les jetons, les signatures ou
+les documents clients.</li>
+<li>Les documents gérés par WOPR sont organisés dans la partie privée :
+Factures, Devis et Suivi de réparation.</li>
+<li>Le <strong>Suivi</strong> est la source de vérité pour le chiffre
+d’affaires et les montants comptables. Les PDF restent des justificatifs
+et ne sont pas relus pour recalculer le CA.</li>
+<li>Les fonctions optionnelles (Google Contacts, Abby, SMTP Proton, KDE
+Connect) peuvent être utilisées uniquement si elles sont
+configurées.</li>
 </ul>
-<h2>3. Démarrage et installation</h2>
-<h3>Prérequis</h3>
-<p>WOPR utilise Python 3 et les dépendances déclarées dans <code>public/requirements.txt</code>, notamment Flask, ReportLab, qrcode, cryptography et les bibliothèques Google nécessaires à la synchronisation des contacts.</p>
-<h3>Linux</h3>
-<p>Le paquet fournit <code>WOPR.desktop</code> et <code>Arreter-WOPR.desktop</code>. Le lanceur appelle les scripts de démarrage présents dans <code>public/scripts/</code> et ouvre l’application locale dans le navigateur.</p>
-<h3>Windows</h3>
-<p>Le paquet fournit <code>WOPR-Windows.cmd</code> / <code>WOPR-Windows.vbs</code> ainsi que leurs équivalents d’arrêt. Les lanceurs utilisent PowerShell et les scripts contenus dans <code>public/scripts/</code>. Le lancement affiche une fenêtre de progression pendant l’initialisation, bloque les doubles démarrages et ouvre le navigateur uniquement lorsque WOPR répond. Les messages et pages HTML utilisent explicitement UTF-8 sous Windows.</p>
-<h3>Accès local</h3>
-<p>Une fois WOPR démarré, l’interface est accessible localement, habituellement sur :</p>
+<h2 id="3-démarrage-et-installation">3. Démarrage et installation</h2>
+<h3 id="prérequis">Prérequis</h3>
+<p>WOPR utilise Python 3 et les dépendances déclarées dans
+<code>public/requirements.txt</code>, notamment Flask, ReportLab,
+qrcode, cryptography et les bibliothèques Google nécessaires à la
+synchronisation des contacts.</p>
+<h3 id="linux">Linux</h3>
+<p>Le paquet fournit <code>WOPR.desktop</code> et
+<code>Arreter-WOPR.desktop</code>. Le lanceur appelle les scripts de
+démarrage présents dans <code>public/scripts/</code> et ouvre
+l’application locale dans le navigateur.</p>
+<h3 id="windows">Windows</h3>
+<p>Le paquet fournit <code>WOPR-Windows.cmd</code> /
+<code>WOPR-Windows.vbs</code> ainsi que leurs équivalents d’arrêt. Les
+lanceurs utilisent PowerShell et les scripts contenus dans
+<code>public/scripts/</code>. Le lancement affiche une fenêtre de
+progression pendant l’initialisation, bloque les doubles démarrages et
+ouvre le navigateur uniquement lorsque WOPR répond. Les messages et
+pages HTML utilisent explicitement UTF-8 sous Windows.</p>
+<h3 id="accès-local">Accès local</h3>
+<p>Une fois WOPR démarré, l’interface est accessible localement,
+habituellement sur :</p>
 <p><code>http://127.0.0.1:5000</code></p>
-<p>Au premier lancement, WOPR initialise les éléments locaux nécessaires. Le PIN administrateur et la clé maître doivent être protégés avec soin.</p>
-<h2>4. Navigation générale</h2>
+<p>Au premier lancement, WOPR initialise les éléments locaux
+nécessaires. Le PIN administrateur et la clé maître doivent être
+protégés avec soin.</p>
+<h2 id="4-navigation-générale">4. Navigation générale</h2>
 <p>La barre principale regroupe les accès suivants :</p>
 <ul>
 <li><strong>Atelier</strong> : tableau de bord synthétique.</li>
-<li><strong>Recherche globale</strong> : champ directement accessible dans la barre supérieure.</li>
-<li><strong>Nouvelle réparation</strong> : création d’un nouveau dossier.</li>
-<li><strong>Suivi</strong> : vue chronologique et comptable des réparations.</li>
+<li><strong>Recherche globale</strong> : champ directement accessible
+dans la barre supérieure.</li>
+<li><strong>Suivi</strong> : vue chronologique et comptable des
+réparations.</li>
 <li><strong>Factures</strong> : liste et gestion des factures.</li>
-<li><strong>Facture simple</strong> : facture sans dossier de réparation classique.</li>
-<li><strong>Devis</strong> : création, modification et envoi des devis.</li>
-<li><strong>Clients</strong> : carnet clients, imports/exports et historique.</li>
+<li><strong>Facture simple</strong> : facture sans dossier de réparation
+classique.</li>
+<li><strong>Devis</strong> : création, modification et envoi des
+devis.</li>
+<li><strong>Clients</strong> : carnet clients, imports/exports et
+historique.</li>
 <li><strong>Achats / Ventes</strong> : opérations et justificatifs.</li>
-<li><strong>Antivirus</strong> : suivi des licences et renouvellements.</li>
+<li><strong>Antivirus</strong> : suivi des licences et
+renouvellements.</li>
 <li><strong>Abby</strong> : connexion et synchronisation avec Abby.</li>
-<li><strong>Sécurité</strong> : PIN, sauvegardes, SMTP, logo facture et portabilité.</li>
-<li><strong>CA / Déclarations</strong> : synthèse du chiffre d’affaires.</li>
+<li><strong>Sécurité</strong> : PIN, sauvegardes, SMTP, logo facture et
+portabilité.</li>
+<li><strong>CA / Déclarations</strong> : synthèse du chiffre
+d’affaires.</li>
 <li><strong>Verrouiller</strong> : retour en mode protégé.</li>
 </ul>
-<p>L’interface propose quatre thèmes mémorisés localement dans le navigateur : <strong>Normal</strong>, <strong>Dark</strong>, <strong>WOPR / Terminal</strong> et <strong>8-bit</strong>. Le thème Dark privilégie un affichage sombre moderne ; le thème WOPR / Terminal utilise une présentation noire et vert phosphore tout en conservant les couleurs métier importantes. La navigation reste responsive et se réorganise automatiquement sur les écrans portables ou avec une mise à l’échelle Windows élevée.</p>
-<h2>5. Tableau de bord Atelier</h2>
-<p>La page <strong>Atelier</strong> est la vue d’accueil opérationnelle. Elle permet de voir immédiatement :</p>
+<p>L’interface propose quatre thèmes mémorisés localement dans le
+navigateur : <strong>Normal</strong>, <strong>Dark</strong>,
+<strong>WOPR / Terminal</strong> et <strong>8-bit</strong>. Le thème
+Dark privilégie un affichage sombre moderne ; le thème WOPR / Terminal
+utilise une présentation noire et vert phosphore tout en conservant les
+couleurs métier importantes. La navigation reste responsive et se
+réorganise automatiquement sur les écrans portables ou avec une mise à
+l’échelle Windows élevée.</p>
+<h2 id="5-tableau-de-bord-atelier">5. Tableau de bord Atelier</h2>
+<p>La page <strong>Atelier</strong> est la vue d’accueil opérationnelle.
+Elle contient aussi l’accès <strong>Nouvelle réparation</strong> et
+permet de voir immédiatement :</p>
 <ul>
 <li>le nombre de dossiers en cours ;</li>
 <li>les réparations en attente de pièce ;</li>
-<li>les dossiers encore actifs reçus depuis 14 jours ou plus, avec leur ancienneté ;</li>
+<li>les dossiers encore actifs reçus depuis 14 jours ou plus, avec leur
+ancienneté ;</li>
 <li>les matériels terminés à restituer ;</li>
 <li>les factures impayées et leur montant ;</li>
 <li>le chiffre d’affaires encaissé du mois ;</li>
@@ -97,10 +155,23 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>les derniers dossiers modifiés ;</li>
 <li>les dossiers actifs depuis plus de 14 jours à relancer.</li>
 </ul>
-<p>Les cartes servent de raccourcis vers les vues détaillées correspondantes.</p>
-<h2>6. Nouvelle réparation et dossier atelier</h2>
-<h3>Création</h3>
-<p><strong>Nouvelle réparation</strong> crée un dossier client/atelier. Selon les informations disponibles, WOPR peut associer un client existant ou créer les éléments nécessaires.</p>
+<p>Les cartes servent de raccourcis vers les vues détaillées
+correspondantes.</p>
+<h2 id="6-nouvelle-réparation-et-dossier-atelier">6. Nouvelle réparation
+et dossier atelier</h2>
+<h3 id="création">Création</h3>
+<p><strong>Nouvelle réparation</strong> crée un dossier client/atelier.
+Un client existant peut être recherché en tapant le début de son prénom,
+de son nom ou de son entreprise ; seules les correspondances utiles sont
+proposées et la sélection remplit automatiquement ses coordonnées. Sans
+sélection, WOPR conserve la détection historique par e-mail ou téléphone
+et peut créer une nouvelle fiche.</p>
+<p>Le code postal peut compléter automatiquement la ville depuis une
+base locale issue de la base postale officielle et des libellés INSEE
+2026. Lorsqu’un code postal correspond à plusieurs communes, WOPR
+propose une liste de choix. La saisie manuelle reste toujours possible.
+Cette aide fonctionne également dans <strong>Modifier le
+suivi</strong>.</p>
 <p>Le dossier peut contenir notamment :</p>
 <ul>
 <li>identité et coordonnées du client ;</li>
@@ -115,12 +186,18 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>suivi de statut ;</li>
 <li>signature client et documents PDF associés.</li>
 </ul>
-<h3>Statuts atelier</h3>
-<p>WOPR distingue les états de travail tels que Reçu, Diagnostic, En attente accord, En attente pièce, En réparation, Terminé et Restitué. Les vues Atelier et Suivi utilisent ces états pour filtrer et attirer l’attention sur les dossiers importants.</p>
-<h3>Fiche réparation</h3>
-<p>La fiche permet de consulter le dossier, modifier le suivi, facturer, modifier une facture existante, générer/envoyer le suivi et communiquer avec le client.</p>
-<h2>7. Suivi des réparations</h2>
-<p>Le <strong>Suivi</strong> est la vue centrale des réparations. Il présente les dossiers par année et par mois et permet notamment :</p>
+<h3 id="statuts-atelier">Statuts atelier</h3>
+<p>WOPR distingue les états de travail tels que Reçu, Diagnostic, En
+attente accord, En attente pièce, En réparation, Terminé et Restitué.
+Les vues Atelier et Suivi utilisent ces états pour filtrer et attirer
+l’attention sur les dossiers importants.</p>
+<h3 id="fiche-réparation">Fiche réparation</h3>
+<p>La fiche permet de consulter le dossier, modifier le suivi, facturer,
+modifier une facture existante, générer/envoyer le suivi et communiquer
+avec le client.</p>
+<h2 id="7-suivi-des-réparations">7. Suivi des réparations</h2>
+<p>Le <strong>Suivi</strong> est la vue centrale des réparations. Il
+présente les dossiers par année et par mois et permet notamment :</p>
 <ul>
 <li>de rechercher un client ou un dossier ;</li>
 <li>de filtrer les matériels à restituer ;</li>
@@ -131,21 +208,41 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>de suivre l’encaissement réel ;</li>
 <li>d’exporter le suivi en CSV.</li>
 </ul>
-<p>Les couleurs ont un rôle métier : une ligne ou cellule peut signaler une facturation/affectation comptable particulière ou un règlement en attente.</p>
-<p><strong>Règle comptable essentielle :</strong> le CA officiel provient des champs comptables du Suivi. Les PDF ne sont pas analysés pour produire les montants.</p>
-<h2>8. Facturation</h2>
-<h3>Facture liée à une réparation</h3>
-<p>Depuis un dossier, WOPR permet de préparer la facture avec des lignes de prestation et de marchandise, puis de générer le PDF.</p>
-<p>Une facture existante peut être modifiée sans recréer un nouveau dossier de réparation.</p>
-<h3>Facture simple</h3>
-<p>La page <strong>Facture simple</strong> sert à établir une facture sans passer par un dossier de réparation complet. Elle accepte des lignes de prestation et de marchandise.</p>
-<h3>Liste des factures</h3>
-<p>La page <strong>Factures</strong> propose une recherche, l’ouverture d’une facture, sa modification et son envoi.</p>
-<h3>PDF multilingues</h3>
-<p>Les PDF de facture et de prise en charge peuvent être générés dans plusieurs langues : français, anglais, ukrainien, espagnol, allemand et italien. L’interface WOPR reste en français.</p>
-<h3>Envoi</h3>
-<p>Si le SMTP est configuré, WOPR peut préparer et envoyer les factures par e-mail. Un lien/message peut également être préparé pour un envoi au client.</p>
-<h2>9. Devis</h2>
+<p>Les couleurs ont un rôle métier : une ligne ou cellule peut signaler
+une facturation/affectation comptable particulière ou un règlement en
+attente.</p>
+<p><strong>Règle comptable essentielle :</strong> le CA officiel
+provient des champs comptables du Suivi. Les PDF ne sont pas analysés
+pour produire les montants.</p>
+<h2 id="8-facturation">8. Facturation</h2>
+<h3 id="facture-liée-à-une-réparation">Facture liée à une
+réparation</h3>
+<p>Depuis un dossier, WOPR permet de préparer la facture avec des lignes
+de prestation et de marchandise, puis de générer le PDF.</p>
+<p>Une facture existante peut être modifiée sans recréer un nouveau
+dossier de réparation. La <strong>date de facture</strong> est
+modifiable depuis l’écran <strong>Facture / Modifier facture</strong> ;
+le numéro de facture reste indépendant de cette date.</p>
+<p>Les <strong>Remarques</strong> restent volontairement rattachées au
+suivi de réparation et ne font pas partie de l’éditeur ni du PDF de
+facture. Modifier une facture ne doit donc pas effacer les remarques du
+suivi.</p>
+<h3 id="facture-simple">Facture simple</h3>
+<p>La page <strong>Facture simple</strong> sert à établir une facture
+sans passer par un dossier de réparation complet. Elle accepte des
+lignes de prestation et de marchandise.</p>
+<h3 id="liste-des-factures">Liste des factures</h3>
+<p>La page <strong>Factures</strong> propose une recherche, l’ouverture
+d’une facture, sa modification et son envoi.</p>
+<h3 id="pdf-multilingues">PDF multilingues</h3>
+<p>Les PDF de facture et de prise en charge peuvent être générés dans
+plusieurs langues : français, anglais, ukrainien, espagnol, allemand et
+italien. L’interface WOPR reste en français.</p>
+<h3 id="envoi">Envoi</h3>
+<p>Si le SMTP est configuré, WOPR peut préparer et envoyer les factures
+par e-mail. Un lien/message peut également être préparé pour un envoi au
+client.</p>
+<h2 id="9-devis">9. Devis</h2>
 <p>La section <strong>Devis</strong> permet :</p>
 <ul>
 <li>de créer un devis ;</li>
@@ -156,16 +253,28 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>d’envoyer le devis par e-mail ;</li>
 <li>de supprimer un devis.</li>
 </ul>
-<p>Les devis sont conservés séparément des factures et restent rattachables au client concerné.</p>
-<h3>Devis historiques</h3>
-<p>L&#x27;historique client peut retrouver les anciens devis créés avant la liaison systématique par identifiant client. Le rattachement automatique n&#x27;est effectué que lorsque la correspondance avec la fiche client est non ambiguë.</p>
-<h2>10. Clients et contacts</h2>
-<p>La page <strong>Clients</strong> centralise les coordonnées et les informations de contact.</p>
+<p>Les devis sont conservés séparément des factures et restent
+rattachables au client concerné.</p>
+<h3 id="devis-historiques">Devis historiques</h3>
+<p>L'historique client peut retrouver les anciens devis créés avant la
+liaison systématique par identifiant client. Le rattachement automatique
+n'est effectué que lorsque la correspondance avec la fiche client est
+non ambiguë.</p>
+<h2 id="10-clients-et-contacts">10. Clients et contacts</h2>
+<p>La page <strong>Clients</strong> centralise les coordonnées et les
+informations de contact.</p>
 <p>Fonctions disponibles :</p>
 <ul>
 <li>recherche de clients ;</li>
-<li>modification et suppression d’une fiche ;</li>
+<li>modification d’une fiche ;</li>
 <li>gestion personne ou entreprise ;</li>
+<li>archivage d’un client avec conservation de ses suivis, factures et
+devis ;</li>
+<li>accès dédié aux <strong>Clients archivés</strong>, avec restauration
+possible ;</li>
+<li>suppression définitive volontaire d’une fiche de test ou créée par
+erreur, y compris avec son historique, après confirmation renforcée
+;</li>
 <li>notes client ;</li>
 <li>historique complet des réparations, factures et devis ;</li>
 <li>détection/fusion de doublons sûrs ;</li>
@@ -177,28 +286,52 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>connexion et synchronisation Google Contacts ;</li>
 <li>préparation de messages client.</li>
 </ul>
-<p>L’historique client regroupe les éléments utiles pour retrouver rapidement dossiers, factures, devis et situations à surveiller.</p>
+<p>Les fiches client peuvent comporter un <strong>nom
+d’entreprise</strong> en plus du contact personne. Cette information est
+reprise dans le suivi et dans les documents concernés lorsqu’elle est
+renseignée.</p>
+<p>Un client archivé n’est plus proposé dans les sélecteurs de nouveaux
+dossiers ni dans les synchronisations courantes. L’archivage est le
+comportement normal pour un vrai client ayant un historique ; la
+suppression totale est réservée aux données de test ou aux erreurs de
+saisie.</p>
+<p>L’historique client regroupe les éléments utiles pour retrouver
+rapidement dossiers, factures, devis et situations à surveiller.</p>
 <p>La fiche d’historique affiche désormais immédiatement :</p>
 <ul>
 <li>le nombre de dossiers, factures et devis ;</li>
 <li>la dernière intervention réelle connue ;</li>
-<li>un accès direct au dernier dossier, à la dernière facture et au dernier devis ;</li>
+<li>un accès direct au dernier dossier, à la dernière facture et au
+dernier devis ;</li>
 <li>les montants cumulés et les éventuels éléments à surveiller.</li>
 </ul>
-<h2>11. Recherche globale</h2>
-<p>La page <strong>Recherche</strong> permet une recherche transversale dans plusieurs types de données :</p>
+<h2 id="11-recherche-globale">11. Recherche globale</h2>
+<p>La page <strong>Recherche</strong> permet une recherche transversale
+dans plusieurs types de données :</p>
 <ul>
 <li>clients ;</li>
 <li>réparations ;</li>
 <li>achats / ventes ;</li>
 <li>devis.</li>
 </ul>
-<p>Les résultats proposent des raccourcis vers la fiche ou la page concernée. Cette vue est destinée à retrouver rapidement une information sans modifier les données directement.</p>
-<h3>Recherche directe depuis la barre supérieure</h3>
-<p>La recherche globale peut être lancée directement depuis la barre supérieure. Elle accepte plusieurs mots répartis entre différents champs et ignore les différences d&#x27;accents, de casse et de ponctuation. Par exemple, <code>ecole martin</code> peut retrouver <code>École Martin</code>.</p>
-<p>La recherche porte notamment sur les clients, téléphones, courriels, numéros de dossier, appareils, problèmes, diagnostics, systèmes, statuts, accessoires, factures, devis, lignes de devis et opérations Achats/Ventes.</p>
-<h2>12. Achats / Ventes et justificatifs</h2>
-<p>La section <strong>Achats / Ventes</strong> enregistre les opérations par année et fournit des totaux synthétiques.</p>
+<p>Les résultats proposent des raccourcis vers la fiche ou la page
+concernée. Cette vue est destinée à retrouver rapidement une information
+sans modifier les données directement.</p>
+<h3 id="recherche-directe-depuis-la-barre-supérieure">Recherche directe
+depuis la barre supérieure</h3>
+<p>La recherche globale peut être lancée directement depuis la barre
+supérieure. Elle accepte plusieurs mots répartis entre différents champs
+et ignore les différences d'accents, de casse et de ponctuation. Par
+exemple, <code>ecole martin</code> peut retrouver
+<code>École Martin</code>.</p>
+<p>La recherche porte notamment sur les clients, téléphones, courriels,
+numéros de dossier, appareils, problèmes, diagnostics, systèmes,
+statuts, accessoires, factures, devis, lignes de devis et opérations
+Achats/Ventes.</p>
+<h2 id="12-achats--ventes-et-justificatifs">12. Achats / Ventes et
+justificatifs</h2>
+<p>La section <strong>Achats / Ventes</strong> enregistre les opérations
+par année et fournit des totaux synthétiques.</p>
 <p>Elle permet :</p>
 <ul>
 <li>d’ajouter une opération ;</li>
@@ -211,9 +344,14 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>de contrôler les liens de justificatifs cassés ;</li>
 <li>de consulter les archives annuelles.</li>
 </ul>
-<p>Les factures fournisseurs peuvent être PDF, XML ou image selon les cas. Les fichiers déjà classés sont conservés et WOPR privilégie les rattachements sûrs plutôt que les doublons ou les rapprochements approximatifs.</p>
-<p><strong>Important :</strong> les chiffres de vente et le CA affichés officiellement viennent du Suivi. Les justificatifs ne modifient jamais le CA.</p>
-<h2>13. Abby</h2>
+<p>Les factures fournisseurs peuvent être PDF, XML ou image selon les
+cas. Les fichiers déjà classés sont conservés et WOPR privilégie les
+rattachements sûrs plutôt que les doublons ou les rapprochements
+approximatifs.</p>
+<p><strong>Important :</strong> les chiffres de vente et le CA affichés
+officiellement viennent du Suivi. Les justificatifs ne modifient jamais
+le CA.</p>
+<h2 id="13-abby">13. Abby</h2>
 <p>L’intégration <strong>Abby</strong> est optionnelle.</p>
 <p>Elle permet notamment :</p>
 <ul>
@@ -221,12 +359,15 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>de tester la connexion ;</li>
 <li>de synchroniser les clients vers Abby ;</li>
 <li>de consulter les erreurs récentes ;</li>
-<li>d’importer des factures fournisseurs électroniques XML dans Achats / Ventes ;</li>
+<li>d’importer des factures fournisseurs électroniques XML dans Achats /
+Ventes ;</li>
 <li>de détecter les doublons lors de l’import.</li>
 </ul>
-<p>La clé API est un secret local. Elle ne doit jamais être publiée dans GitHub, dans la documentation ou dans une archive publique.</p>
-<h2>14. Antivirus</h2>
-<p>La page <strong>Antivirus</strong> sert de petit registre de licences/abonnements.</p>
+<p>La clé API est un secret local. Elle ne doit jamais être publiée dans
+GitHub, dans la documentation ou dans une archive publique.</p>
+<h2 id="14-antivirus">14. Antivirus</h2>
+<p>La page <strong>Antivirus</strong> sert de petit registre de
+licences/abonnements.</p>
 <p>Pour chaque ligne, WOPR peut mémoriser :</p>
 <ul>
 <li>le client ;</li>
@@ -236,13 +377,22 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>le numéro de facture ;</li>
 <li>une information de licence ou remarque.</li>
 </ul>
-<p>Des compteurs indiquent les licences valides, celles à renouveler dans les 30 jours et celles expirées.</p>
-<p>L’édition se fait <strong>directement dans la ligne</strong> : <strong>✏️ Éditer</strong> active les champs, <strong>✓ Valider</strong> enregistre, <strong>Annuler</strong> abandonne les changements et <strong>Supprimer</strong> efface la ligne après confirmation.</p>
-<h2>15. CA / Déclarations</h2>
-<p>La page <strong>CA / Déclarations</strong> présente les montants nécessaires au suivi du chiffre d’affaires et aux déclarations.</p>
-<p>Les valeurs automatiques proviennent du Suivi des réparations et des champs comptables associés. La page peut permettre des ajustements/valeurs enregistrées selon l’année, sans utiliser les PDF comme source de calcul.</p>
-<p>Pour éviter toute incohérence, le principe à retenir est simple : <strong>un seul référentiel de CA = le Suivi</strong>.</p>
-<h2>16. Communication client</h2>
+<p>Des compteurs indiquent les licences valides, celles à renouveler
+dans les 30 jours et celles expirées.</p>
+<p>L’édition se fait <strong>directement dans la ligne</strong> :
+<strong>✏️ Éditer</strong> active les champs, <strong>✓ Valider</strong>
+enregistre, <strong>Annuler</strong> abandonne les changements et
+<strong>Supprimer</strong> efface la ligne après confirmation.</p>
+<h2 id="15-ca--déclarations">15. CA / Déclarations</h2>
+<p>La page <strong>CA / Déclarations</strong> présente les montants
+nécessaires au suivi du chiffre d’affaires et aux déclarations.</p>
+<p>Les valeurs automatiques proviennent du Suivi des réparations et des
+champs comptables associés. La page peut permettre des
+ajustements/valeurs enregistrées selon l’année, sans utiliser les PDF
+comme source de calcul.</p>
+<p>Pour éviter toute incohérence, le principe à retenir est simple :
+<strong>un seul référentiel de CA = le Suivi</strong>.</p>
+<h2 id="16-communication-client">16. Communication client</h2>
 <p>WOPR peut préparer différents messages à destination du client :</p>
 <ul>
 <li>suivi de réparation ;</li>
@@ -256,27 +406,41 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>KDE Connect pour l’envoi de SMS depuis un appareil compatible ;</li>
 <li>un message prêt à copier/coller vers un autre service.</li>
 </ul>
-<p>Les fonctions externes restent optionnelles : WOPR reste utilisable sans elles.</p>
-<h2>17. Sécurité locale</h2>
-<p>La page <strong>Sécurité</strong> regroupe les éléments sensibles de l’installation.</p>
-<h3>PIN administrateur</h3>
-<p>Le PIN protège l’accès atelier. Il est stocké sous forme de hash et la session d’administration est limitée dans le temps.</p>
-<h3>Clé maître</h3>
-<p>Les secrets locaux sont chiffrés. La clé maître doit être conservée avec soin : sans elle, les secrets chiffrés ne sont plus exploitables.</p>
-<h3>Mot de passe système des appareils</h3>
-<p>Lorsqu’un mot de passe est stocké pour une réparation, il n’est pas affiché directement dans le HTML. Sa révélation passe par une action protégée.</p>
-<h3>Sauvegardes</h3>
-<p>WOPR crée une sauvegarde SQLite automatique quotidienne et conserve les sauvegardes récentes. Une sauvegarde manuelle peut également être déclenchée.</p>
-<h3>SMTP</h3>
+<p>Les fonctions externes restent optionnelles : WOPR reste utilisable
+sans elles.</p>
+<h2 id="17-sécurité-locale">17. Sécurité locale</h2>
+<p>La page <strong>Sécurité</strong> regroupe les éléments sensibles de
+l’installation.</p>
+<h3 id="pin-administrateur">PIN administrateur</h3>
+<p>Le PIN protège l’accès atelier. Il est stocké sous forme de hash et
+la session d’administration est limitée dans le temps.</p>
+<h3 id="clé-maître">Clé maître</h3>
+<p>Les secrets locaux sont chiffrés. La clé maître doit être conservée
+avec soin : sans elle, les secrets chiffrés ne sont plus
+exploitables.</p>
+<h3 id="mot-de-passe-système-des-appareils">Mot de passe système des
+appareils</h3>
+<p>Lorsqu’un mot de passe est stocké pour une réparation, il n’est pas
+affiché directement dans le HTML. Sa révélation passe par une action
+protégée.</p>
+<h3 id="sauvegardes">Sauvegardes</h3>
+<p>WOPR crée une sauvegarde SQLite automatique quotidienne et conserve
+les sauvegardes récentes. Une sauvegarde manuelle peut également être
+déclenchée.</p>
+<h3 id="smtp">SMTP</h3>
 <p>Les paramètres Proton SMTP et le jeton restent locaux.</p>
-<h3>Logo des factures</h3>
-<p>Le logo d’entreprise choisi par l’utilisateur est enregistré dans <code>private/assets/</code>, jamais dans la partie publique. Il peut être remplacé ou supprimé depuis Sécurité.</p>
-<h3>Portabilité</h3>
-<p>Le diagnostic de portabilité contrôle notamment la présence du cœur public, la structure privée, les droits d’écriture et les lanceurs.</p>
-<h2>18. Organisation des données</h2>
-<p>Dans une installation complète, WOPR sépare le code et les données.</p>
+<h3 id="logo-des-factures">Logo des factures</h3>
+<p>Le logo d’entreprise choisi par l’utilisateur est enregistré dans
+<code>private/assets/</code>, jamais dans la partie publique. Il peut
+être remplacé ou supprimé depuis Sécurité.</p>
+<h3 id="portabilité">Portabilité</h3>
+<p>Le diagnostic de portabilité contrôle notamment la présence du cœur
+public, la structure privée, les droits d’écriture et les lanceurs.</p>
+<h2 id="18-organisation-des-données">18. Organisation des données</h2>
+<p>Dans une installation complète, WOPR sépare le code et les
+données.</p>
 <p>Structure simplifiée :</p>
-<pre><code>WOPR/
+<pre class="text"><code>WOPR/
 ├── WOPR.desktop
 ├── Arreter-WOPR.desktop
 ├── WOPR-Windows.cmd / .vbs
@@ -296,10 +460,17 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
     ├── signatures/
     ├── assets/
     └── seeds/</code></pre>
-<p>Le nom interne de certains fichiers ou variables peut conserver une ancienne terminologie pour compatibilité. Cela ne signifie pas que ces éléments doivent être publiés.</p>
-<h2>19. Publication sur GitHub</h2>
-<p>Avant toute publication, vérifier impérativement qu’aucune donnée privée n’est incluse. Le cœur public doit rester <strong>générique</strong> : les valeurs d’entreprise réelles proviennent de la configuration locale et <code>Foul-Fix</code> n’apparaît publiquement que dans le crédit de développement ou dans une compatibilité technique explicitement historique.</p>
-<h3>À publier</h3>
+<p>Le nom interne de certains fichiers ou variables peut conserver une
+ancienne terminologie pour compatibilité. Cela ne signifie pas que ces
+éléments doivent être publiés.</p>
+<h2 id="19-publication-sur-github">19. Publication sur GitHub</h2>
+<p>Avant toute publication, vérifier impérativement qu’aucune donnée
+privée n’est incluse. Le cœur public doit rester
+<strong>générique</strong> : les valeurs d’entreprise réelles
+proviennent de la configuration locale et <code>Foul-Fix</code>
+n’apparaît publiquement que dans le crédit de développement ou dans une
+compatibilité technique explicitement historique.</p>
+<h3 id="à-publier">À publier</h3>
 <ul>
 <li>le code public WOPR ;</li>
 <li>les templates et ressources génériques ;</li>
@@ -308,7 +479,7 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>la documentation publique ;</li>
 <li>un <code>.gitignore</code> adapté.</li>
 </ul>
-<h3>À ne jamais publier</h3>
+<h3 id="à-ne-jamais-publier">À ne jamais publier</h3>
 <ul>
 <li><code>private/</code> ;</li>
 <li><code>*.db</code> et sauvegardes SQLite ;</li>
@@ -318,13 +489,19 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li>signatures ;</li>
 <li>factures, devis, suivis réels ;</li>
 <li>exports clients ;</li>
-<li>captures contenant noms, téléphones, adresses, montants privés ou autres données réelles.</li>
+<li>captures contenant noms, téléphones, adresses, montants privés ou
+autres données réelles.</li>
 </ul>
-<p>Le pack fourni inclut un <code>.gitignore</code> recommandé pour compléter celui de l’application.</p>
-<h3>Licence</h3>
-<p>Aucune licence logicielle n’est choisie automatiquement par cette documentation. Avant de rendre le dépôt réellement open source, ajouter la licence correspondant au choix de Foul-Fix.</p>
-<h2>20. Hébergement de la documentation sur un site</h2>
-<p>Le dossier <code>docs/</code> fourni est statique et peut être hébergé indépendamment de WOPR.</p>
+<p>Le pack fourni inclut un <code>.gitignore</code> recommandé pour
+compléter celui de l’application.</p>
+<h3 id="licence">Licence</h3>
+<p>Aucune licence logicielle n’est choisie automatiquement par cette
+documentation. Avant de rendre le dépôt réellement open source, ajouter
+la licence correspondant au choix de Foul-Fix.</p>
+<h2 id="20-hébergement-de-la-documentation-sur-un-site">20. Hébergement
+de la documentation sur un site</h2>
+<p>Le dossier <code>docs/</code> fourni est statique et peut être
+hébergé indépendamment de WOPR.</p>
 <p>Exemple :</p>
 <p><code>https://ton-site.example/wopr/</code></p>
 <p>Il suffit de déposer dans ce répertoire :</p>
@@ -333,38 +510,61 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <li><code>WOPR-Manuel.pdf</code> ;</li>
 <li>le dossier <code>images/</code>.</li>
 </ul>
-<p>Aucun Python, Flask ou accès à la base WOPR n’est nécessaire pour afficher la documentation.</p>
-<p>La même documentation peut être utilisée avec GitHub Pages : le fichier HTML est autonome et ne dépend d’aucun service externe.</p>
-<h2>21. Politique de mise à jour de la documentation</h2>
-<p>À partir de cette version, une modification fonctionnelle de WOPR doit entraîner la vérification de la documentation.</p>
+<p>Aucun Python, Flask ou accès à la base WOPR n’est nécessaire pour
+afficher la documentation.</p>
+<p>La même documentation peut être utilisée avec GitHub Pages : le
+fichier HTML est autonome et ne dépend d’aucun service externe.</p>
+<h2 id="21-politique-de-mise-à-jour-de-la-documentation">21. Politique
+de mise à jour de la documentation</h2>
+<p>À partir de cette version, une modification fonctionnelle de WOPR
+doit entraîner la vérification de la documentation.</p>
 <p>Pour chaque correction ou évolution :</p>
-<ol>
+<ol type="1">
 <li>identifier la page ou la fonction concernée ;</li>
 <li>corriger <code>docs/manuel.md</code> ;</li>
 <li>corriger <code>docs/index.html</code> ;</li>
-<li>régénérer <code>docs/WOPR-Manuel.pdf</code> si l’information est visible pour l’utilisateur ;</li>
+<li>régénérer <code>docs/WOPR-Manuel.pdf</code> si l’information est
+visible pour l’utilisateur ;</li>
 <li>ajouter une ligne dans <code>docs/CHANGELOG-DOC.md</code> ;</li>
 <li>vérifier qu’aucune donnée privée n’a été introduite.</li>
 </ol>
-<p>Les changements purement internes sans impact utilisateur peuvent être consignés dans le changelog sans alourdir le manuel.</p>
-<h2>22. Dépannage rapide</h2>
-<h3>WOPR ne démarre pas</h3>
+<p>Les changements purement internes sans impact utilisateur peuvent
+être consignés dans le changelog sans alourdir le manuel.</p>
+<h2 id="22-dépannage-rapide">22. Dépannage rapide</h2>
+<h3 id="wopr-ne-démarre-pas">WOPR ne démarre pas</h3>
 <ul>
 <li>vérifier que Python 3 est installé ;</li>
-<li>vérifier que les dépendances de <code>requirements.txt</code> sont installées ;</li>
+<li>vérifier que les dépendances de <code>requirements.txt</code> sont
+installées ;</li>
 <li>utiliser le lanceur correspondant au système ;</li>
 <li>consulter les messages du script de démarrage si nécessaire.</li>
 </ul>
-<h3>Une fonction Google/Abby/SMTP ne marche pas</h3>
-<p>Ces intégrations sont optionnelles et nécessitent leur propre configuration. Vérifier d’abord les identifiants locaux et le test de connexion de la page concernée.</p>
-<h3>Un justificatif ne s’ouvre plus</h3>
-<p>Utiliser <strong>Achats / Ventes → Vérifier les justificatifs liés</strong> pour identifier les liens cassés. Éviter de renommer/déplacer des fichiers en dehors de WOPR sans mettre à jour leur rattachement.</p>
-<h3>Le CA paraît incohérent</h3>
-<p>Contrôler les données du <strong>Suivi</strong> et les dates d’encaissement. Ne pas essayer de corriger le CA en modifiant un PDF.</p>
-<h3>Perte de clé maître</h3>
-<p>Une clé maître perdue ne peut pas être reconstituée à partir de la documentation. Conserver une sauvegarde sécurisée de cette clé en dehors du dépôt public.</p>
-<h2>23. Crédit</h2>
-<p><strong>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.</strong></p>
-<p>WOPR est développé comme un outil métier de terrain, avec une priorité donnée à la simplicité d’utilisation, à la portabilité et à la conservation locale des données sensibles.</p></main>
-<div class="foot">WOPR 2.3.203 - Documentation officielle</div>
+<h3 id="une-fonction-googleabbysmtp-ne-marche-pas">Une fonction
+Google/Abby/SMTP ne marche pas</h3>
+<p>Ces intégrations sont optionnelles et nécessitent leur propre
+configuration. Vérifier d’abord les identifiants locaux et le test de
+connexion de la page concernée.</p>
+<h3 id="un-justificatif-ne-souvre-plus">Un justificatif ne s’ouvre
+plus</h3>
+<p>Utiliser <strong>Achats / Ventes → Vérifier les justificatifs
+liés</strong> pour identifier les liens cassés. Éviter de
+renommer/déplacer des fichiers en dehors de WOPR sans mettre à jour leur
+rattachement.</p>
+<h3 id="le-ca-paraît-incohérent">Le CA paraît incohérent</h3>
+<p>Contrôler les données du <strong>Suivi</strong> et les dates
+d’encaissement. Ne pas essayer de corriger le CA en modifiant un
+PDF.</p>
+<h3 id="perte-de-clé-maître">Perte de clé maître</h3>
+<p>Une clé maître perdue ne peut pas être reconstituée à partir de la
+documentation. Conserver une sauvegarde sécurisée de cette clé en dehors
+du dépôt public.</p>
+<h2 id="23-crédit">23. Crédit</h2>
+<p><strong>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour
+l’assistance au développement, à la documentation et aux
+tests.</strong></p>
+<p>WOPR est développé comme un outil métier de terrain, avec une
+priorité donnée à la simplicité d’utilisation, à la portabilité et à la
+conservation locale des données sensibles.</p>
+</main>
+<div class="foot">WOPR 2.3.210 - Documentation officielle</div>
 </body></html>

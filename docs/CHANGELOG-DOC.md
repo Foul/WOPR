@@ -1,5 +1,42 @@
 # Changelog de la documentation
 
+## 2.3.210 - 9 septembre 2026 - release
+- Ajout de l’autocomplétion locale des villes par code postal dans la création et la modification d’un suivi.
+- Utilisation de la base postale officielle avec les libellés de communes INSEE 2026 correctement accentués et capitalisés.
+- Lorsqu’un code postal dessert plusieurs communes, WOPR propose la liste correspondante sans choix arbitraire.
+- Documentation HTML et PDF alignée sur la version 2.3.210.
+
+## 2.3.209 - 9 septembre 2026 - gestion des archives clients
+- Ajout d’un accès visible aux **Clients archivés** depuis la page Clients.
+- Ajout d’un retour direct vers les clients actifs depuis les archives.
+- La suppression définitive d’un client archivé est toujours accessible après confirmation renforcée.
+
+## 2.3.208 - 9 septembre 2026 - suppression volontaire des fiches de test
+- Ajout d’une suppression définitive réservée aux fiches de test ou créées par erreur.
+- La suppression totale peut effacer le client et son historique local associé après sauvegarde et confirmation explicite.
+- L’archivage reste le comportement normal pour un vrai client ayant un historique.
+
+## 2.3.207 - 9 septembre 2026 - recherche client et remarques du suivi
+- Recherche progressive d’un client existant lors de la création d’un suivi à partir du début du prénom, du nom ou de l’entreprise.
+- La liste n’affiche que les correspondances utiles au lieu de présenter tout le carnet clients.
+- Les remarques restent réservées au suivi de réparation et sont retirées de l’éditeur de facture.
+- Modifier une facture conserve les remarques déjà présentes dans le suivi.
+
+## 2.3.206 - 9 septembre 2026 - sélection d’un client existant
+- Ajout de la sélection explicite d’un client existant lors de la création d’un suivi.
+- Les coordonnées de la fiche sélectionnée sont reprises automatiquement.
+- Les clients archivés ne sont pas proposés.
+
+## 2.3.205 - 9 septembre 2026 - archivage clients
+- Les clients possédant un historique peuvent être archivés sans supprimer leurs suivis, factures ou devis.
+- Un client archivé peut être restauré.
+- Les clients archivés sont exclus des sélections et synchronisations courantes.
+
+## 2.3.204 - 9 septembre 2026 - entreprise et date de facture
+- Prise en charge du nom d’entreprise dans la création et la modification d’un suivi, ainsi que dans les documents concernés.
+- Affichage compact de l’entreprise dans la fiche de suivi.
+- La date de facture est désormais modifiable depuis **Facture / Modifier facture** sans modifier automatiquement le numéro de facture.
+
 ## 2.3.203 - 9 septembre 2026 - release
 - Recherche globale directement accessible depuis la barre supérieure.
 - Recherche multi-mots, insensible aux accents, à la casse et à la ponctuation.

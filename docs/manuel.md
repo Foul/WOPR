@@ -1,10 +1,10 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.3.203**
+**Version documentée : 2.3.210**
 
-**Workflow d’Organisation et de Pilotage des Réparations**  
-Version documentée : **2.3.194**  
-Documentation mise à jour : **7 septembre 2026**
+**Workflow d’Organisation et de Pilotage des Réparations**
+Version documentée : **2.3.210**
+Documentation mise à jour : **9 septembre 2026**
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -16,7 +16,7 @@ WOPR signifie **Workflow d’Organisation et de Pilotage des Réparations**.
 
 WOPR est une application locale de gestion d’atelier destinée à centraliser le cycle complet d’une réparation : réception du matériel, suivi, client, devis, facture, encaissement, restitution, documents, contacts, achats, justificatifs et suivi administratif.
 
-Cette documentation correspond à la version **2.3.194** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
+Cette documentation correspond à la version **2.3.210** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -58,7 +58,6 @@ La barre principale regroupe les accès suivants :
 
 - **Atelier** : tableau de bord synthétique.
 - **Recherche globale** : champ directement accessible dans la barre supérieure.
-- **Nouvelle réparation** : création d’un nouveau dossier.
 - **Suivi** : vue chronologique et comptable des réparations.
 - **Factures** : liste et gestion des factures.
 - **Facture simple** : facture sans dossier de réparation classique.
@@ -75,7 +74,7 @@ L’interface propose quatre thèmes mémorisés localement dans le navigateur :
 
 ## 5. Tableau de bord Atelier
 
-La page **Atelier** est la vue d’accueil opérationnelle. Elle permet de voir immédiatement :
+La page **Atelier** est la vue d’accueil opérationnelle. Elle contient aussi l’accès **Nouvelle réparation** et permet de voir immédiatement :
 
 - le nombre de dossiers en cours ;
 - les réparations en attente de pièce ;
@@ -95,7 +94,9 @@ Les cartes servent de raccourcis vers les vues détaillées correspondantes.
 
 ### Création
 
-**Nouvelle réparation** crée un dossier client/atelier. Selon les informations disponibles, WOPR peut associer un client existant ou créer les éléments nécessaires.
+**Nouvelle réparation** crée un dossier client/atelier. Un client existant peut être recherché en tapant le début de son prénom, de son nom ou de son entreprise ; seules les correspondances utiles sont proposées et la sélection remplit automatiquement ses coordonnées. Sans sélection, WOPR conserve la détection historique par e-mail ou téléphone et peut créer une nouvelle fiche.
+
+Le code postal peut compléter automatiquement la ville depuis une base locale issue de la base postale officielle et des libellés INSEE 2026. Lorsqu’un code postal correspond à plusieurs communes, WOPR propose une liste de choix. La saisie manuelle reste toujours possible. Cette aide fonctionne également dans **Modifier le suivi**.
 
 Le dossier peut contenir notamment :
 
@@ -142,7 +143,9 @@ Les couleurs ont un rôle métier : une ligne ou cellule peut signaler une factu
 
 Depuis un dossier, WOPR permet de préparer la facture avec des lignes de prestation et de marchandise, puis de générer le PDF.
 
-Une facture existante peut être modifiée sans recréer un nouveau dossier de réparation.
+Une facture existante peut être modifiée sans recréer un nouveau dossier de réparation. La **date de facture** est modifiable depuis l’écran **Facture / Modifier facture** ; le numéro de facture reste indépendant de cette date.
+
+Les **Remarques** restent volontairement rattachées au suivi de réparation et ne font pas partie de l’éditeur ni du PDF de facture. Modifier une facture ne doit donc pas effacer les remarques du suivi.
 
 ### Facture simple
 
@@ -187,8 +190,11 @@ La page **Clients** centralise les coordonnées et les informations de contact.
 Fonctions disponibles :
 
 - recherche de clients ;
-- modification et suppression d’une fiche ;
+- modification d’une fiche ;
 - gestion personne ou entreprise ;
+- archivage d’un client avec conservation de ses suivis, factures et devis ;
+- accès dédié aux **Clients archivés**, avec restauration possible ;
+- suppression définitive volontaire d’une fiche de test ou créée par erreur, y compris avec son historique, après confirmation renforcée ;
 - notes client ;
 - historique complet des réparations, factures et devis ;
 - détection/fusion de doublons sûrs ;
@@ -199,6 +205,10 @@ Fonctions disponibles :
 - export VCard universel ;
 - connexion et synchronisation Google Contacts ;
 - préparation de messages client.
+
+Les fiches client peuvent comporter un **nom d’entreprise** en plus du contact personne. Cette information est reprise dans le suivi et dans les documents concernés lorsqu’elle est renseignée.
+
+Un client archivé n’est plus proposé dans les sélecteurs de nouveaux dossiers ni dans les synchronisations courantes. L’archivage est le comportement normal pour un vrai client ayant un historique ; la suppression totale est réservée aux données de test ou aux erreurs de saisie.
 
 L’historique client regroupe les éléments utiles pour retrouver rapidement dossiers, factures, devis et situations à surveiller.
 
