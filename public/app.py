@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.207"
+APP_VERSION = "2.3.208"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -12263,6 +12263,100 @@ def client_delete(client_id):
             return redirect(url_for("contacts_page"))
 
         backup_database(force=True, tag="avant_archivage_suppression_client")
+
+        # Suppression TOTALE volontaire : réservée aux fiches de test / erreurs.
+        # Cette action efface le client ET tout l'historique WOPR associé.
+        if action == "delete_all":
+            if request.form.get("confirm_delete_all") != "SUPPRIMER":
+                con.close()
+                flash("Suppression totale annulée : confirmation invalide.")
+                return redirect(url_for("contacts_page"))
+
+            google_warning = ""
+            if request.form.get("delete_google") == "on" and client["google_resource_name"]:
+                try:
+                    service = google_service()
+                    if service:
+                        service.people().deleteContact(
+                            resourceName=client["google_resource_name"]
+                        ).execute()
+                    else:
+                        google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+                except Exception as exc:
+                    google_warning = f" Contact Google non supprimé : {exc}"
+
+            repairs = con.execute("""
+                SELECT id, signature_path
+                FROM repairs
+                WHERE client_id=?
+            """, (client_id,)).fetchall()
+            repair_ids = [int(row["id"]) for row in repairs]
+
+            quotes = con.execute("""
+                SELECT id
+                FROM quotes
+                WHERE client_id=?
+            """, (client_id,)).fetchall()
+            quote_ids = [int(row["id"]) for row in quotes]
+
+            if repair_ids:
+                placeholders = ",".join("?" for _ in repair_ids)
+                con.execute(
+                    f"DELETE FROM invoice_lines WHERE repair_id IN ({placeholders})",
+                    repair_ids
+                )
+                con.execute(
+                    f"DELETE FROM repair_status_history WHERE repair_id IN ({placeholders})",
+                    repair_ids
+                )
+                con.execute(
+                    f"DELETE FROM repairs WHERE id IN ({placeholders})",
+                    repair_ids
+                )
+
+            if quote_ids:
+                placeholders = ",".join("?" for _ in quote_ids)
+                con.execute(
+                    f"DELETE FROM quote_documents WHERE quote_id IN ({placeholders})",
+                    quote_ids
+                )
+                con.execute(
+                    f"DELETE FROM quote_lines WHERE quote_id IN ({placeholders})",
+                    quote_ids
+                )
+                con.execute(
+                    f"DELETE FROM quotes WHERE id IN ({placeholders})",
+                    quote_ids
+                )
+
+            con.execute("DELETE FROM clients WHERE id=?", (client_id,))
+            con.commit()
+            con.close()
+
+            # Nettoyage des signatures locales rattachées aux suivis supprimés.
+            for repair in repairs:
+                path = repair["signature_path"]
+                if path:
+                    try:
+                        p = resolve_signature_path(path)
+                        if p and p.exists() and p.resolve().parent == SIGNATURES.resolve():
+                            p.unlink()
+                    except Exception:
+                        pass
+
+            audit_event(
+                "CLIENT_DELETE_ALL",
+                (
+                    f"client_id={client_id}; repairs={len(repair_ids)}; "
+                    f"invoices={invoices_count}; quotes={len(quote_ids)}"
+                ),
+                request.remote_addr
+            )
+            flash(
+                f"Client « {client['name']} » supprimé définitivement avec tout son historique."
+                f"{google_warning}"
+            )
+            return redirect(url_for("contacts_page"))
 
         # Si le client possède un historique, on l'archive et on ne touche
         # ni aux réparations, ni aux factures, ni aux devis.
