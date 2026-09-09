@@ -1,12 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Clients - {{ business_name }}{% endblock %}
+{% block title %}{{ "Clients archivés" if show_archived else "Clients" }} - {{ business_name }}{% endblock %}
 {% block body %}
 <div class="sheet-banner narrow">
   <div class="banner-top">WOPR</div>
-  <div class="banner-title">Clients</div>
+  <div class="banner-title">{{ "Clients archivés" if show_archived else "Clients" }}</div>
 </div>
 
 <form method="get" action="{{ url_for('contacts_page') }}" class="client-search-bar">
+  {% if show_archived %}
+    <input type="hidden" name="archived" value="1">
+  {% endif %}
   <div class="client-search-input-wrap">
     <span class="client-search-icon">⌕</span>
     <input
@@ -19,7 +22,7 @@
   </div>
   <button class="button primary" type="submit">RECHERCHER</button>
   {% if q %}
-    <a class="button" href="{{ url_for('contacts_page') }}">Effacer</a>
+    <a class="button" href="{{ url_for('contacts_page', archived=1) if show_archived else url_for('contacts_page') }}">Effacer</a>
     <span class="client-search-count">{{ clients|length }} résultat(s) sur {{ total_clients }}</span>
   {% else %}
     <span class="client-search-count">{{ total_clients }} client(s)</span>
@@ -27,20 +30,31 @@
 </form>
 
 <div class="contacts-toolbar">
-  <a class="button primary" href="{{ url_for('import_google_csv_contacts') }}">Importer Google CSV</a>
-  {% if safe_duplicate_groups %}
-    <form method="post" action="{{ url_for('contacts_merge_safe_duplicates') }}" class="inline-form"
-          onsubmit="return confirm('Fusionner uniquement les doublons exacts sans téléphone/e-mail contradictoires ?');">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <button class="button" type="submit">Fusionner doublons sûrs ({{ safe_duplicate_groups }})</button>
-    </form>
+  {% if show_archived %}
+    <a class="button primary" href="{{ url_for('contacts_page') }}">← RETOUR AUX CLIENTS ACTIFS</a>
+  {% else %}
+    <a class="button" href="{{ url_for('contacts_page', archived=1) }}">
+      CLIENTS ARCHIVÉS{% if archived_clients_count %} ({{ archived_clients_count }}){% endif %}
+    </a>
   {% endif %}
-  <a class="button" href="{{ url_for('import_proton_contacts') }}">Importer Proton VCF</a>
-  <a class="button" href="{{ url_for('export_google_contacts') }}">Exporter Google CSV</a>
-  <a class="button" href="{{ url_for('export_proton_contacts') }}">Exporter Proton CSV</a>
-  <a class="button" href="{{ url_for('export_vcard_contacts') }}">Exporter VCard universel</a>
+
+  {% if not show_archived %}
+    <a class="button primary" href="{{ url_for('import_google_csv_contacts') }}">Importer Google CSV</a>
+    {% if safe_duplicate_groups %}
+      <form method="post" action="{{ url_for('contacts_merge_safe_duplicates') }}" class="inline-form"
+            onsubmit="return confirm('Fusionner uniquement les doublons exacts sans téléphone/e-mail contradictoires ?');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button class="button" type="submit">Fusionner doublons sûrs ({{ safe_duplicate_groups }})</button>
+      </form>
+    {% endif %}
+    <a class="button" href="{{ url_for('import_proton_contacts') }}">Importer Proton VCF</a>
+    <a class="button" href="{{ url_for('export_google_contacts') }}">Exporter Google CSV</a>
+    <a class="button" href="{{ url_for('export_proton_contacts') }}">Exporter Proton CSV</a>
+    <a class="button" href="{{ url_for('export_vcard_contacts') }}">Exporter VCard universel</a>
+  {% endif %}
 </div>
 
+{% if not show_archived %}
 <div class="google-panel">
   <h2>Google Contacts — groupe {{ google_contact_group }}</h2>
   {% if not google_libs_ok %}
@@ -49,15 +63,19 @@
     <p><span class="sync-ok">● Connecté</span> — les nouveaux clients et les modifications sont synchronisés automatiquement.</p>
     <div class="contacts-toolbar">
       <form method="post" action="{{ url_for('contacts_sync_google') }}">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="primary" type="submit">Synchroniser tous les clients maintenant</button></form>
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button class="primary" type="submit">Synchroniser tous les clients maintenant</button>
+      </form>
       <form method="post" action="{{ url_for('google_disconnect') }}">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button type="submit">Déconnecter Google</button></form>
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Déconnecter Google</button>
+      </form>
     </div>
   {% else %}
     {% if not google_client_secret %}
       <p>Première installation uniquement : ajoute le fichier OAuth JSON téléchargé depuis Google Cloud.</p>
       <form method="post" enctype="multipart/form-data" action="{{ url_for('google_credentials_upload') }}" class="credential-upload">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="file" name="credentials" accept="application/json,.json" required>
         <button class="primary" type="submit">Enregistrer le fichier Google</button>
       </form>
@@ -67,6 +85,7 @@
     {% endif %}
   {% endif %}
 </div>
+{% endif %}
 
 <div class="sheet-wrapper contacts-wrapper">
 <table class="sheet-table contacts-table contacts-table-compact">
@@ -128,9 +147,15 @@
       <div class="contact-edit"><textarea form="edit-client-{{ c['id'] }}" name="notes" rows="3">{{ c['notes'] or '' }}</textarea></div>
     </td>
     <td class="contact-cell-google">
-      {% if c['google_sync_status']=='Synchronisé' %}<span class="sync-ok">● Synchronisé</span>
-      {% elif c['google_sync_status']=='Erreur' %}<span class="sync-error" title="{{ c['google_sync_error'] or '' }}">● Erreur</span>
-      {% else %}<span class="sync-wait">● {{ c['google_sync_status'] or 'À synchroniser' }}</span>{% endif %}
+      {% if show_archived %}
+        <span class="sync-wait">● Archivé</span>
+      {% elif c['google_sync_status']=='Synchronisé' %}
+        <span class="sync-ok">● Synchronisé</span>
+      {% elif c['google_sync_status']=='Erreur' %}
+        <span class="sync-error" title="{{ c['google_sync_error'] or '' }}">● Erreur</span>
+      {% else %}
+        <span class="sync-wait">● {{ c['google_sync_status'] or 'À synchroniser' }}</span>
+      {% endif %}
     </td>
     <td class="client-actions contact-cell-actions">
       <form id="edit-client-{{ c['id'] }}" method="post" action="{{ url_for('client_edit', client_id=c['id']) }}">
@@ -138,11 +163,15 @@
       </form>
       <div class="contact-normal-actions">
         <a class="mini-btn" href="{{ url_for('client_history', client_id=c['id']) }}">Historique</a>
-        {% if c['phone'] %}
+        {% if not show_archived and c['phone'] %}
           <a class="mini-btn" href="{{ url_for('client_message_from_client', client_id=c['id']) }}" title="Préparer un message client">💬 SMS</a>
         {% endif %}
-        <button class="mini-btn" type="button" data-edit-client="{{ c['id'] }}">Modifier</button>
-        <a class="mini-btn danger-btn" href="{{ url_for('client_delete', client_id=c['id']) }}">Supprimer</a>
+        {% if not show_archived %}
+          <button class="mini-btn" type="button" data-edit-client="{{ c['id'] }}">Modifier</button>
+        {% endif %}
+        <a class="mini-btn danger-btn" href="{{ url_for('client_delete', client_id=c['id']) }}">
+          {{ "Gérer" if show_archived else "Supprimer" }}
+        </a>
       </div>
       <div class="contact-edit-actions">
         <button class="mini-btn primary" type="submit" form="edit-client-{{ c['id'] }}">Enregistrer</button>
@@ -152,7 +181,13 @@
   </tr>
   {% else %}
     <tr><td colspan="9">
-      {% if q %}Aucun client trouvé pour « {{ q }} ».{% else %}Aucun client.{% endif %}
+      {% if q %}
+        Aucun client trouvé pour « {{ q }} ».
+      {% elif show_archived %}
+        Aucun client archivé.
+      {% else %}
+        Aucun client.
+      {% endif %}
     </td></tr>
   {% endfor %}
   </tbody>
