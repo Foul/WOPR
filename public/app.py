@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.203"
+APP_VERSION = "2.3.204"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -8688,6 +8688,7 @@ def repair_detail(rid):
                c.name client_name,
                c.first_name client_first_name,
                c.last_name client_last_name,
+               c.company client_company,
                c.address client_address,
                c.address_street client_address_street,
                c.postal_code client_postal_code,
@@ -9816,6 +9817,9 @@ def intake_pdf(rid):
     y = section_title(y, pdf_t("client_info", lang))
     y = field_row(y, pdf_t("first_name", lang) + " :", r['client_first_name'] or "")
     y = field_row(y, pdf_t("last_name", lang) + " :", r['client_last_name'] or r['client_name'] or "")
+    client_company = str(r['client_company'] or "").strip()
+    if client_company and client_company.casefold() != str(r['client_name'] or "").strip().casefold():
+        y = field_row(y, "Entreprise :", client_company)
     y = field_row(y, pdf_t("address", lang) + " :", r['client_address_street'] or "")
     y = field_row(y, pdf_t("postal_city", lang) + " :", " ".join(x for x in [r['client_postal_code'] or "", r['client_city'] or ""] if x))
     y = field_row(y, pdf_t("phone", lang) + " :", r['client_phone'])
@@ -10463,7 +10467,7 @@ def invoice_pdf(rid):
     lang = pdf_lang()
     con = db()
     r = con.execute("""
-        SELECT r.*, c.name client_name, c.address client_address,
+        SELECT r.*, c.name client_name, c.company client_company, c.address client_address,
                c.address_street client_address_street, c.postal_code client_postal_code,
                c.city client_city, c.phone client_phone, c.email client_email
         FROM repairs r JOIN clients c ON c.id=r.client_id WHERE r.id=?
@@ -10569,8 +10573,14 @@ def invoice_pdf(rid):
     c.setLineWidth(.6)
     c.line(cbx + 1*mm, cby + cbh - 7*mm, cbx + 18*mm, cby + cbh - 7*mm)
 
-    # Présentation postale classique : nom / rue / code postal + ville
-    client_lines = [r["client_name"]]
+    # Présentation postale classique : entreprise (si présente) / contact / rue / code postal + ville
+    client_lines = []
+    client_company = str(r["client_company"] or "").strip()
+    client_name = str(r["client_name"] or "").strip()
+    if client_company:
+        client_lines.append(client_company)
+    if client_name and client_name.casefold() != client_company.casefold():
+        client_lines.append(client_name)
     street = (r["client_address_street"] or "").strip()
     cp_city = " ".join(x for x in [(r["client_postal_code"] or "").strip(), (r["client_city"] or "").strip()] if x)
     if street:
