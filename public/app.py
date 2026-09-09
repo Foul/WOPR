@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.204"
+APP_VERSION = "2.3.206"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1310,6 +1310,7 @@ def sync_clients_to_abby():
     clients = con.execute("""
         SELECT *
         FROM clients
+        WHERE COALESCE(archived,0)=0
         ORDER BY id
     """).fetchall()
 
@@ -1986,6 +1987,8 @@ def init_db():
     ensure_column(con, "clients", "first_name", "TEXT")
     ensure_column(con, "clients", "last_name", "TEXT")
     ensure_column(con, "clients", "company", "TEXT")
+    ensure_column(con, "clients", "archived", "INTEGER DEFAULT 0")
+    ensure_column(con, "clients", "archived_at", "TEXT")
     ensure_column(con, "clients", "address_street", "TEXT")
     ensure_column(con, "clients", "postal_code", "TEXT")
     ensure_column(con, "clients", "city", "TEXT")
@@ -4258,6 +4261,8 @@ def sync_client_to_google(client_id):
     con.close()
     if not client:
         return False, "Client introuvable"
+    if int(client["archived"] or 0) == 1:
+        return False, "Client archivé"
 
     body = google_contact_body(client)
     current_hash = google_contact_sync_hash(body)
@@ -8319,30 +8324,82 @@ def repair_new():
         session["client_mode"] = True
         session.pop("client_mode_rid", None)
 
+    def active_clients_for_form():
+        con_clients = db()
+        rows = con_clients.execute("""
+            SELECT id, name, first_name, last_name, company,
+                   address_street, postal_code, city, phone, email
+            FROM clients
+            WHERE COALESCE(archived,0)=0
+            ORDER BY
+                COALESCE(first_name,'') COLLATE NOCASE,
+                COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
+                id
+        """).fetchall()
+        con_clients.close()
+        return [dict(row) for row in rows]
+
     if request.method == "POST":
+        selected_client_id_raw = request.form.get("client_id", "").strip()
+
         first_name = request.form.get("first_name","").strip()
         last_name = request.form.get("last_name","").strip()
         company = request.form.get("company","").strip()
         contact_name = compose_client_name(last_name, first_name).strip()
         name = contact_name or company
+
         if not name:
             flash("Renseigne au moins un nom/prénom ou le nom de l’entreprise.")
-            return render_template("repair_form.html", today=now().strftime("%Y-%m-%d"))
+            return render_template(
+                "repair_form.html",
+                today=now().strftime("%Y-%m-%d"),
+                clients=active_clients_for_form()
+            )
+
         address_street = request.form.get("address_street","").strip()
         postal_code = request.form.get("postal_code","").strip()
         city = request.form.get("city","").strip()
-        # Le champ historique 'address' reste alimenté pour compatibilité.
-        address = "\n".join([x for x in [address_street, (postal_code + " " + city).strip()] if x])
+        address = "\n".join(
+            [x for x in [address_street, (postal_code + " " + city).strip()] if x]
+        )
         phone = request.form.get("phone","").strip()
         email = request.form.get("email","").strip()
         created = now().isoformat(timespec="seconds")
 
         con = db()
         client = None
-        if email:
-            client = con.execute("SELECT * FROM clients WHERE lower(email)=lower(?)", (email,)).fetchone()
-        if not client and phone:
-            client = con.execute("SELECT * FROM clients WHERE phone=?", (phone,)).fetchone()
+
+        # Si un ancien client a été choisi explicitement, on réutilise toujours
+        # cette fiche plutôt que de rechercher/créer un doublon.
+        if selected_client_id_raw.isdigit():
+            client = con.execute("""
+                SELECT * FROM clients
+                WHERE id=? AND COALESCE(archived,0)=0
+            """, (int(selected_client_id_raw),)).fetchone()
+
+        # Sans sélection explicite, conserve la détection historique e-mail/téléphone.
+        if not client and not selected_client_id_raw:
+            if email:
+                client = con.execute("""
+                    SELECT * FROM clients
+                    WHERE COALESCE(archived,0)=0
+                      AND lower(email)=lower(?)
+                """, (email,)).fetchone()
+            if not client and phone:
+                client = con.execute("""
+                    SELECT * FROM clients
+                    WHERE COALESCE(archived,0)=0
+                      AND phone=?
+                """, (phone,)).fetchone()
+
+        if selected_client_id_raw and not client:
+            con.close()
+            flash("Le client sélectionné est introuvable ou archivé.")
+            return render_template(
+                "repair_form.html",
+                today=request.form.get("received_date") or now().strftime("%Y-%m-%d"),
+                clients=active_clients_for_form()
+            )
 
         if client:
             con.execute("""
@@ -8351,8 +8408,12 @@ def repair_new():
                     address=?, address_street=?, postal_code=?, city=?,
                     phone=?, email=?, updated_at=?
                 WHERE id=?
-            """, (name,last_name,first_name,company,address,address_street,postal_code,city,phone,email,created,client["id"]))
-            client_id = client["id"]
+            """, (
+                name, last_name, first_name, company,
+                address, address_street, postal_code, city,
+                phone, email, created, client["id"]
+            ))
+            client_id = int(client["id"])
         else:
             cur = con.execute("""
                 INSERT INTO clients(
@@ -8364,7 +8425,7 @@ def repair_new():
                 name,last_name,first_name,company,
                 address,address_street,postal_code,city,phone,email,created,created
             ))
-            client_id = cur.lastrowid
+            client_id = int(cur.lastrowid)
 
         dossier = make_dossier_no()
         token = secrets.token_urlsafe(18)
@@ -8403,12 +8464,17 @@ def repair_new():
         record_repair_status_change(con, rid, "", "Reçu", "Dossier créé")
         con.commit()
         con.close()
+
         session["client_mode"] = True
         session["client_mode_rid"] = int(rid)
         sync_client_to_google_async(client_id)
         return redirect(url_for("repair_detail", rid=rid))
-    return render_template("repair_form.html", today=now().strftime("%Y-%m-%d"))
 
+    return render_template(
+        "repair_form.html",
+        today=now().strftime("%Y-%m-%d"),
+        clients=active_clients_for_form()
+    )
 
 
 
@@ -10318,6 +10384,7 @@ def simple_invoice_new():
     clients = con.execute("""
         SELECT id,name,company
         FROM clients
+        WHERE COALESCE(archived,0)=0
         ORDER BY name COLLATE NOCASE
     """).fetchall()
     con.close()
@@ -11992,37 +12059,48 @@ def supplier_documents_audit():
 @app.route("/contacts")
 def contacts_page():
     q = " ".join(request.args.get("q", "").split()).strip()
+    show_archived = str(request.args.get("archived") or "").strip().lower() in {"1", "true", "yes", "oui"}
+    archive_clause = "COALESCE(archived,0)=1" if show_archived else "COALESCE(archived,0)=0"
     con = db()
 
     if q:
         like = f"%{q}%"
-        clients = con.execute("""
+        clients = con.execute(f"""
             SELECT * FROM clients
-            WHERE COALESCE(last_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(first_name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(name,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(company,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(phone,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(email,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(address_street,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(postal_code,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(city,'') LIKE ? COLLATE NOCASE
-               OR COALESCE(notes,'') LIKE ? COLLATE NOCASE
+            WHERE {archive_clause}
+              AND (
+                   COALESCE(last_name,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(first_name,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(name,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(company,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(phone,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(email,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(address_street,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(postal_code,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(city,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(notes,'') LIKE ? COLLATE NOCASE
+              )
             ORDER BY
                 COALESCE(first_name,'') COLLATE NOCASE,
                 COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
                 id
         """, (like, like, like, like, like, like, like, like, like, like)).fetchall()
     else:
-        clients = con.execute("""
+        clients = con.execute(f"""
             SELECT * FROM clients
+            WHERE {archive_clause}
             ORDER BY
                 COALESCE(first_name,'') COLLATE NOCASE,
                 COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
                 id
         """).fetchall()
 
-    total_clients = con.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+    total_clients = con.execute(
+        f"SELECT COUNT(*) FROM clients WHERE {archive_clause}"
+    ).fetchone()[0]
+    archived_clients_count = con.execute(
+        "SELECT COUNT(*) FROM clients WHERE COALESCE(archived,0)=1"
+    ).fetchone()[0]
     safe_duplicate_groups = len(find_safe_local_duplicate_groups(con))
     con.close()
 
@@ -12036,6 +12114,8 @@ def contacts_page():
         google_client_secret=GOOGLE_CLIENT_SECRET.exists(),
         google_libs_ok=GOOGLE_LIBS_OK,
         safe_duplicate_groups=safe_duplicate_groups,
+        show_archived=show_archived,
+        archived_clients_count=archived_clients_count,
         business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
         google_contact_group=str(
             cfg().get("google_contact_group")
@@ -12146,22 +12226,100 @@ def client_delete(client_id):
                SUM(CASE WHEN invoice_no IS NOT NULL AND trim(invoice_no)<>'' THEN 1 ELSE 0 END) AS invoices_count
         FROM repairs WHERE client_id=?
     """, (client_id,)).fetchone()
+    quotes_count = con.execute(
+        "SELECT COUNT(*) FROM quotes WHERE client_id=?",
+        (client_id,)
+    ).fetchone()[0]
+
+    repairs_count = int(stats["repairs_count"] or 0)
+    invoices_count = int(stats["invoices_count"] or 0)
+    quotes_count = int(quotes_count or 0)
+    has_history = bool(repairs_count or invoices_count or quotes_count)
+    is_archived = int(client["archived"] or 0) == 1
 
     if request.method == "POST":
-        confirm = request.form.get("confirm_delete") == "yes"
-        backup_database(force=True, tag="avant_suppression_client")
-        audit_event("CLIENT_DELETE_REQUEST", f"client_id={client_id}", request.remote_addr)
-        if not confirm:
+        action = request.form.get("action", "").strip()
+
+        # Restauration d'une fiche archivée.
+        if is_archived and action == "restore":
+            con.execute("""
+                UPDATE clients
+                SET archived=0, archived_at=NULL,
+                    google_sync_status='À synchroniser',
+                    google_sync_error='',
+                    updated_at=?
+                WHERE id=?
+            """, (now().isoformat(timespec="seconds"), client_id))
+            con.commit()
             con.close()
-            flash("Suppression annulée : confirmation manquante.")
+            audit_event("CLIENT_RESTORE", f"client_id={client_id}", request.remote_addr)
+            flash(f"Client « {client['name']} » restauré.")
             return redirect(url_for("contacts_page"))
 
-        # On garde les chemins avant suppression pour nettoyer les fichiers de signature.
-        repairs = con.execute("""
-            SELECT id, signature_path FROM repairs WHERE client_id=?
-        """, (client_id,)).fetchall()
-        repair_ids = [r["id"] for r in repairs]
+        confirm = request.form.get("confirm_delete") == "yes"
+        if not confirm:
+            con.close()
+            flash("Opération annulée : confirmation manquante.")
+            return redirect(url_for("contacts_page"))
 
+        backup_database(force=True, tag="avant_archivage_suppression_client")
+
+        # Si le client possède un historique, on l'archive et on ne touche
+        # ni aux réparations, ni aux factures, ni aux devis.
+        if has_history:
+            google_warning = ""
+            google_deleted = False
+
+            if request.form.get("delete_google") == "on" and client["google_resource_name"]:
+                try:
+                    service = google_service()
+                    if service:
+                        service.people().deleteContact(
+                            resourceName=client["google_resource_name"]
+                        ).execute()
+                        google_deleted = True
+                    else:
+                        google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+                except Exception as exc:
+                    google_warning = f" Contact Google non supprimé : {exc}"
+
+            stamp = now().isoformat(timespec="seconds")
+            if google_deleted:
+                con.execute("""
+                    UPDATE clients
+                    SET archived=1, archived_at=?,
+                        google_resource_name=NULL,
+                        google_sync_hash=NULL,
+                        google_sync_status='Archivé',
+                        google_sync_error='',
+                        google_synced_at=?,
+                        updated_at=?
+                    WHERE id=?
+                """, (stamp, stamp, stamp, client_id))
+            else:
+                con.execute("""
+                    UPDATE clients
+                    SET archived=1, archived_at=?,
+                        google_sync_status='Archivé',
+                        updated_at=?
+                    WHERE id=?
+                """, (stamp, stamp, client_id))
+
+            con.commit()
+            con.close()
+            audit_event(
+                "CLIENT_ARCHIVE",
+                f"client_id={client_id}; repairs={repairs_count}; invoices={invoices_count}; quotes={quotes_count}",
+                request.remote_addr
+            )
+            flash(
+                f"Client « {client['name']} » archivé. "
+                f"Ses {repairs_count} suivi(s), {invoices_count} facture(s) et {quotes_count} devis sont conservés."
+                f"{google_warning} Pour voir les archives : /contacts?archived=1"
+            )
+            return redirect(url_for("contacts_page"))
+
+        # Aucun historique : vraie suppression autorisée.
         google_warning = ""
         if request.form.get("delete_google") == "on" and client["google_resource_name"]:
             try:
@@ -12172,40 +12330,25 @@ def client_delete(client_id):
                     ).execute()
                 else:
                     google_warning = " Contact Google non supprimé : Google n'est pas connecté."
-            except Exception as e:
-                google_warning = f" Contact Google non supprimé : {e}"
-
-        if repair_ids:
-            placeholders = ",".join("?" for _ in repair_ids)
-            con.execute(
-                f"DELETE FROM invoice_lines WHERE repair_id IN ({placeholders})",
-                repair_ids
-            )
-            con.execute("DELETE FROM repairs WHERE client_id=?", (client_id,))
+            except Exception as exc:
+                google_warning = f" Contact Google non supprimé : {exc}"
 
         con.execute("DELETE FROM clients WHERE id=?", (client_id,))
         con.commit()
         con.close()
-
-        for r in repairs:
-            path = r["signature_path"]
-            if path:
-                try:
-                    p = resolve_signature_path(path)
-                    if p and p.exists() and p.resolve().parent == SIGNATURES.resolve():
-                        p.unlink()
-                except Exception:
-                    pass
-
-        flash(f"Client « {client['name']} » supprimé avec son historique local.{google_warning}")
+        audit_event("CLIENT_DELETE", f"client_id={client_id}; no_history=1", request.remote_addr)
+        flash(f"Client « {client['name']} » supprimé.{google_warning}")
         return redirect(url_for("contacts_page"))
 
     con.close()
     return render_template(
         "client_delete.html",
         client=client,
-        repairs_count=stats["repairs_count"] or 0,
-        invoices_count=stats["invoices_count"] or 0,
+        repairs_count=repairs_count,
+        invoices_count=invoices_count,
+        quotes_count=quotes_count,
+        has_history=has_history,
+        is_archived=is_archived,
         google_connected=google_credentials() is not None,
     )
 
@@ -12332,7 +12475,8 @@ def contacts_sync_google():
     ids = [r[0] for r in con.execute("""
         SELECT id
         FROM clients
-        WHERE COALESCE(google_sync_status, '') != 'Synchronisé'
+        WHERE COALESCE(archived,0)=0
+          AND COALESCE(google_sync_status, '') != 'Synchronisé'
         ORDER BY id
     """).fetchall()]
     con.close()

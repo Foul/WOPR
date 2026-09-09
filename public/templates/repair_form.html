@@ -1,5 +1,42 @@
 {% extends "base.html" %}
-{% block title %}Nouvelle prise en charge{% endblock %}
+{% block title %}Nouvelle prise en charge
+<script>
+(() => {
+  const clients = {{ clients|tojson }};
+  const byId = new Map(clients.map(c => [String(c.id), c]));
+  const select = document.getElementById('existing-client');
+
+  const fields = {
+    first_name: document.getElementById('client-first-name'),
+    last_name: document.getElementById('client-last-name'),
+    company: document.getElementById('client-company'),
+    address_street: document.getElementById('client-address'),
+    postal_code: document.getElementById('client-postal-code'),
+    city: document.getElementById('client-city'),
+    phone: document.getElementById('client-phone'),
+    email: document.getElementById('client-email')
+  };
+
+  if (!select) return;
+
+  select.addEventListener('change', () => {
+    const client = byId.get(select.value);
+
+    if (!client) {
+      Object.values(fields).forEach(el => {
+        if (el) el.value = '';
+      });
+      return;
+    }
+
+    Object.entries(fields).forEach(([key, el]) => {
+      if (el) el.value = client[key] || '';
+    });
+  });
+})();
+</script>
+
+{% endblock %}
 {% block body %}
 <div class="sheet-banner narrow">
   <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
@@ -10,16 +47,31 @@
 <form method="post" class="sheet-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div class="section-title">Informations Client</div>
+
+  <div class="grid one">
+    <label>Client existant
+      <select name="client_id" id="existing-client">
+        <option value="">— Nouveau client / saisie manuelle —</option>
+        {% for c in clients %}
+          <option value="{{ c['id'] }}">
+            {{ (c['first_name'] or '') ~ (' ' if c['first_name'] and (c['last_name'] or c['name']) else '') ~ (c['last_name'] or c['name'] or '') }}{% if c['company'] %} — {{ c['company'] }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <small>Sélectionne un ancien client pour remplir automatiquement ses coordonnées.</small>
+    </label>
+  </div>
+
   <div class="grid two">
-    <label>Prénom<input name="first_name" autocomplete="given-name"></label>
-    <label>Nom<input name="last_name" autocomplete="family-name"></label>
-    <label class="wide">Entreprise<input name="company" autocomplete="organization"></label>
+    <label>Prénom<input id="client-first-name" name="first_name" autocomplete="given-name"></label>
+    <label>Nom<input id="client-last-name" name="last_name" autocomplete="family-name"></label>
+    <label class="wide">Entreprise<input id="client-company" name="company" autocomplete="organization"></label>
     <label>Date<input type="date" name="received_date" value="{{ today }}" required></label>
-    <label class="wide">Adresse<input name="address_street"></label>
-    <label>Code postal<input name="postal_code" inputmode="numeric"></label>
-    <label>Ville<input name="city"></label>
-    <label>Téléphone<input name="phone"></label>
-    <label>Courriel<input type="email" name="email"></label>
+    <label class="wide">Adresse<input id="client-address" name="address_street"></label>
+    <label>Code postal<input id="client-postal-code" name="postal_code" inputmode="numeric"></label>
+    <label>Ville<input id="client-city" name="city"></label>
+    <label>Téléphone<input id="client-phone" name="phone"></label>
+    <label>Courriel<input id="client-email" type="email" name="email"></label>
   </div>
 
   <div class="section-title">Détails de l'Appareil</div>
