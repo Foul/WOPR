@@ -1,42 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Nouvelle prise en charge
-<script>
-(() => {
-  const clients = {{ clients|tojson }};
-  const byId = new Map(clients.map(c => [String(c.id), c]));
-  const select = document.getElementById('existing-client');
-
-  const fields = {
-    first_name: document.getElementById('client-first-name'),
-    last_name: document.getElementById('client-last-name'),
-    company: document.getElementById('client-company'),
-    address_street: document.getElementById('client-address'),
-    postal_code: document.getElementById('client-postal-code'),
-    city: document.getElementById('client-city'),
-    phone: document.getElementById('client-phone'),
-    email: document.getElementById('client-email')
-  };
-
-  if (!select) return;
-
-  select.addEventListener('change', () => {
-    const client = byId.get(select.value);
-
-    if (!client) {
-      Object.values(fields).forEach(el => {
-        if (el) el.value = '';
-      });
-      return;
-    }
-
-    Object.entries(fields).forEach(([key, el]) => {
-      if (el) el.value = client[key] || '';
-    });
-  });
-})();
-</script>
-
-{% endblock %}
+{% block title %}Nouvelle prise en charge{% endblock %}
 {% block body %}
 <div class="sheet-banner narrow">
   <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
@@ -45,20 +8,19 @@
 
 <div class="client-mode-notice">🔒 Mode Client actif — aucune donnée des autres clients n'est visible.</div>
 <form method="post" class="sheet-form">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="client_id" id="existing-client-id" value="">
+
   <div class="section-title">Informations Client</div>
 
   <div class="grid one">
-    <label>Client existant
-      <select name="client_id" id="existing-client">
-        <option value="">— Nouveau client / saisie manuelle —</option>
-        {% for c in clients %}
-          <option value="{{ c['id'] }}">
-            {{ (c['first_name'] or '') ~ (' ' if c['first_name'] and (c['last_name'] or c['name']) else '') ~ (c['last_name'] or c['name'] or '') }}{% if c['company'] %} — {{ c['company'] }}{% endif %}
-          </option>
-        {% endfor %}
-      </select>
-      <small>Sélectionne un ancien client pour remplir automatiquement ses coordonnées.</small>
+    <label>Rechercher un client existant
+      <input id="existing-client-search"
+             type="search"
+             autocomplete="off"
+             placeholder="Commence à taper un nom ou une entreprise…">
+      <select id="existing-client-results" size="4" style="display:none; margin-top:.45rem;"></select>
+      <small id="existing-client-help">Ex. « mor » trouve Moreau ; « trans » trouve une entreprise commençant par Trans.</small>
     </label>
   </div>
 
@@ -100,4 +62,109 @@
     <button class="primary" type="submit">Créer le dossier</button>
   </div>
 </form>
+
+<script>
+(() => {
+  const clients = {{ clients|tojson }};
+  const search = document.getElementById('existing-client-search');
+  const results = document.getElementById('existing-client-results');
+  const hiddenId = document.getElementById('existing-client-id');
+  const help = document.getElementById('existing-client-help');
+
+  const fields = {
+    first_name: document.getElementById('client-first-name'),
+    last_name: document.getElementById('client-last-name'),
+    company: document.getElementById('client-company'),
+    address_street: document.getElementById('client-address'),
+    postal_code: document.getElementById('client-postal-code'),
+    city: document.getElementById('client-city'),
+    phone: document.getElementById('client-phone'),
+    email: document.getElementById('client-email')
+  };
+
+  const normalize = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+  const clientLabel = c => {
+    const first = String(c.first_name || '').trim();
+    const last = String(c.last_name || c.name || '').trim();
+    const person = [first, last].filter(Boolean).join(' ');
+    const company = String(c.company || '').trim();
+    if (person && company) return `${person} — ${company}`;
+    return person || company || String(c.name || '').trim();
+  };
+
+  const searchableWords = c => {
+    const values = [
+      c.first_name, c.last_name, c.name, c.company
+    ].map(normalize).join(' ');
+    return values.split(/[\s'’\-_.]+/).filter(Boolean);
+  };
+
+  const matches = (client, query) => {
+    const qWords = normalize(query).split(/\s+/).filter(Boolean);
+    if (!qWords.length) return false;
+    const words = searchableWords(client);
+    return qWords.every(q => words.some(word => word.startsWith(q)));
+  };
+
+  const clearSelection = () => {
+    hiddenId.value = '';
+  };
+
+  const fillClient = client => {
+    hiddenId.value = String(client.id);
+    Object.entries(fields).forEach(([key, el]) => {
+      if (el) el.value = client[key] || '';
+    });
+    search.value = clientLabel(client);
+    results.style.display = 'none';
+    help.textContent = '✓ Client existant sélectionné.';
+  };
+
+  search.addEventListener('input', () => {
+    clearSelection();
+    const q = search.value.trim();
+    results.innerHTML = '';
+
+    if (!q) {
+      results.style.display = 'none';
+      help.textContent = 'Tape le début d’un nom ou d’une entreprise.';
+      return;
+    }
+
+    const found = clients.filter(c => matches(c, q)).slice(0, 12);
+
+    if (!found.length) {
+      results.style.display = 'none';
+      help.textContent = 'Aucun client correspondant — tu peux saisir un nouveau client ci-dessous.';
+      return;
+    }
+
+    found.forEach(c => {
+      const option = document.createElement('option');
+      option.value = String(c.id);
+      option.textContent = clientLabel(c);
+      results.appendChild(option);
+    });
+
+    results.size = Math.min(Math.max(found.length, 2), 6);
+    results.style.display = '';
+    help.textContent = `${found.length} client(s) correspondant(s).`;
+  });
+
+  results.addEventListener('change', () => {
+    const client = clients.find(c => String(c.id) === results.value);
+    if (client) fillClient(client);
+  });
+
+  results.addEventListener('dblclick', () => {
+    const client = clients.find(c => String(c.id) === results.value);
+    if (client) fillClient(client);
+  });
+})();
+</script>
 {% endblock %}

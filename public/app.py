@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.206"
+APP_VERSION = "2.3.207"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -9393,7 +9393,7 @@ def repair_close(rid):
             """, (
                 parts_sent_via,
                 request.form.get("tests_validation",""),
-                request.form.get("remarks",""),
+                (r["remarks"] or ""),
                 finished, close_status, rid
             ))
             record_repair_status_change(
@@ -9544,7 +9544,7 @@ def repair_close(rid):
             request.form.get("sent_via",""),
             "",
             request.form.get("tests_validation",""),
-            request.form.get("remarks",""),
+            (r["remarks"] or ""),
             finished, inv, close_status, close_returned_at, service_desc, goods_desc,
             inv,
             accounting_year, accounting_month, accounting_date, accounting_status,
