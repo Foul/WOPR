@@ -20,7 +20,7 @@
              {% if r["status"] == "Laissé pour pièces" %}checked{% endif %}>
       <span>
         <strong>Matériel laissé pour pièces — aucune facture</strong>
-        <small>Le client laisse le matériel à WOPR à la place du forfait diagnostic : 0 € encaissé, aucune facture, aucun CA.</small>
+        <small>Le client laisse le matériel à WOPR à la place du forfait diagnostic de 30 € : 0 € encaissé, aucune facture, aucun CA.</small>
       </span>
     </label>
     <label class="parts-send-via">Envoi / remise du dossier
@@ -35,28 +35,20 @@
   <table class="invoice-entry-table" id="lines-table">
     <thead>
       <tr>
-        <th>Type</th>
-        <th>Quantité</th>
-        <th>Désignation<br><small>1re ligne = intitulé · suivantes = détails</small></th>
-        <th>Prix unitaire</th>
-        <th>Total ligne</th>
-        <th></th>
+        <th>Type</th><th>Quantité</th><th>Désignation<br><small>1re ligne = intitulé · suivantes = détails</small></th>
+        <th>Prix unitaire</th><th>Total ligne</th><th></th>
       </tr>
     </thead>
     <tbody id="invoice-lines">
       {% for line in invoice_lines %}
       <tr class="invoice-line">
-        <td>
-          <select name="line_type[]">
-            <option value="service" {% if line['line_type']=='service' %}selected{% endif %}>Prestation</option>
-            <option value="goods" {% if line['line_type']=='goods' %}selected{% endif %}>Marchandise</option>
-          </select>
-        </td>
+        <td><select name="line_type[]">
+          <option value="service" {% if line['line_type']=='service' %}selected{% endif %}>Prestation</option>
+          <option value="goods" {% if line['line_type']=='goods' %}selected{% endif %}>Marchandise</option>
+        </select></td>
         <td><input class="qty" type="number" min="0.01" step="0.01" name="line_qty[]" value="{{ line['quantity'] }}"></td>
-        <td>
-          <textarea class="desc invoice-desc" name="line_desc[]" rows="2"
-                    placeholder="1re ligne : intitulé&#10;2e ligne et suivantes : détails">{{ line['description'] }}</textarea>
-        </td>
+        <td><textarea class="desc invoice-desc" name="line_desc[]" rows="2"
+              placeholder="1re ligne : intitulé&#10;2e ligne et suivantes : détails">{{ line['description'] }}</textarea></td>
         <td><input class="price" type="number" min="0" step="0.01" name="line_price[]" value="{{ line['unit_price'] }}"></td>
         <td class="line-total">0,00 €</td>
         <td><button type="button" class="remove-line" title="Supprimer">×</button></td>
@@ -70,18 +62,21 @@
     <button type="button" id="add-goods">+ Ligne marchandise</button>
     <div class="invoice-total">Total : <strong id="grand-total">0,00 €</strong></div>
   </div>
-
   </div>
 
   <div id="invoice-billing-area">
   <div class="section-title">Règlement et remise de la facture</div>
   <div class="grid two billing-meta">
+
+    <label>Date de facture
+      <input type="date" name="invoice_date" value="{{ invoice_date_value }}" required>
+      <small>Modifiable avant ou après création de la facture.</small>
+    </label>
+
     <div class="invoice-payment-grid">
       <label>Total facture
-        <input id="billing-total-display"
-               class="readonly-total"
-               value="0,00 €"
-               readonly
+        <input id="billing-total-display" class="readonly-total"
+               value="0,00 €" readonly
                title="Calculé automatiquement à partir des lignes de facture">
         <small>Calculé automatiquement</small>
       </label>
@@ -110,12 +105,9 @@
 
     <label>Remise / Envoi de la facture
       <input name="sent_via" list="sent-via-close-choices"
-             value="{{ r['sent_via'] or '' }}"
-             placeholder="Choisir ou saisir...">
+             value="{{ r['sent_via'] or '' }}" placeholder="Choisir ou saisir...">
       <datalist id="sent-via-close-choices">
-        <option value="Facture + Suivi Papier">
-        <option value="Facture par Mail">
-        <option value="Facture Papier">
+        <option value="Facture + Suivi Papier"><option value="Facture par Mail"><option value="Facture Papier">
       </datalist>
       <small>Choisis une valeur proposée ou saisis ton propre texte.</small>
     </label>
@@ -127,7 +119,6 @@
       Paiement reçu
     </label>
   </div>
-
   </div>
 
   {% if not r['simple_invoice'] %}
@@ -147,11 +138,9 @@
     {% elif r['legacy_imported'] %}
       <strong>Facture historique ODS :</strong>
       {% if not invoice_was_reconstructed %}
-        les lignes ci-dessous sont une <strong>reconstruction depuis le Suivi</strong>
-        et peuvent être incomplètes.
+        les lignes ci-dessous sont une <strong>reconstruction depuis le Suivi</strong> et peuvent être incomplètes.
         {% if original_invoice_pdf %}
-          Le bouton <strong>Facture PDF</strong> conserve le PDF original tant que tu
-          n'enregistres pas cette reconstruction.
+          Le bouton <strong>Facture PDF</strong> conserve le PDF original tant que tu n'enregistres pas cette reconstruction.
         {% endif %}
       {% else %}
         cette facture a déjà été reconstruite / modifiée dans WOPR.
@@ -161,16 +150,13 @@
     {% elif r["invoice_no"] %}
       Le numéro <strong>{{ r["invoice_no"] }}</strong> reste inchangé.
     {% else %}
-      Le numéro et la date de facture seront créés au moment de l'enregistrement.
+      Le numéro de facture sera créé au moment de l'enregistrement.
     {% endif %}
   </div>
 
   {% if r['legacy_imported'] and original_invoice_pdf and not invoice_was_reconstructed %}
     <div class="historical-pdf-original">
-      <a class="button" target="_blank"
-         href="{{ url_for('invoice_pdf', rid=r['id']) }}">
-        Facture PDF originale
-      </a>
+      <a class="button" target="_blank" href="{{ url_for('invoice_pdf', rid=r['id']) }}">Facture PDF originale</a>
     </div>
   {% endif %}
 
@@ -188,17 +174,10 @@
 
 <template id="line-template">
 <tr class="invoice-line">
-  <td>
-    <select name="line_type[]">
-      <option value="service">Prestation</option>
-      <option value="goods">Marchandise</option>
-    </select>
-  </td>
+  <td><select name="line_type[]"><option value="service">Prestation</option><option value="goods">Marchandise</option></select></td>
   <td><input class="qty" type="number" min="0.01" step="0.01" name="line_qty[]" value="1"></td>
-  <td>
-    <textarea class="desc invoice-desc" name="line_desc[]" rows="2"
-              placeholder="1re ligne : intitulé&#10;2e ligne et suivantes : détails"></textarea>
-  </td>
+  <td><textarea class="desc invoice-desc" name="line_desc[]" rows="2"
+        placeholder="1re ligne : intitulé&#10;2e ligne et suivantes : détails"></textarea></td>
   <td><input class="price" type="number" min="0" step="0.01" name="line_price[]" value="0"></td>
   <td class="line-total">0,00 €</td>
   <td><button type="button" class="remove-line" title="Supprimer">×</button></td>
@@ -208,68 +187,43 @@
 <script>
 const tbody = document.getElementById('invoice-lines');
 const tpl = document.getElementById('line-template');
-
-function autoGrowDescription(el){
-  if(!el)return;
-  el.style.height='auto';
-  el.style.height=Math.max(48, el.scrollHeight)+'px';
-}
-
+function autoGrowDescription(el){ if(!el)return; el.style.height='auto'; el.style.height=Math.max(48,el.scrollHeight)+'px'; }
 function fmt(n){ return n.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; }
 function updateTotals(){
   let grand=0;
   document.querySelectorAll('.invoice-line').forEach(row=>{
     const q=parseFloat(row.querySelector('.qty').value)||0;
     const p=parseFloat(row.querySelector('.price').value)||0;
-    const t=q*p; grand+=t;
-    row.querySelector('.line-total').textContent=fmt(t);
+    const t=q*p; grand+=t; row.querySelector('.line-total').textContent=fmt(t);
   });
-
   document.getElementById('grand-total').textContent=fmt(grand);
-
-  // V2.3.49 — le champ Total facture doit refléter exactement
-  // la somme des lignes dans l'éditeur / modificateur de facture.
-  const billingTotal = document.getElementById('billing-total-display');
-  if (billingTotal) {
-    billingTotal.value = fmt(grand);
-  }
+  const billingTotal=document.getElementById('billing-total-display');
+  if(billingTotal) billingTotal.value=fmt(grand);
 }
 function wire(row){
   row.querySelectorAll('.qty,.price').forEach(x=>x.addEventListener('input',updateTotals));
   const desc=row.querySelector('.desc');
-  if(desc){
-    desc.addEventListener('input',()=>autoGrowDescription(desc));
-    autoGrowDescription(desc);
-  }
+  if(desc){desc.addEventListener('input',()=>autoGrowDescription(desc));autoGrowDescription(desc);}
   row.querySelector('.remove-line').addEventListener('click',()=>{row.remove();updateTotals();});
 }
 function addLine(type){
   const row=tpl.content.firstElementChild.cloneNode(true);
   row.querySelector('select[name="line_type[]"]').value=type;
-  tbody.appendChild(row); wire(row); updateTotals();
-  row.querySelector('.desc').focus();
+  tbody.appendChild(row); wire(row); updateTotals(); row.querySelector('.desc').focus();
 }
 document.querySelectorAll('.invoice-line').forEach(wire);
 document.getElementById('add-service').onclick=()=>addLine('service');
 document.getElementById('add-goods').onclick=()=>addLine('goods');
-
-const noInvoiceParts = document.getElementById('no-invoice-parts');
-const invoiceLinesArea = document.getElementById('invoice-lines-area');
-const invoiceBillingArea = document.getElementById('invoice-billing-area');
-
+const noInvoiceParts=document.getElementById('no-invoice-parts');
+const invoiceLinesArea=document.getElementById('invoice-lines-area');
+const invoiceBillingArea=document.getElementById('invoice-billing-area');
 function refreshNoInvoiceParts(){
-  const active = !!(noInvoiceParts && noInvoiceParts.checked);
-  if(invoiceLinesArea) invoiceLinesArea.hidden = active;
-  if(invoiceBillingArea) invoiceBillingArea.hidden = active;
-
-  if(!active && !document.querySelector('.invoice-line')){
-    addLine('service');
-  }
+  const active=!!(noInvoiceParts&&noInvoiceParts.checked);
+  if(invoiceLinesArea)invoiceLinesArea.hidden=active;
+  if(invoiceBillingArea)invoiceBillingArea.hidden=active;
+  if(!active&&!document.querySelector('.invoice-line'))addLine('service');
 }
-if(noInvoiceParts){
-  noInvoiceParts.addEventListener('change', refreshNoInvoiceParts);
-}
-refreshNoInvoiceParts();
-updateTotals();
+if(noInvoiceParts)noInvoiceParts.addEventListener('change',refreshNoInvoiceParts);
+refreshNoInvoiceParts(); updateTotals();
 </script>
 {% endblock %}

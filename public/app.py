@@ -9004,22 +9004,6 @@ def repair_edit(rid):
         else:
             returned_at = None
 
-        # V2.3.204 — correction manuelle de la date de facture.
-        # La date métier de la facture est stockée dans finished_at.
-        invoice_date_raw = request.form.get("invoice_date", "").strip()
-        if r["invoice_no"] and invoice_date_raw:
-            try:
-                invoice_day = datetime.strptime(invoice_date_raw, "%Y-%m-%d").date()
-                try:
-                    old_finished = datetime.fromisoformat(str(r["finished_at"] or ""))
-                    invoice_time = old_finished.time().replace(microsecond=0)
-                except Exception:
-                    invoice_time = now().time().replace(microsecond=0)
-                finished_at = datetime.combine(invoice_day, invoice_time).isoformat(timespec="seconds")
-            except ValueError:
-                flash("Date de facture invalide.")
-                con.close()
-                return redirect(url_for("repair_edit", rid=rid))
 
         con.execute("""
             UPDATE repairs SET
@@ -9372,7 +9356,25 @@ def repair_close(rid):
         goods_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "goods")
 
         inv = r["invoice_no"] or make_invoice_no()
-        finished = r["finished_at"] or now().isoformat(timespec="seconds")
+
+        # V2.3.204 — date de facture éditable depuis FACTURE / MODIFIER FACTURE.
+        invoice_date_raw = request.form.get("invoice_date", "").strip()
+        try:
+            invoice_day = datetime.strptime(invoice_date_raw, "%Y-%m-%d").date()
+        except ValueError:
+            con.close()
+            flash("Date de facture invalide.")
+            return redirect(url_for("repair_close", rid=rid))
+
+        if r["finished_at"]:
+            try:
+                invoice_time = datetime.fromisoformat(str(r["finished_at"])).time().replace(microsecond=0)
+            except Exception:
+                invoice_time = now().time().replace(microsecond=0)
+        else:
+            invoice_time = now().time().replace(microsecond=0)
+
+        finished = datetime.combine(invoice_day, invoice_time).isoformat(timespec="seconds")
 
         is_historical_invoice = bool(r["legacy_imported"])
 
@@ -9597,7 +9599,8 @@ def repair_close(rid):
         invoice_lines=lines,
         invoice_was_reconstructed=invoice_was_reconstructed,
         original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
-        payment_split=payment_split_values(r["payment_detail"], r["payment_method"])
+        payment_split=payment_split_values(r["payment_detail"], r["payment_method"]),
+        invoice_date_value=((r["finished_at"] or now().date().isoformat())[:10])
     )
 
 @app.route("/sign/<token>", methods=["GET", "POST"])
