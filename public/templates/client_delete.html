@@ -19,6 +19,37 @@
       </div>
     </form>
 
+    <hr>
+    <div class="danger-box">
+      <strong>Suppression définitive</strong><br>
+      À utiliser uniquement pour une fiche de test ou créée par erreur.
+      {% if has_history %}
+        Les {{ repairs_count }} suivi(s), {{ invoices_count }} facture(s) et {{ quotes_count }} devis liés seront supprimés.
+      {% endif %}
+    </div>
+
+    <form method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="delete_all">
+      <input type="hidden" name="confirm_delete" value="yes">
+
+      {% if client['google_resource_name'] %}
+      <label class="checkboxline delete-google-option">
+        <input type="checkbox" name="delete_google" checked>
+        Supprimer aussi ce contact de Google Contacts
+      </label>
+      {% endif %}
+
+      <label>
+        Tape <strong>SUPPRIMER</strong> pour confirmer
+        <input name="confirm_delete_all" autocomplete="off" required>
+      </label>
+
+      <div class="footer-actions">
+        <button class="danger-action" type="submit">SUPPRIMER LE CLIENT + TOUT L’HISTORIQUE</button>
+      </div>
+    </form>
+
   {% elif has_history %}
     <h1>Archiver le client ?</h1>
     <div class="delete-client-name">{{ client['name'] }}</div>
@@ -51,6 +82,35 @@
       <div class="footer-actions">
         <button class="primary" type="submit">ARCHIVER LE CLIENT</button>
         <a class="button" href="{{ url_for('contacts_page') }}">Annuler</a>
+      </div>
+    </form>
+
+    <hr>
+    <div class="danger-box">
+      <strong>Client de test / fiche créée par erreur ?</strong><br>
+      Tu peux supprimer définitivement le client avec tous ses suivis, factures et devis.
+      Cette action est irréversible.
+    </div>
+
+    <form method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="delete_all">
+      <input type="hidden" name="confirm_delete" value="yes">
+
+      {% if client['google_resource_name'] %}
+      <label class="checkboxline delete-google-option">
+        <input type="checkbox" name="delete_google" checked>
+        Supprimer aussi ce contact de Google Contacts
+      </label>
+      {% endif %}
+
+      <label>
+        Tape <strong>SUPPRIMER</strong> pour confirmer
+        <input name="confirm_delete_all" autocomplete="off" required>
+      </label>
+
+      <div class="footer-actions">
+        <button class="danger-action" type="submit">SUPPRIMER LE CLIENT + TOUT L’HISTORIQUE</button>
       </div>
     </form>
 
