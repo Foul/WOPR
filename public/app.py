@@ -8322,7 +8322,9 @@ def repair_new():
     if request.method == "POST":
         first_name = request.form.get("first_name","").strip()
         last_name = request.form.get("last_name","").strip()
-        name = compose_client_name(last_name, first_name).strip()
+        company = request.form.get("company","").strip()
+        contact_name = compose_client_name(last_name, first_name).strip()
+        name = contact_name or company
         if not name:
             flash("Renseigne au moins un nom/prénom ou le nom de l’entreprise.")
             return render_template("repair_form.html", today=now().strftime("%Y-%m-%d"))
@@ -8345,21 +8347,21 @@ def repair_new():
         if client:
             con.execute("""
                 UPDATE clients
-                SET name=?, last_name=?, first_name=?,
+                SET name=?, last_name=?, first_name=?, company=?,
                     address=?, address_street=?, postal_code=?, city=?,
                     phone=?, email=?, updated_at=?
                 WHERE id=?
-            """, (name,last_name,first_name,address,address_street,postal_code,city,phone,email,created,client["id"]))
+            """, (name,last_name,first_name,company,address,address_street,postal_code,city,phone,email,created,client["id"]))
             client_id = client["id"]
         else:
             cur = con.execute("""
                 INSERT INTO clients(
-                    name,last_name,first_name,
+                    name,last_name,first_name,company,
                     address,address_street,postal_code,city,phone,email,created_at,updated_at
                 )
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                name,last_name,first_name,
+                name,last_name,first_name,company,
                 address,address_street,postal_code,city,phone,email,created,created
             ))
             client_id = cur.lastrowid
@@ -8924,6 +8926,7 @@ def repair_edit(rid):
                c.name client_name,
                c.first_name client_first_name,
                c.last_name client_last_name,
+               c.company client_company,
                c.address client_address,
                c.address_street client_address_street,
                c.postal_code client_postal_code,

@@ -12,7 +12,8 @@
   <div class="section-title">Informations Client</div>
   <div class="grid two">
     <label>Prénom<input name="first_name" autocomplete="given-name"></label>
-    <label>Nom<input name="last_name" autocomplete="family-name" required></label>
+    <label>Nom<input name="last_name" autocomplete="family-name"></label>
+    <label class="wide">Entreprise<input name="company" autocomplete="organization"></label>
     <label>Date<input type="date" name="received_date" value="{{ today }}" required></label>
     <label class="wide">Adresse<input name="address_street"></label>
     <label>Code postal<input name="postal_code" inputmode="numeric"></label>
