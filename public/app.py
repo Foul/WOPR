@@ -9004,6 +9004,23 @@ def repair_edit(rid):
         else:
             returned_at = None
 
+        # V2.3.204 — correction manuelle de la date de facture.
+        # La date métier de la facture est stockée dans finished_at.
+        invoice_date_raw = request.form.get("invoice_date", "").strip()
+        if r["invoice_no"] and invoice_date_raw:
+            try:
+                invoice_day = datetime.strptime(invoice_date_raw, "%Y-%m-%d").date()
+                try:
+                    old_finished = datetime.fromisoformat(str(r["finished_at"] or ""))
+                    invoice_time = old_finished.time().replace(microsecond=0)
+                except Exception:
+                    invoice_time = now().time().replace(microsecond=0)
+                finished_at = datetime.combine(invoice_day, invoice_time).isoformat(timespec="seconds")
+            except ValueError:
+                flash("Date de facture invalide.")
+                con.close()
+                return redirect(url_for("repair_edit", rid=rid))
+
         con.execute("""
             UPDATE repairs SET
                 received_date=?, device_type=?, brand_model=?, serial_no=?,

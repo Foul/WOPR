@@ -118,6 +118,13 @@
       {% endfor %}
       </select>
     </label>
+    {% if r['invoice_no'] %}
+    <label>Date de facture
+      <input type="date" name="invoice_date" value="{{ (r['finished_at'] or '')[:10] }}">
+      <small>Cette date est utilisée sur le PDF de facture.</small>
+    </label>
+    {% endif %}
+
     <label>Date de restitution
       <input type="date" name="returned_at" value="{{ (r['returned_at'] or '')[:10] }}">
       <small>Modifiable si la restitution a été enregistrée plus tard que la remise réelle au client.</small>
