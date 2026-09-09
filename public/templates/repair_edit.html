@@ -18,6 +18,10 @@
       <input name="last_name" value="{{ r['client_last_name'] or r['client_name'] or '' }}">
     </label>
 
+    <label class="wide">Entreprise
+      <input name="company" value="{{ r['client_company'] or '' }}" autocomplete="organization">
+    </label>
+
     <label>Date
       <input type="date" name="received_date" value="{{ r['received_date'] or '' }}">
     </label>
@@ -91,7 +95,6 @@
       <textarea name="problem" rows="4">{{ r['problem'] or '' }}</textarea>
     </label>
   </div>
-
 
   <div class="section-title">Intervention et Validation</div>
   <div class="grid one">

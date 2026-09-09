@@ -8944,10 +8944,11 @@ def repair_edit(rid):
     if request.method == "POST":
         first_name = request.form.get("first_name", "").strip()
         last_name = request.form.get("last_name", "").strip()
+        company = request.form.get("company", "").strip()
 
         name = compose_client_name(last_name, first_name).strip()
         if not name:
-            name = str(r["client_name"] or "").strip()
+            name = company or str(r["client_name"] or "").strip()
 
         address_street = request.form.get("address_street", "").strip()
         postal_code = request.form.get("postal_code", "").strip()
@@ -8964,12 +8965,12 @@ def repair_edit(rid):
 
         con.execute("""
             UPDATE clients SET
-                first_name=?, last_name=?, name=?, address=?, address_street=?,
+                first_name=?, last_name=?, name=?, company=?, address=?, address_street=?,
                 postal_code=?, city=?, phone=?, email=?,
                 google_sync_status=?, google_sync_error=?, updated_at=?
             WHERE id=?
         """, (
-            first_name, last_name, name, address, address_street,
+            first_name, last_name, name, company, address, address_street,
             postal_code, city,
             request.form.get("phone", "").strip(),
             request.form.get("email", "").strip(),
@@ -9754,6 +9755,7 @@ def intake_pdf(rid):
                c.name client_name,
                c.first_name client_first_name,
                c.last_name client_last_name,
+               c.company client_company,
                c.address client_address,
                c.address_street client_address_street, c.postal_code client_postal_code,
                c.city client_city, c.phone client_phone, c.email client_email
