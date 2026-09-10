@@ -63,6 +63,25 @@ for pid in $PIDS; do
     fi
 done
 
+# V2.3.211 — une fois le serveur réellement arrêté, capture le dernier état
+# SQLite de la session avec la même API de sauvegarde que WOPR.
+BACKUP_OK=0
+BACKUP_PATH=""
+PYTHON_BIN="$PRIVATE_DIR/.venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN="$(command -v python3 2>/dev/null || true)"
+fi
+if [ -n "$PYTHON_BIN" ] && [ -f "$APP_PATH" ]; then
+    BACKUP_PATH="$("$PYTHON_BIN" "$APP_PATH" --backup-arret 2>/dev/null | tail -n 1)"
+    [ -n "$BACKUP_PATH" ] && [ -f "$BACKUP_PATH" ] && BACKUP_OK=1
+fi
+
 rm -f "$PID_FILE"
-command -v notify-send >/dev/null 2>&1 && notify-send "WOPR" "Toutes les instances WOPR ont été arrêtées."
+if command -v notify-send >/dev/null 2>&1; then
+    if [ "$BACKUP_OK" -eq 1 ]; then
+        notify-send "WOPR" "WOPR arrêté. Sauvegarde créée : $(basename "$BACKUP_PATH")"
+    else
+        notify-send "WOPR" "WOPR arrêté, mais la sauvegarde de fermeture a échoué."
+    fi
+fi
 exit 0

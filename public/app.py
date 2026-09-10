@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.210"
+APP_VERSION = "2.3.211"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1545,6 +1545,116 @@ def backup_database(force=False, tag="auto"):
         try: old.unlink()
         except OSError: pass
     return dest
+
+
+def database_integrity_check(path):
+    """Vérifie qu'un fichier est une base SQLite lisible et intègre."""
+    path = Path(path)
+    if not path.is_file():
+        return False, "Fichier introuvable."
+    con = None
+    try:
+        con = sqlite3.connect(str(path))
+        con.execute("PRAGMA query_only=ON")
+        row = con.execute("PRAGMA integrity_check").fetchone()
+        result = str(row[0] if row else "").strip()
+        return result.casefold() == "ok", result or "Contrôle SQLite sans résultat."
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _sqlite_backup_copy(source, destination):
+    """Copie une base via l'API SQLite, sans simple copie de fichier."""
+    source = Path(source)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    src_con = sqlite3.connect(str(source))
+    dst_con = sqlite3.connect(str(destination))
+    try:
+        src_con.backup(dst_con)
+    finally:
+        dst_con.close()
+        src_con.close()
+
+
+def restore_database_backup(backup_name):
+    """Rend une sauvegarde WOPR active après validation et backup de sécurité."""
+    backup_name = str(backup_name or "").strip()
+    if not backup_name or Path(backup_name).name != backup_name:
+        raise ValueError("Nom de sauvegarde invalide.")
+    if not re.fullmatch(r"foulfix_\d{8}_\d{6}_[A-Za-z0-9_-]+\.db", backup_name):
+        raise ValueError("Cette sauvegarde n'est pas reconnue par WOPR.")
+
+    backup_root = BACKUP_DIR.resolve()
+    source = (BACKUP_DIR / backup_name).resolve()
+    if source.parent != backup_root or not source.is_file():
+        raise ValueError("Sauvegarde introuvable.")
+
+    ok, detail = database_integrity_check(source)
+    if not ok:
+        raise ValueError(f"Sauvegarde refusée : contrôle SQLite = {detail}")
+
+    # On conserve toujours l'état courant avant de basculer sur l'ancienne base.
+    safety = backup_database(force=True, tag="avant_restauration")
+    if not safety:
+        raise RuntimeError("Impossible de sauvegarder la base actuelle avant restauration.")
+
+    stamp = now().strftime("%Y%m%d_%H%M%S")
+    restore_tmp = DB.parent / f".foulfix_restore_{stamp}_{secrets.token_hex(3)}.db"
+    rollback_tmp = DB.parent / f".foulfix_rollback_{stamp}_{secrets.token_hex(3)}.db"
+
+    try:
+        _sqlite_backup_copy(source, restore_tmp)
+        ok, detail = database_integrity_check(restore_tmp)
+        if not ok:
+            raise RuntimeError(f"Copie de restauration invalide : {detail}")
+
+        # Aucun handle SQLite n'est conservé globalement par WOPR. Les éventuels
+        # fichiers temporaires d'une ancienne session ne doivent pas accompagner
+        # la base restaurée.
+        for suffix in ("-wal", "-shm"):
+            try:
+                Path(str(DB) + suffix).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        os.replace(restore_tmp, DB)
+        try:
+            # Une sauvegarde plus ancienne peut avoir un schéma antérieur :
+            # les migrations WOPR courantes sont réappliquées avant utilisation.
+            init_db()
+            ok, detail = database_integrity_check(DB)
+            if not ok:
+                raise RuntimeError(f"Base restaurée invalide après migration : {detail}")
+            harden_local_permissions()
+        except Exception as exc:
+            # Retour automatique à la base qui était active avant l'opération.
+            _sqlite_backup_copy(safety, rollback_tmp)
+            for suffix in ("-wal", "-shm"):
+                try:
+                    Path(str(DB) + suffix).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            os.replace(rollback_tmp, DB)
+            harden_local_permissions()
+            raise RuntimeError(
+                f"Restauration annulée ; la base précédente a été remise automatiquement. Détail : {exc}"
+            ) from exc
+    finally:
+        for tmp in (restore_tmp, rollback_tmp):
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    return source, safety
 
 
 def harden_local_permissions():
@@ -5686,6 +5796,25 @@ def security_page():
             path = backup_database(force=True, tag="manuel")
             audit_event("BACKUP", path.name if path else "", request.remote_addr)
             flash("Sauvegarde locale créée." if path else "Aucune base à sauvegarder.")
+        elif action == "restore_backup":
+            backup_name = request.form.get("backup_name", "").strip()
+            if request.form.get("confirm_restore") != "1":
+                flash("Restauration annulée : confirmation absente.")
+            else:
+                try:
+                    source, safety = restore_database_backup(backup_name)
+                    audit_event(
+                        "BACKUP_RESTORE",
+                        f"Sauvegarde restaurée : {source.name}; sécurité : {safety.name}",
+                        request.remote_addr
+                    )
+                    flash(
+                        f"Sauvegarde {source.name} ouverte dans WOPR. "
+                        f"L'ancienne base a été sauvegardée sous {safety.name}."
+                    )
+                except Exception as exc:
+                    audit_event("BACKUP_RESTORE_ERROR", type(exc).__name__, request.remote_addr)
+                    flash(f"Impossible de restaurer cette sauvegarde : {exc}")
         elif action == "master_key_export":
             if not MASTER_SECRET_FILE.exists():
                 flash("Aucune clé maître locale à exporter.")
@@ -12707,6 +12836,22 @@ def export_ventes():
                     headers={"Content-Disposition":"attachment; filename=Achats_Ventes_Ventes.csv"})
 
 if __name__ == "__main__":
+    # Utilisé par les scripts d'arrêt : le serveur est déjà terminé, on capture
+    # donc le dernier état SQLite entièrement validé de la session.
+    if "--backup-arret" in sys.argv:
+        try:
+            path = backup_database(force=True, tag="arret")
+            if path:
+                ok, detail = database_integrity_check(path)
+                if not ok:
+                    raise RuntimeError(f"Contrôle SQLite = {detail}")
+                print(str(path))
+                raise SystemExit(0)
+            raise RuntimeError("Aucune base à sauvegarder.")
+        except Exception as exc:
+            print(f"ERREUR BACKUP ARRET: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+
     backup_database(force=False, tag="demarrage")
     init_db()
     harden_local_permissions()

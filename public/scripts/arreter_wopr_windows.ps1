@@ -32,11 +32,53 @@ foreach ($processId in $pids) {
     Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 
+# Attend réellement la fin des processus avant de sauvegarder la base.
+for ($i = 0; $i -lt 20; $i++) {
+    $stillRunning = $false
+    foreach ($processId in $pids) {
+        if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+            $stillRunning = $true
+            break
+        }
+    }
+    if (-not $stillRunning) { break }
+    Start-Sleep -Milliseconds 250
+}
+
+$backupOk = $false
+$backupName = ""
+if ($pids.Count -gt 0 -and (Test-Path $AppPath)) {
+    $pythonExe = Join-Path $PrivateDir ".venv-win\Scripts\python.exe"
+    if (-not (Test-Path $pythonExe)) {
+        $pythonCmd = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+            $pythonExe = $pythonCmd.Source
+        } else {
+            $pythonExe = ""
+        }
+    }
+
+    if ($pythonExe) {
+        $backupOutput = & $pythonExe $AppPath --backup-arret 2>$null
+        if ($LASTEXITCODE -eq 0 -and $backupOutput) {
+            $backupPath = [string]($backupOutput | Select-Object -Last 1)
+            if (Test-Path $backupPath) {
+                $backupOk = $true
+                $backupName = Split-Path -Leaf $backupPath
+            }
+        }
+    }
+}
+
 Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 
 Add-Type -AssemblyName PresentationFramework
 if ($pids.Count -gt 0) {
-    [System.Windows.MessageBox]::Show("Toutes les instances WOPR ont été arrêtées.", "WOPR") | Out-Null
+    if ($backupOk) {
+        [System.Windows.MessageBox]::Show("Toutes les instances WOPR ont été arrêtées.`nSauvegarde créée : $backupName", "WOPR") | Out-Null
+    } else {
+        [System.Windows.MessageBox]::Show("Toutes les instances WOPR ont été arrêtées, mais la sauvegarde de fermeture a échoué.", "WOPR") | Out-Null
+    }
 } else {
     [System.Windows.MessageBox]::Show("WOPR est déjà arrêté.", "WOPR") | Out-Null
 }
