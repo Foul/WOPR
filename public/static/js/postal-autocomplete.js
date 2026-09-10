@@ -14,8 +14,15 @@
     return cache.get(url);
   };
 
+  const suggestionContainer = (postalInput) =>
+    postalInput.closest('form') ||
+    postalInput.closest('[data-client-row]') ||
+    postalInput.parentElement ||
+    document;
+
   const removeSuggestions = (postalInput) => {
-    const existing = postalInput.closest('form')?.querySelector(
+    const root = suggestionContainer(postalInput);
+    const existing = root.querySelector(
       `[data-postal-suggestions-for="${postalInput.id}"]`
     );
     if (existing) existing.remove();
@@ -23,7 +30,6 @@
 
   const addSuggestions = (postalInput, cityInput, cities) => {
     removeSuggestions(postalInput);
-
     if (cities.length <= 1) return;
 
     const select = document.createElement('select');
@@ -69,13 +75,11 @@
       if (postalInput.value !== cp) postalInput.value = cp;
 
       removeSuggestions(postalInput);
-
       if (cp.length !== 5) return;
 
       try {
         const database = await loadDatabase(dataUrl);
         const cities = database[cp] || [];
-
         if (!cities.length) return;
 
         if (cities.length === 1) {
@@ -87,7 +91,7 @@
           return;
         }
 
-        // Plusieurs communes : ne choisit jamais arbitrairement à la place de l'utilisateur.
+        // Plusieurs communes : jamais de choix arbitraire.
         if (cityInput.dataset.postalAutofilled === '1') {
           cityInput.value = '';
           cityInput.dataset.postalAutofilled = '0';

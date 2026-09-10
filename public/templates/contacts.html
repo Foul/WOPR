@@ -104,7 +104,7 @@
   <thead><tr><th>Prénom</th><th>Nom</th><th>Entreprise / Société</th><th>Téléphone</th><th>E-mail</th><th>Adresse</th><th>Notes</th><th>Google</th><th>Actions</th></tr></thead>
   <tbody>
   {% for c in clients %}
-  <tr class="contact-row" data-client-row="{{ c['id'] }}">
+  <tr id="client-{{ c['id'] }}" class="contact-row" data-client-row="{{ c['id'] }}">
     <td>
       <div class="contact-display"><strong>{{ c['first_name'] or '' }}</strong></div>
       <div class="contact-edit">
@@ -143,8 +143,21 @@
       <div class="contact-edit contact-address-edit">
         <input form="edit-client-{{ c['id'] }}" name="address_street" value="{{ c['address_street'] or '' }}" placeholder="Adresse">
         <div class="contact-cp-city">
-          <input form="edit-client-{{ c['id'] }}" name="postal_code" value="{{ c['postal_code'] or '' }}" placeholder="CP">
-          <input form="edit-client-{{ c['id'] }}" name="city" value="{{ c['city'] or '' }}" placeholder="Ville">
+          <input id="client-postal-code-{{ c['id'] }}"
+                 form="edit-client-{{ c['id'] }}"
+                 name="postal_code"
+                 value="{{ c['postal_code'] or '' }}"
+                 placeholder="CP"
+                 inputmode="numeric"
+                 maxlength="5"
+                 data-postal-autocomplete
+                 data-city-target="client-city-{{ c['id'] }}"
+                 data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}">
+          <input id="client-city-{{ c['id'] }}"
+                 form="edit-client-{{ c['id'] }}"
+                 name="city"
+                 value="{{ c['city'] or '' }}"
+                 placeholder="Ville">
         </div>
       </div>
     </td>
@@ -229,6 +242,16 @@
     if(row) row.querySelectorAll('input:not([type="hidden"]),textarea').forEach(el=>el.value=el.defaultValue);
     setEditing(b.dataset.cancelClient,false);
   }));
+
+  // Si l'enregistrement revient sur #client-ID, garde la ligne visible
+  // sans la coller tout en haut de l'écran.
+  if(location.hash && location.hash.startsWith('#client-')){
+    const row=document.querySelector(location.hash);
+    if(row){
+      requestAnimationFrame(()=>row.scrollIntoView({block:'center', behavior:'auto'}));
+    }
+  }
 })();
 </script>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 {% endblock %}

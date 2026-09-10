@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.215"
+APP_VERSION = "2.3.216"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -12658,7 +12658,7 @@ def client_edit(client_id):
         # La fiche reste "À synchroniser" jusqu'au bouton WOPR → Google.
         flash("Client modifié. Google n'a pas été modifié automatiquement.")
 
-        return redirect(url_for("contacts_page"))
+        return redirect(url_for("contacts_page") + f"#client-{client_id}")
 
     con.close()
     return render_template("client_edit.html", client=client)
