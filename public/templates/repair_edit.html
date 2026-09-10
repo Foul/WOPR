@@ -126,6 +126,12 @@
       <input type="date" name="returned_at" value="{{ (r['returned_at'] or '')[:10] }}">
       <small>Modifiable si la restitution a été enregistrée plus tard que la remise réelle au client.</small>
     </label>
+    {% if r['paid'] %}
+    <label>Date d'encaissement
+      <input type="date" name="accounting_date" value="{{ (r['accounting_date'] or '')[:10] }}">
+      <small>Par défaut, elle suit la date de restitution. Tu peux la corriger manuellement si nécessaire.</small>
+    </label>
+    {% endif %}
   </div>
 
   <div class="footer-actions">

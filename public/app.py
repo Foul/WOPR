@@ -96,7 +96,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.211"
+APP_VERSION = "2.3.212"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -9199,6 +9199,45 @@ def repair_edit(rid):
         else:
             returned_at = None
 
+        # V2.3.212 — chez Foul-Fix, matériel restitué = règlement encaissé.
+        # Si la date de restitution change sur un dossier déjà payé, la date
+        # d'encaissement suit automatiquement, sauf si elle a été modifiée
+        # explicitement dans le formulaire.
+        accounting_date = str(r["accounting_date"] or "")[:10]
+        accounting_year = r["accounting_year"]
+        accounting_month = r["accounting_month"]
+        accounting_status = r["accounting_status"] or "normal"
+        requested_accounting_date = request.form.get("accounting_date", accounting_date).strip()
+
+        if r["paid"]:
+            if requested_accounting_date:
+                try:
+                    datetime.strptime(requested_accounting_date, "%Y-%m-%d")
+                except ValueError:
+                    flash("Date d'encaissement invalide.")
+                    con.close()
+                    return redirect(url_for("repair_edit", rid=rid))
+
+            old_returned_at = str(r["returned_at"] or "")[:10]
+            returned_day = str(returned_at or "")[:10]
+            returned_changed = returned_day != old_returned_at
+            accounting_changed = requested_accounting_date != accounting_date
+
+            if accounting_changed:
+                accounting_date = requested_accounting_date
+            elif returned_changed and returned_day:
+                accounting_date = returned_day
+            elif not accounting_date and returned_day:
+                accounting_date = returned_day
+
+            if accounting_date:
+                ad = datetime.strptime(accounting_date, "%Y-%m-%d")
+                accounting_year, accounting_month = ad.year, ad.month
+                accounting_status = (
+                    "yellow"
+                    if (accounting_year, accounting_month) != (int(followup_year), int(followup_month))
+                    else "normal"
+                )
 
         con.execute("""
             UPDATE repairs SET
@@ -9206,7 +9245,8 @@ def repair_edit(rid):
                 system_name=?, system_password=?, accessories=?, device_state=?,
                 problem=?, diagnosis=?, work_done=?, tests_validation=?, remarks=?,
                 status=?, finished_at=?, returned_at=?, legacy_call_note=?,
-                followup_year=?, followup_month=?
+                followup_year=?, followup_month=?, accounting_year=?, accounting_month=?,
+                accounting_date=?, accounting_status=?
             WHERE id=?
         """, (
             received_date,
@@ -9229,6 +9269,10 @@ def repair_edit(rid):
             r["legacy_call_note"] or "",
             followup_year,
             followup_month,
+            accounting_year,
+            accounting_month,
+            accounting_date,
+            accounting_status,
             rid
         ))
 
@@ -9350,7 +9394,7 @@ def repair_cash_now(rid):
 def repair_update(rid):
     con = db()
     current = con.execute(
-        "SELECT status, finished_at, returned_at, followup_year, followup_month, service_amount, goods_amount, payment_mode, payment_method, payment_detail FROM repairs WHERE id=?",
+        "SELECT status, finished_at, returned_at, followup_year, followup_month, service_amount, goods_amount, payment_mode, payment_method, payment_detail, paid, accounting_year, accounting_month, accounting_date, accounting_status FROM repairs WHERE id=?",
         (rid,)
     ).fetchone()
     if not current:
@@ -9392,6 +9436,12 @@ def repair_update(rid):
         if not finished_at:
             finished_at = now().isoformat(timespec="seconds")
         pay_dt = now()
+        if returned_at:
+            try:
+                pay_day = datetime.strptime(str(returned_at)[:10], "%Y-%m-%d").date()
+                pay_dt = datetime.combine(pay_day, pay_dt.time())
+            except ValueError:
+                pass
         invoice_total = float(current["service_amount"] or 0) + float(current["goods_amount"] or 0)
         pay_mode, pay_method, pay_detail, pay_error = payment_data_from_form(
             invoice_total, current["payment_mode"], current["payment_method"], current["payment_detail"]
@@ -9426,9 +9476,48 @@ def repair_update(rid):
             rid
         ))
     else:
+        accounting_date = str(current["accounting_date"] or "")[:10]
+        accounting_year = current["accounting_year"]
+        accounting_month = current["accounting_month"]
+        accounting_status = current["accounting_status"] or "normal"
+
+        if current["paid"]:
+            requested_accounting_date = request.form.get("accounting_date", accounting_date).strip()
+            if requested_accounting_date:
+                try:
+                    datetime.strptime(requested_accounting_date, "%Y-%m-%d")
+                except ValueError:
+                    con.close()
+                    flash("Date d'encaissement invalide.")
+                    return redirect(url_for("repair_detail", rid=rid))
+
+            old_returned_at = str(current["returned_at"] or "")[:10]
+            returned_day = str(returned_at or "")[:10]
+            returned_changed = returned_day != old_returned_at
+            accounting_changed = requested_accounting_date != accounting_date
+
+            if accounting_changed:
+                accounting_date = requested_accounting_date
+            elif returned_changed and returned_day:
+                accounting_date = returned_day
+            elif not accounting_date and returned_day:
+                accounting_date = returned_day
+
+            if accounting_date:
+                ad = datetime.strptime(accounting_date, "%Y-%m-%d")
+                accounting_year, accounting_month = ad.year, ad.month
+                fy = current["followup_year"]
+                fm = current["followup_month"]
+                accounting_status = (
+                    "yellow"
+                    if fy and fm and (accounting_year, accounting_month) != (int(fy), int(fm))
+                    else "normal"
+                )
+
         con.execute("""
             UPDATE repairs SET
-                diagnosis=?, work_done=?, tests_validation=?, remarks=?, status=?, finished_at=?, returned_at=?
+                diagnosis=?, work_done=?, tests_validation=?, remarks=?, status=?, finished_at=?, returned_at=?,
+                accounting_year=?, accounting_month=?, accounting_date=?, accounting_status=?
             WHERE id=?
         """, (
             request.form.get("diagnosis",""),
@@ -9438,6 +9527,10 @@ def repair_update(rid):
             new_status,
             finished_at,
             returned_at,
+            accounting_year,
+            accounting_month,
+            accounting_date,
+            accounting_status,
             rid
         ))
     record_repair_status_change(con, rid, current["status"], new_status)
