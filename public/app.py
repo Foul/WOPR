@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.220"
+APP_VERSION = "2.3.221"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1933,18 +1933,31 @@ def _portability_diagnostics_impl():
         "Des chemins personnels codés en dur subsistent : " + ", ".join(hardcoded),
     )
 
-    portable_launchers = (
-        WOPR_ROOT / "WOPR.desktop",
-        WOPR_ROOT / "Arreter-WOPR.desktop",
-        WOPR_ROOT / "WOPR-Windows.vbs",
-        WOPR_ROOT / "Arreter-WOPR-Windows.vbs",
-    )
-    missing_launchers = [p.name for p in portable_launchers if not p.exists()]
+    # V2.3.221 : anciens .desktop/.vbs supprimés.
+    # Le launcher unifié est public/launcher/wopr_launcher.py et les binaires
+    # officiels sont WOPR (Linux) et WOPR.exe (Windows) à la racine.
+    launcher_source = WOPR_ROOT / "public" / "launcher" / "wopr_launcher.py"
+    linux_launcher = WOPR_ROOT / "WOPR"
+    windows_launcher = WOPR_ROOT / "WOPR.exe"
+
+    missing_launchers = []
+    if not launcher_source.is_file():
+        missing_launchers.append("public/launcher/wopr_launcher.py")
+    if not linux_launcher.is_file():
+        missing_launchers.append("WOPR")
+    if not windows_launcher.is_file():
+        missing_launchers.append("WOPR.exe")
+
+    if missing_launchers:
+        launcher_error = "Élément(s) du launcher absent(s) : " + ", ".join(missing_launchers)
+    else:
+        launcher_error = ""
+
     add(
         "Lanceurs portables",
         not missing_launchers,
-        "Les lanceurs Linux et Windows WOPR sont contenus dans WOPR.",
-        "Lanceur(s) portable(s) absent(s) : " + ", ".join(missing_launchers),
+        "Source du launcher présente ; binaires Linux WOPR et Windows WOPR.exe présents.",
+        launcher_error,
     )
 
     # Les bibliothèques principales sont déjà importées si cette page s'affiche.
