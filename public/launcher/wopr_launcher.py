@@ -30,6 +30,7 @@ LOG=DATA_DIR/"wopr-launcher.log"
 SERVER_OUT=DATA_DIR/"wopr-server.log"
 SERVER_ERR=DATA_DIR/"wopr-server-error.log"
 DB_FILE=DATA_DIR/"foulfix.db"
+BACKUP_DIR=DATA_DIR/"backups"
 VENV_DIR=PRIVATE_DIR/(".venv-win" if IS_WINDOWS else ".venv")
 PY=VENV_DIR/("Scripts/python.exe" if IS_WINDOWS else "bin/python")
 STAMP=VENV_DIR/".requirements.sha256"
@@ -131,30 +132,123 @@ def start_server(status):
         time.sleep(.5)
     raise RuntimeError(f"Délai dépassé. Voir les logs dans {DATA_DIR}")
 
-def stop_server(status):
+def discover_app_pids():
+    pids=set()
     pid=read_pid()
-    if not process_exists(pid):
-        PID_FILE.unlink(missing_ok=True)
-        status("WOPR est déjà arrêté."); return
-    status("Arrêt de WOPR…")
-    try:
-        if IS_WINDOWS:
-            subprocess.run(["taskkill","/PID",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                           creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-        else:
-            os.kill(pid,signal.SIGTERM)
-    except Exception: pass
-    end=time.monotonic()+5
-    while time.monotonic()<end and process_exists(pid): time.sleep(.15)
     if process_exists(pid):
-        if IS_WINDOWS:
-            subprocess.run(["taskkill","/F","/PID",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                           creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-        else:
-            os.kill(pid,signal.SIGKILL)
+        pids.add(pid)
+
+    if IS_WINDOWS:
+        # Retrouve aussi WOPR si le fichier PID a disparu : uniquement Python/pythonw
+        # dont la ligne de commande contient exactement ce public\app.py.
+        app=str(APP_PATH).replace("'", "''")
+        ps=(
+            "$app='"+app+"'; "
+            "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Name -match '^python(w)?\\.exe$' -and $_.CommandLine -and "
+            "$_.CommandLine.IndexOf($app,[System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | "
+            "ForEach-Object { $_.ProcessId }"
+        )
+        try:
+            cp=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",ps],
+                              capture_output=True,text=True,timeout=8,
+                              creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            for line in cp.stdout.splitlines():
+                try:
+                    candidate=int(line.strip())
+                    if process_exists(candidate): pids.add(candidate)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    else:
+        app=str(APP_PATH)
+        proc_root=Path("/proc")
+        if proc_root.is_dir():
+            for proc in proc_root.iterdir():
+                if not proc.name.isdigit():
+                    continue
+                try:
+                    cmd=(proc/"cmdline").read_bytes().replace(b"\x00",b" ").decode(errors="ignore")
+                    if app in cmd:
+                        candidate=int(proc.name)
+                        if process_exists(candidate): pids.add(candidate)
+                except Exception:
+                    pass
+    return sorted(pids)
+
+def create_shutdown_backup(status):
+    status("Création de la sauvegarde de fermeture…")
+    python_bin=PY if PY.exists() else None
+    if python_bin is None:
+        cmd=system_python()
+        if not cmd:
+            raise RuntimeError("Python 3 introuvable pour créer la sauvegarde de fermeture.")
+        command=cmd+[str(APP_PATH),"--backup-arret"]
+    else:
+        command=[str(python_bin),str(APP_PATH),"--backup-arret"]
+    cp=subprocess.run(command,cwd=str(PUBLIC_DIR),capture_output=True,text=True,timeout=60,
+                      creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if IS_WINDOWS else 0)
+    if cp.returncode:
+        detail=(cp.stderr or cp.stdout or "").strip()
+        raise RuntimeError("Sauvegarde de fermeture impossible" + (f" : {detail}" if detail else "."))
+    lines=[x.strip() for x in cp.stdout.splitlines() if x.strip()]
+    if not lines:
+        raise RuntimeError("WOPR n'a retourné aucun fichier de sauvegarde.")
+    backup=Path(lines[-1])
+    if not backup.is_file():
+        raise RuntimeError(f"Sauvegarde annoncée mais introuvable : {backup}")
+    log(f"Sauvegarde de fermeture créée : {backup.name}")
+    return backup
+
+def stop_server(status):
+    pids=discover_app_pids()
+    if not pids:
+        PID_FILE.unlink(missing_ok=True)
+        if alive():
+            raise RuntimeError("WOPR répond encore, mais son processus n'a pas pu être identifié.")
+        status("WOPR est déjà arrêté.")
+        return None
+
+    status("Arrêt de WOPR…")
+    for pid in pids:
+        try:
+            if IS_WINDOWS:
+                subprocess.run(["taskkill","/PID",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                               creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            else:
+                os.kill(pid,signal.SIGTERM)
+        except Exception:
+            pass
+
+    end=time.monotonic()+5
+    while time.monotonic()<end and any(process_exists(pid) for pid in pids):
+        time.sleep(.15)
+
+    for pid in pids:
+        if not process_exists(pid):
+            continue
+        try:
+            if IS_WINDOWS:
+                subprocess.run(["taskkill","/F","/PID",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                               creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            else:
+                os.kill(pid,signal.SIGKILL)
+        except Exception:
+            pass
+
+    end=time.monotonic()+3
+    while time.monotonic()<end and any(process_exists(pid) for pid in pids):
+        time.sleep(.15)
+    remaining=[pid for pid in pids if process_exists(pid)]
+    if remaining:
+        raise RuntimeError("Impossible d'arrêter complètement WOPR (PID : " + ", ".join(map(str,remaining)) + ").")
+
     PID_FILE.unlink(missing_ok=True)
-    log(f"Serveur arrêté PID={pid}")
-    status("WOPR est arrêté.")
+    log("Serveur arrêté PID=" + ",".join(map(str,pids)))
+    backup=create_shutdown_backup(status)
+    status(f"WOPR arrêté • sauvegarde {backup.name}")
+    return backup
 
 def db_desc():
     if not DB_FILE.exists(): return "Base : introuvable"
