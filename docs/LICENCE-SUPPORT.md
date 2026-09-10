@@ -2,7 +2,7 @@
 
 ## Gratuit et open source
 
-WOPR est distribué gratuitement et sous licence **GNU General Public License v3.0 (GPLv3)**.
+WOPR est **100 % gratuit et open source** et publié sous licence **GNU General Public License v3.0 (GPLv3)**.
 
 Le texte complet de la licence se trouve dans le fichier [`LICENSE`](../LICENSE).
 

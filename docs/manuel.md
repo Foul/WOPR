@@ -20,6 +20,25 @@ Cette documentation correspond à la version **2.3.214** du paquet public fourni
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
+## Gratuit, open source et soutien
+
+WOPR est **100 % gratuit et open source** et est publié sous licence **GNU General Public License v3.0 (GPLv3)**.
+
+- **Linux : supporté**
+- **Windows : supporté**
+- **macOS : non supporté** — aucun binaire officiel, aucun test de compatibilité et aucun support garanti.
+
+Aucun paiement, abonnement ou don n’est nécessaire pour utiliser WOPR.
+
+Si vous souhaitez soutenir volontairement son développement :
+
+**PayPal : https://paypal.me/foul**
+
+![QR code PayPal](images/paypal-qr.png)
+
+Un don est entièrement facultatif et ne débloque aucune fonctionnalité ni aucun avantage dans WOPR.
+
+
 ## 2. Principes importants
 
 - WOPR fonctionne comme une application web locale, avec une interface dans le navigateur.

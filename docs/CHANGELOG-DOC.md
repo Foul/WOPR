@@ -1,5 +1,17 @@
 # Changelog de la documentation
 
+## 2.3.214 - 10 septembre 2026 - release Linux/Windows, GPLv3 et documentation
+- Finalisation du lanceur unifié et des binaires officiels **Linux** et **Windows**.
+- Suppression des anciens lanceurs `.desktop`, `.cmd`, `.vbs` et scripts devenus inutiles.
+- WOPR est publié sous licence **GNU GPLv3** et clairement présenté comme **100 % gratuit et open source**.
+- **Linux** et **Windows** sont les plateformes supportées.
+- **macOS est non supporté** : aucun binaire officiel, aucun test de compatibilité et aucun support garanti.
+- Ajout du soutien facultatif via **PayPal** (`paypal.me/foul`) et de son QR code.
+- Aucun paiement, abonnement ou don n’est nécessaire et aucune fonctionnalité n’est réservée aux donateurs.
+- Documentation Markdown, HTML, PDF, README GitHub et page de présentation alignés sur **2.3.214**.
+- Les notes de release GitHub reprennent désormais ce changelog au lieu d’afficher uniquement le lien Full Changelog.
+
+
 ## 2.3.214 - 10 septembre 2026 - release Linux/Windows, GPLv3 et soutien
 - Finalisation du **lanceur unifié Linux/Windows** avec interface graphique et sauvegarde à l’arrêt.
 - Ajout des binaires officiels **`WOPR` pour Linux** et **`WOPR.exe` pour Windows**.

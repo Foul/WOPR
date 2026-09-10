@@ -17,3 +17,10 @@ Développé par **Foul-Fix**, avec l’aide de **ChatGPT (OpenAI)** pour l’ass
 ## Licence et plateformes
 
 Le cœur public de WOPR est distribué sous licence **GNU GPLv3**. Linux et Windows sont supportés ; macOS n’est pas supporté.
+
+## Licence et gratuité
+
+WOPR est **100 % gratuit et open source**, publié sous licence **GNU GPLv3**.
+Linux et Windows sont supportés ; macOS n’est pas supporté.
+
+Soutien facultatif : **https://paypal.me/foul**. Aucun don ne débloque de fonctionnalité.
