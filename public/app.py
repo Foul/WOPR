@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.214"
+APP_VERSION = "2.3.215"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4438,8 +4438,16 @@ def google_find_existing_contact(service, client):
 
 
 def google_contact_body(client):
+    """Construit uniquement les champs WOPR réellement renseignés.
+
+    Aucun tableau vide n'est envoyé à Google : une valeur absente dans WOPR ne
+    signifie jamais "effacer la valeur Google".
+    """
+    body = {}
+
     first_name = (client["first_name"] or "").strip() if "first_name" in client.keys() else ""
     last_name = (client["last_name"] or "").strip() if "last_name" in client.keys() else ""
+    fallback_name = (client["name"] or "").strip() if "name" in client.keys() else ""
 
     if first_name or last_name:
         google_name = {}
@@ -4447,17 +4455,18 @@ def google_contact_body(client):
             google_name["givenName"] = first_name
         if last_name:
             google_name["familyName"] = last_name
-        body = {"names": [google_name]}
-    else:
-        body = {"names": [{"givenName": client["name"] or "Client"}]}
-    if client["email"]:
-        body["emailAddresses"] = [{"value": client["email"], "type": "home"}]
-    else:
-        body["emailAddresses"] = []
-    if client["phone"]:
-        body["phoneNumbers"] = [{"value": client["phone"], "type": "mobile"}]
-    else:
-        body["phoneNumbers"] = []
+        body["names"] = [google_name]
+    elif fallback_name:
+        body["names"] = [{"givenName": fallback_name}]
+
+    email = (client["email"] or "").strip()
+    if email:
+        body["emailAddresses"] = [{"value": email, "type": "home"}]
+
+    phone = (client["phone"] or "").strip()
+    if phone:
+        body["phoneNumbers"] = [{"value": phone, "type": "mobile"}]
+
     street = (client["address_street"] or "").strip()
     city = (client["city"] or "").strip()
     postal = (client["postal_code"] or "").strip()
@@ -4469,21 +4478,70 @@ def google_contact_body(client):
             "country": "France",
             "type": "home"
         }]
-    else:
-        body["addresses"] = []
 
     company = (client["company"] or "").strip() if "company" in client.keys() else ""
     if company:
         body["organizations"] = [{"name": company, "type": "work"}]
-    else:
-        body["organizations"] = []
 
     notes = (client["notes"] or "").strip()
     if notes:
         body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
-    else:
-        body["biographies"] = []
+
     return body
+
+
+def google_safe_merge_contact(latest, wopr_body):
+    """Fusion non destructive WOPR -> Google."""
+    merged = {}
+    fields_changed = []
+
+    existing_names = [dict(x) for x in latest.get("names", [])]
+    wanted_names = wopr_body.get("names", [])
+    if wanted_names:
+        wanted = wanted_names[0]
+        if existing_names:
+            current = dict(existing_names[0])
+            if wanted.get("givenName"):
+                current["givenName"] = wanted["givenName"]
+            if wanted.get("familyName"):
+                current["familyName"] = wanted["familyName"]
+            existing_names[0] = current
+        else:
+            existing_names = [dict(wanted)]
+        merged["names"] = existing_names
+        fields_changed.append("names")
+
+    def merge_multi(field, keyfunc):
+        existing = [dict(x) for x in latest.get(field, [])]
+        wanted = [dict(x) for x in wopr_body.get(field, [])]
+        if not wanted:
+            return
+        seen = {keyfunc(x) for x in existing if keyfunc(x)}
+        for item in wanted:
+            key = keyfunc(item)
+            if key and key not in seen:
+                existing.append(item)
+                seen.add(key)
+        merged[field] = existing
+        fields_changed.append(field)
+
+    merge_multi("emailAddresses", lambda x: (x.get("value") or "").strip().casefold())
+    merge_multi("phoneNumbers", lambda x: normalize_phone(x.get("value")))
+    merge_multi(
+        "addresses",
+        lambda x: "|".join([
+            (x.get("streetAddress") or "").strip().casefold(),
+            (x.get("postalCode") or "").strip().casefold(),
+            (x.get("city") or "").strip().casefold(),
+        ])
+    )
+    merge_multi("organizations", lambda x: (x.get("name") or "").strip().casefold())
+    merge_multi("biographies", lambda x: (x.get("value") or "").strip().casefold())
+
+    if latest.get("etag"):
+        merged["etag"] = latest["etag"]
+
+    return merged, ",".join(fields_changed)
 
 
 def google_contact_sync_hash(body):
@@ -4545,15 +4603,16 @@ def sync_client_to_google(client_id):
             try:
                 latest = google_execute_with_retry(service.people().get(
                     resourceName=resource_name,
-                    personFields="names,emailAddresses,phoneNumbers,addresses,biographies,metadata"
+                    personFields="names,emailAddresses,phoneNumbers,addresses,organizations,biographies,metadata"
                 ))
-                body["metadata"] = latest.get("metadata", {})
-                updated = service.people().updateContact(
-                    resourceName=resource_name,
-                    updatePersonFields="names,emailAddresses,phoneNumbers,addresses,biographies",
-                    body=body
-                ).execute()
-                resource_name = updated.get("resourceName", resource_name)
+                safe_body, update_fields = google_safe_merge_contact(latest, body)
+                if update_fields:
+                    updated = google_execute_with_retry(service.people().updateContact(
+                        resourceName=resource_name,
+                        updatePersonFields=update_fields,
+                        body=safe_body
+                    ))
+                    resource_name = updated.get("resourceName", resource_name)
             except HttpError as e:
                 if getattr(e.resp, "status", None) == 404:
                     resource_name = None
@@ -8742,7 +8801,7 @@ def repair_new():
 
         session["client_mode"] = True
         session["client_mode_rid"] = int(rid)
-        sync_client_to_google_async(client_id)
+        # V2.3.215 : aucune écriture Google automatique.
         return redirect(url_for("repair_detail", rid=rid))
 
     return render_template(
@@ -9425,7 +9484,7 @@ def repair_edit(rid):
         record_repair_status_change(con, rid, r["status"], new_status)
         con.commit()
         con.close()
-        sync_client_to_google_async(r["client_id"])
+        # V2.3.215 : aucune écriture Google automatique.
         flash("Suivi modifié.")
         return redirect(url_for("repair_detail", rid=rid))
 
@@ -10768,9 +10827,7 @@ def simple_invoice_new():
         con.commit()
         con.close()
 
-        if sync_new_client_id:
-            sync_client_to_google_async(sync_new_client_id)
-
+        # V2.3.215 : aucune écriture Google automatique.
         audit_event(
             "SIMPLE_INVOICE_CREATE",
             f"Facture {invoice_no} / repair_id={rid}",
@@ -12597,13 +12654,9 @@ def client_edit(client_id):
         con.commit()
         con.close()
 
-        # La fiche client reste la source principale. La synchronisation Google
-        # part en arrière-plan pour ne pas ralentir l'enregistrement ni l'interface.
-        if google_credentials() is not None:
-            sync_client_to_google_async(client_id)
-            flash("Client modifié. Synchronisation Google lancée en arrière-plan.")
-        else:
-            flash("Client modifié.")
+        # V2.3.215 : aucune écriture Google automatique.
+        # La fiche reste "À synchroniser" jusqu'au bouton WOPR → Google.
+        flash("Client modifié. Google n'a pas été modifié automatiquement.")
 
         return redirect(url_for("contacts_page"))
 
@@ -12958,6 +13011,173 @@ def google_disconnect():
     if GOOGLE_TOKEN.exists():
         GOOGLE_TOKEN.unlink()
     flash("Google Contacts déconnecté de WOPR.")
+    return redirect(url_for("contacts_page"))
+
+
+def import_google_group_to_wopr():
+    """Google -> WOPR, non destructif.
+
+    Seuls les contacts du groupe Google configuré sont considérés.
+    Les fiches WOPR existantes sont uniquement complétées : aucune valeur locale
+    existante n'est remplacée. Les contacts Google sans correspondance locale
+    sont créés dans WOPR.
+    """
+    service = google_service()
+    if not service:
+        return False, "Google n'est pas connecté"
+
+    group_resource = google_find_group(service)
+    if not group_resource:
+        return False, "Le groupe Google configuré est introuvable"
+
+    token = None
+    people = []
+    while True:
+        result = google_execute_with_retry(service.people().connections().list(
+            resourceName="people/me",
+            pageSize=1000,
+            pageToken=token,
+            personFields="names,emailAddresses,phoneNumbers,addresses,organizations,biographies,memberships"
+        ))
+        for person in result.get("connections", []):
+            groups = {
+                (m.get("contactGroupMembership") or {}).get("contactGroupResourceName")
+                for m in person.get("memberships", [])
+            }
+            if group_resource in groups:
+                people.append(person)
+        token = result.get("nextPageToken")
+        if not token:
+            break
+
+    con = db()
+    created = enriched = skipped = 0
+
+    for person in people:
+        resource = (person.get("resourceName") or "").strip()
+        names = person.get("names", [])
+        name0 = names[0] if names else {}
+        first_name = (name0.get("givenName") or "").strip()
+        last_name = (name0.get("familyName") or "").strip()
+        display_name = (name0.get("displayName") or "").strip()
+
+        emails = [(x.get("value") or "").strip() for x in person.get("emailAddresses", []) if (x.get("value") or "").strip()]
+        phones = [(x.get("value") or "").strip() for x in person.get("phoneNumbers", []) if (x.get("value") or "").strip()]
+        addresses = person.get("addresses", [])
+        organizations = person.get("organizations", [])
+        biographies = person.get("biographies", [])
+
+        email = emails[0] if emails else ""
+        phone = phones[0] if phones else ""
+        adr = addresses[0] if addresses else {}
+        street = (adr.get("streetAddress") or "").strip()
+        postal = (adr.get("postalCode") or "").strip()
+        city = (adr.get("city") or "").strip()
+        company = ((organizations[0].get("name") if organizations else "") or "").strip()
+        notes = ((biographies[0].get("value") if biographies else "") or "").strip()
+
+        local = None
+        if resource:
+            local = con.execute(
+                "SELECT * FROM clients WHERE google_resource_name=? LIMIT 1",
+                (resource,)
+            ).fetchone()
+
+        if local is None and email:
+            rows = con.execute(
+                "SELECT * FROM clients WHERE lower(trim(COALESCE(email,'')))=?",
+                (email.casefold(),)
+            ).fetchall()
+            if len(rows) == 1:
+                local = rows[0]
+
+        if local is None and phone:
+            wanted_phone = normalize_phone(phone)
+            rows = con.execute(
+                "SELECT * FROM clients WHERE trim(COALESCE(phone,''))<>''"
+            ).fetchall()
+            matches = [r for r in rows if normalize_phone(r["phone"]) == wanted_phone]
+            if len(matches) == 1:
+                local = matches[0]
+
+        composed = compose_client_name(last_name, first_name) or display_name or company or "Contact Google"
+        address = "\n".join(x for x in [street, " ".join(x for x in [postal, city] if x).strip()] if x)
+        stamp = now().isoformat(timespec="seconds")
+
+        if local is None:
+            con.execute("""
+                INSERT INTO clients(
+                    name,last_name,first_name,company,
+                    address,address_street,postal_code,city,
+                    phone,email,notes,
+                    google_resource_name,google_sync_status,google_sync_error,
+                    google_synced_at,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                composed,last_name,first_name,company,
+                address,street,postal,city,
+                phone,email,notes,
+                resource,"Synchronisé","",stamp,stamp,stamp
+            ))
+            created += 1
+            continue
+
+        sets = []
+        vals = []
+        changed = False
+
+        candidates = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "company": company,
+            "address_street": street,
+            "postal_code": postal,
+            "city": city,
+            "phone": phone,
+            "email": email,
+            "notes": notes,
+        }
+
+        for field, value in candidates.items():
+            if value and not str(local[field] or "").strip():
+                sets.append(f"{field}=?")
+                vals.append(value)
+                changed = True
+
+        if not str(local["name"] or "").strip() and composed:
+            sets.append("name=?")
+            vals.append(composed)
+            changed = True
+
+        if not str(local["address"] or "").strip() and address:
+            sets.append("address=?")
+            vals.append(address)
+            changed = True
+
+        sets += [
+            "google_resource_name=?",
+            "google_sync_status=?",
+            "google_sync_error=?",
+            "google_synced_at=?",
+            "updated_at=?"
+        ]
+        vals += [resource, "Synchronisé", "", stamp, stamp, local["id"]]
+
+        con.execute(f"UPDATE clients SET {', '.join(sets)} WHERE id=?", vals)
+        if changed:
+            enriched += 1
+        else:
+            skipped += 1
+
+    con.commit()
+    con.close()
+    return True, f"Google → WOPR : {created} créé(s), {enriched} complété(s), {skipped} déjà à jour."
+
+
+@app.route("/contacts/import-google-live", methods=["POST"])
+def contacts_import_google_live():
+    ok, msg = import_google_group_to_wopr()
+    flash(msg if ok else f"Erreur Google : {msg}")
     return redirect(url_for("contacts_page"))
 
 

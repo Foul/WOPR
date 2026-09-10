@@ -60,11 +60,17 @@
   {% if not google_libs_ok %}
     <p class="sync-error">Bibliothèques Google manquantes : relance <code>pip install -r requirements.txt</code>.</p>
   {% elif google_connected %}
-    <p><span class="sync-ok">● Connecté</span> — les nouveaux clients et les modifications sont synchronisés automatiquement.</p>
+    <p><span class="sync-ok">● Connecté</span> — synchronisation <strong>manuelle et non destructive</strong>. Aucun sens n'est automatique.</p>
     <div class="contacts-toolbar">
-      <form method="post" action="{{ url_for('contacts_sync_google') }}">
+      <form method="post" action="{{ url_for('contacts_sync_google') }}"
+            onsubmit="return confirm('Envoyer les fiches WOPR en attente vers Google ? Les données Google absentes de WOPR seront conservées.');">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <button class="primary" type="submit">Synchroniser tous les clients maintenant</button>
+        <button class="primary" type="submit">⬆ WOPR → Google</button>
+      </form>
+      <form method="post" action="{{ url_for('contacts_import_google_live') }}"
+            onsubmit="return confirm('Importer le groupe Google vers WOPR ? Seuls les champs WOPR vides seront complétés.');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button class="primary" type="submit">⬇ Google → WOPR</button>
       </form>
       <form method="post" action="{{ url_for('google_disconnect') }}">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
