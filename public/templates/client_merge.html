@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Fusionner {{ source['name'] }} - WOPR{% endblock %}
+{% block body %}
+
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">Fusionner deux fiches client</div>
+</div>
+
+<div class="delete-card">
+  <h1>Fiche à fusionner</h1>
+  <div class="delete-client-name">
+    {{ source['first_name'] or '' }} {{ source['last_name'] or source['name'] or '' }}
+  </div>
+
+  <div class="sheet-note">
+    Cette fiche contient <strong>{{ source_repairs }} suivi(s)/facture(s)</strong>
+    et <strong>{{ source_quotes }} devis</strong>.
+    Ils seront tous rattachés à la fiche que tu choisis de conserver.
+  </div>
+
+  <div class="danger-box">
+    <strong>Fusion sécurisée :</strong><br>
+    une sauvegarde de la base est créée juste avant.<br>
+    La fiche choisie reste prioritaire. Ses champs vides sont complétés avec l'autre fiche.
+    Si téléphone, e-mail ou adresse diffèrent, les anciennes valeurs sont conservées dans les notes.
+    Aucun contact Google n'est supprimé.
+  </div>
+
+  <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="return_q" value="{{ q or '' }}">
+
+    <label>Fiche à conserver
+      <select name="target_id" required>
+        <option value="">— Choisir la fiche principale —</option>
+        {% for item in candidates %}
+          {% set c = item.client %}
+          <option value="{{ c['id'] }}">
+            {% if item.exact_name %}★ {% endif %}
+            #{{ c['id'] }} —
+            {{ c['first_name'] or '' }} {{ c['last_name'] or c['name'] or '' }}
+            {% if c['company'] %} — {{ c['company'] }}{% endif %}
+            {% if c['phone'] %} — {{ c['phone'] }}{% endif %}
+            {% if c['email'] %} — {{ c['email'] }}{% endif %}
+            — {{ item.repairs_count }} suivi(s), {{ item.quotes_count }} devis
+          </option>
+        {% endfor %}
+      </select>
+      <small>★ = même identité détectée, proposée en premier.</small>
+    </label>
+
+    <label style="margin-top:1rem;">
+      Tape <strong>FUSIONNER</strong> pour confirmer
+      <input name="confirm_merge" autocomplete="off" required>
+    </label>
+
+    <div class="footer-actions">
+      <button class="primary big-action" type="submit">🔥 FUSION !</button>
+      <a class="button" href="{{ url_for('contacts_page', q=q or None) }}">Annuler</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

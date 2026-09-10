@@ -189,6 +189,7 @@
         {% endif %}
         {% if not show_archived %}
           <button class="mini-btn" type="button" data-edit-client="{{ c['id'] }}">Modifier</button>
+          <a class="mini-btn" href="{{ url_for('client_merge', client_id=c['id'], q=q or None) }}">Fusionner</a>
         {% endif %}
         <a class="mini-btn danger-btn" href="{{ url_for('client_delete', client_id=c['id']) }}">
           {{ "Gérer" if show_archived else "Supprimer" }}

@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.218"
+APP_VERSION = "2.3.219"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4939,6 +4939,123 @@ def _contact_name_signature(first_name="", last_name="", legacy_name="", organiz
             continue
         signatures.add(" ".join(sorted(tokens)))
     return signatures
+
+
+
+def _merge_manual_local_client(con, master_id, duplicate_id):
+    """
+    Fusion manuelle explicitement demandée par l'utilisateur.
+    La fiche master est conservée. Les champs vides sont complétés depuis le doublon.
+    Les coordonnées différentes non copiées sont conservées dans les notes afin de ne rien perdre.
+    Les réparations/factures (portées par repairs) et les devis sont rattachés au master.
+    Aucun contact Google n'est supprimé.
+    """
+    if master_id == duplicate_id:
+        return {"merged": False, "repairs": 0, "quotes": 0, "reason": "same"}
+
+    master_row = con.execute("SELECT * FROM clients WHERE id=?", (master_id,)).fetchone()
+    dup_row = con.execute("SELECT * FROM clients WHERE id=?", (duplicate_id,)).fetchone()
+    if not master_row or not dup_row:
+        return {"merged": False, "repairs": 0, "quotes": 0, "reason": "missing"}
+
+    master = dict(master_row)
+    dup = dict(dup_row)
+    updates = {}
+
+    # Complète uniquement les champs vides de la fiche conservée.
+    for field in (
+        "first_name", "last_name", "company", "phone", "email",
+        "address_street", "postal_code", "city"
+    ):
+        mv = str(master.get(field) or "").strip()
+        dv = str(dup.get(field) or "").strip()
+        if not mv and dv:
+            updates[field] = dup.get(field)
+            master[field] = dup.get(field)
+
+    # Conserve les éventuelles valeurs différentes dans les notes.
+    extra_notes = []
+    for label, field, normalizer in (
+        ("Téléphone", "phone", normalize_phone),
+        ("E-mail", "email", _email_key),
+        ("Adresse", "address_street", lambda x: str(x or "").strip().casefold()),
+        ("Code postal", "postal_code", lambda x: str(x or "").strip()),
+        ("Ville", "city", lambda x: str(x or "").strip().casefold()),
+        ("Entreprise", "company", lambda x: str(x or "").strip().casefold()),
+    ):
+        mv = str(master.get(field) or "").strip()
+        dv = str(dup.get(field) or "").strip()
+        if mv and dv and normalizer(mv) != normalizer(dv):
+            extra_notes.append(f"{label} (ancienne fiche fusionnée) : {dv}")
+
+    master_notes = str(master.get("notes") or "").strip()
+    dup_notes = str(dup.get("notes") or "").strip()
+    merged_notes_parts = []
+    if master_notes:
+        merged_notes_parts.append(master_notes)
+    if dup_notes and dup_notes != master_notes:
+        merged_notes_parts.append("Notes de la fiche fusionnée :\n" + dup_notes)
+    if extra_notes:
+        merged_notes_parts.append("\n".join(extra_notes))
+    merged_notes = "\n\n".join(x for x in merged_notes_parts if x).strip()
+    if merged_notes != master_notes:
+        updates["notes"] = merged_notes
+        master["notes"] = merged_notes
+
+    # Si le master n'est pas lié à Google mais le doublon l'est, récupère le lien.
+    # Si les deux ont des ressources Google différentes, on garde celle du master
+    # et on ne supprime rien chez Google.
+    if (
+        not str(master.get("google_resource_name") or "").strip()
+        and str(dup.get("google_resource_name") or "").strip()
+    ):
+        updates["google_resource_name"] = dup["google_resource_name"]
+        master["google_resource_name"] = dup["google_resource_name"]
+
+    first = str(master.get("first_name") or "").strip()
+    last = str(master.get("last_name") or "").strip()
+    company = str(master.get("company") or "").strip()
+    composed = compose_client_name(last, first) or company or str(master.get("name") or "").strip()
+
+    street = str(master.get("address_street") or "").strip()
+    postal = str(master.get("postal_code") or "").strip()
+    city = str(master.get("city") or "").strip()
+    address = "\n".join(
+        x for x in [street, " ".join(x for x in [postal, city] if x).strip()] if x
+    )
+
+    updates["name"] = composed
+    updates["address"] = address
+    updates["google_sync_status"] = "À synchroniser"
+    updates["google_sync_error"] = ""
+    updates["updated_at"] = now().isoformat(timespec="seconds")
+
+    if updates:
+        sets = ", ".join(f"{k}=?" for k in updates)
+        con.execute(
+            f"UPDATE clients SET {sets} WHERE id=?",
+            list(updates.values()) + [master_id]
+        )
+
+    repairs_count = con.execute(
+        "SELECT COUNT(*) FROM repairs WHERE client_id=?", (duplicate_id,)
+    ).fetchone()[0]
+    quotes_count = con.execute(
+        "SELECT COUNT(*) FROM quotes WHERE client_id=?", (duplicate_id,)
+    ).fetchone()[0]
+
+    # Les factures WOPR sont rattachées aux suivis via repairs.invoice_no :
+    # déplacer repairs déplace donc aussi l'historique de facturation côté client.
+    con.execute("UPDATE repairs SET client_id=? WHERE client_id=?", (master_id, duplicate_id))
+    con.execute("UPDATE quotes SET client_id=? WHERE client_id=?", (master_id, duplicate_id))
+    con.execute("DELETE FROM clients WHERE id=?", (duplicate_id,))
+
+    return {
+        "merged": True,
+        "repairs": int(repairs_count or 0),
+        "quotes": int(quotes_count or 0),
+        "reason": "",
+    }
 
 
 def _merge_one_local_client(con, master_id, duplicate_id):
@@ -12605,6 +12722,127 @@ def contacts_merge_safe_duplicates():
         flash("Aucun doublon sûr à fusionner.")
     return redirect(url_for("contacts_page"))
 
+
+
+
+@app.route("/contacts/<int:client_id>/merge", methods=["GET", "POST"])
+def client_merge(client_id):
+    con = db()
+    source = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not source:
+        con.close()
+        return "Client introuvable", 404
+
+    if request.method == "POST":
+        try:
+            target_id = int(request.form.get("target_id", "0"))
+        except ValueError:
+            target_id = 0
+
+        if not target_id or target_id == client_id:
+            con.close()
+            flash("Choisis une autre fiche client à conserver.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        target = con.execute("SELECT * FROM clients WHERE id=?", (target_id,)).fetchone()
+        if not target:
+            con.close()
+            flash("La fiche client à conserver est introuvable.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        if request.form.get("confirm_merge") != "FUSIONNER":
+            con.close()
+            flash("Fusion annulée : confirmation invalide.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        backup_database(force=True, tag="avant_fusion_manuelle_clients")
+        result = _merge_manual_local_client(con, target_id, client_id)
+        if not result["merged"]:
+            con.close()
+            flash("Fusion impossible.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        con.commit()
+        con.close()
+
+        audit_event(
+            "CLIENT_MANUAL_MERGE",
+            (
+                f"source_client_id={client_id}; master_client_id={target_id}; "
+                f"repairs={result['repairs']}; quotes={result['quotes']}"
+            ),
+            request.remote_addr
+        )
+        flash(
+            f"Fusion terminée : {result['repairs']} suivi(s)/facture(s) et "
+            f"{result['quotes']} devis rattaché(s) à la fiche conservée."
+        )
+
+        return_q = request.form.get("return_q", "").strip()
+        target_url = url_for("contacts_page", q=return_q or None)
+        return redirect(target_url + f"#client-{target_id}")
+
+    source_dict = dict(source)
+    source_sigs = _contact_name_signature(
+        source_dict.get("first_name"),
+        source_dict.get("last_name"),
+        source_dict.get("name"),
+        ""
+    )
+
+    rows = [dict(x) for x in con.execute("""
+        SELECT * FROM clients
+        WHERE id<>? AND COALESCE(archived,0)=0
+        ORDER BY COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
+                 COALESCE(first_name,'') COLLATE NOCASE,
+                 id
+    """, (client_id,)).fetchall()]
+
+    candidates = []
+    for row in rows:
+        sigs = _contact_name_signature(
+            row.get("first_name"), row.get("last_name"), row.get("name"), ""
+        )
+        exact_name = bool(source_sigs & sigs)
+        repairs_count = con.execute(
+            "SELECT COUNT(*) FROM repairs WHERE client_id=?", (row["id"],)
+        ).fetchone()[0]
+        quotes_count = con.execute(
+            "SELECT COUNT(*) FROM quotes WHERE client_id=?", (row["id"],)
+        ).fetchone()[0]
+        candidates.append({
+            "client": row,
+            "exact_name": exact_name,
+            "repairs_count": int(repairs_count or 0),
+            "quotes_count": int(quotes_count or 0),
+        })
+
+    source_repairs = con.execute(
+        "SELECT COUNT(*) FROM repairs WHERE client_id=?", (client_id,)
+    ).fetchone()[0]
+    source_quotes = con.execute(
+        "SELECT COUNT(*) FROM quotes WHERE client_id=?", (client_id,)
+    ).fetchone()[0]
+    con.close()
+
+    # Les correspondances de nom exact passent en premier.
+    candidates.sort(
+        key=lambda x: (
+            0 if x["exact_name"] else 1,
+            str(x["client"].get("last_name") or x["client"].get("name") or "").casefold(),
+            str(x["client"].get("first_name") or "").casefold(),
+            int(x["client"]["id"])
+        )
+    )
+
+    return render_template(
+        "client_merge.html",
+        source=source,
+        candidates=candidates,
+        source_repairs=int(source_repairs or 0),
+        source_quotes=int(source_quotes or 0),
+        q=request.args.get("q", "").strip(),
+    )
 
 
 @app.route("/contacts/<int:client_id>/edit", methods=["GET", "POST"])
