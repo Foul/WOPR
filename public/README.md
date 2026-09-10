@@ -13,3 +13,7 @@ WOPR est générique : le nom de l’entreprise, le responsable, l’adresse, le
 ## Développement
 
 Développé par **Foul-Fix**, avec l’aide de **ChatGPT (OpenAI)** pour l’assistance au développement, à la documentation et aux tests.
+
+## Licence et plateformes
+
+Le cœur public de WOPR est distribué sous licence **GNU GPLv3**. Linux et Windows sont supportés ; macOS n’est pas supporté.

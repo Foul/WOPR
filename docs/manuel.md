@@ -1,10 +1,10 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.3.210**
+**Version documentée : 2.3.214**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
-Version documentée : **2.3.210**
-Documentation mise à jour : **9 septembre 2026**
+Version documentée : **2.3.214**
+Documentation mise à jour : **10 septembre 2026**
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -16,7 +16,7 @@ WOPR signifie **Workflow d’Organisation et de Pilotage des Réparations**.
 
 WOPR est une application locale de gestion d’atelier destinée à centraliser le cycle complet d’une réparation : réception du matériel, suivi, client, devis, facture, encaissement, restitution, documents, contacts, achats, justificatifs et suivi administratif.
 
-Cette documentation correspond à la version **2.3.210** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
+Cette documentation correspond à la version **2.3.214** du paquet public fourni. Elle est volontairement indépendante de l’application : elle peut être publiée sur GitHub, sur un site web, ou distribuée sous forme de PDF.
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -38,11 +38,15 @@ WOPR utilise Python 3 et les dépendances déclarées dans `public/requirements.
 
 ### Linux
 
-Le paquet fournit `WOPR.desktop` et `Arreter-WOPR.desktop`. Le lanceur appelle les scripts de démarrage présents dans `public/scripts/` et ouvre l’application locale dans le navigateur.
+Le paquet fournit un **binaire Linux `WOPR`** à la racine. Il utilise le lanceur unifié et ouvre l’application locale dans le navigateur lorsque le serveur est prêt.
 
 ### Windows
 
-Le paquet fournit `WOPR-Windows.cmd` / `WOPR-Windows.vbs` ainsi que leurs équivalents d’arrêt. Les lanceurs utilisent PowerShell et les scripts contenus dans `public/scripts/`. Le lancement affiche une fenêtre de progression pendant l’initialisation, bloque les doubles démarrages et ouvre le navigateur uniquement lorsque WOPR répond. Les messages et pages HTML utilisent explicitement UTF-8 sous Windows.
+Le paquet fournit un **binaire Windows `WOPR.exe`** à la racine. Il utilise le même lanceur unifié que Linux, bloque les doubles lancements, affiche l’état du serveur et ouvre le navigateur lorsque WOPR est prêt.
+
+### macOS
+
+**macOS n’est pas supporté.** Aucun binaire officiel n’est fourni, aucun test de compatibilité n’est effectué et aucun support de fonctionnement n’est garanti.
 
 ### Accès local
 
@@ -354,10 +358,9 @@ Structure simplifiée :
 
 ```text
 WOPR/
-├── WOPR.desktop
-├── Arreter-WOPR.desktop
-├── WOPR-Windows.cmd / .vbs
-├── Arreter-WOPR-Windows.cmd / .vbs
+├── WOPR                     # binaire Linux
+├── WOPR.exe                 # binaire Windows
+├── LICENSE                  # GNU GPLv3
 ├── public/
 │   ├── app.py
 │   ├── requirements.txt
@@ -406,7 +409,7 @@ Le pack fourni inclut un `.gitignore` recommandé pour compléter celui de l’a
 
 ### Licence
 
-Aucune licence logicielle n’est choisie automatiquement par cette documentation. Avant de rendre le dépôt réellement open source, ajouter la licence correspondant au choix de Foul-Fix.
+WOPR est publié sous licence **GNU General Public License v3.0 (GPLv3)**. Le texte complet est disponible dans le fichier `LICENSE` à la racine du dépôt.
 
 ## 20. Hébergement de la documentation sur un site
 
@@ -471,3 +474,12 @@ Une clé maître perdue ne peut pas être reconstituée à partir de la document
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 
 WOPR est développé comme un outil métier de terrain, avec une priorité donnée à la simplicité d’utilisation, à la portabilité et à la conservation locale des données sensibles.
+
+
+## 24. Gratuit, open source et soutien
+
+WOPR est **100 % gratuit et open source**, publié sous licence **GNU GPLv3**.
+
+Aucun paiement ni don n’est nécessaire pour utiliser WOPR et aucune fonctionnalité n’est réservée aux donateurs.
+
+Les personnes qui souhaitent soutenir volontairement le développement peuvent utiliser PayPal : **https://paypal.me/foul**.

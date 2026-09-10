@@ -1,6 +1,6 @@
 # Maintenance de la documentation WOPR
 
-Version de référence actuelle : **2.3.192**.
+Version de référence actuelle : **2.3.214**.
 
 À chaque évolution visible de WOPR :
 

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WOPR - Documentation 2.3.210</title>
-<meta name="description" content="Documentation officielle WOPR 2.3.210 - Workflow d’Organisation et de Pilotage des Réparations.">
+<title>WOPR - Documentation 2.3.214</title>
+<meta name="description" content="Documentation officielle WOPR 2.3.214 - Workflow d’Organisation et de Pilotage des Réparations.">
 <style>
 :root{--bg:#f4f7fa;--ink:#12202e;--blue:#2187d5;--line:#d7e1e9;--muted:#607386}
 *{box-sizing:border-box}body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
@@ -27,15 +27,15 @@ blockquote{margin:16px 0;padding:12px 16px;background:#eef7fd;border-left:4px so
 <img src="images/wopr-logo.png" alt="WOPR">
 <h1>Documentation WOPR</h1>
 <p>Workflow d’Organisation et de Pilotage des Réparations</p>
-<span class="version">Version 2.3.210</span>
+<span class="version">Version 2.3.214</span>
 <div class="credit">Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.</div>
 </div></header>
 <main><h1 id="wopr---manuel-utilisateur">WOPR - Manuel utilisateur</h1>
-<p><strong>Version documentée : 2.3.210</strong></p>
+<p><strong>Version documentée : 2.3.214</strong></p>
 <p><strong>Workflow d’Organisation et de Pilotage des
 Réparations</strong><br />
-Version documentée : <strong>2.3.210</strong><br />
-Documentation mise à jour : <strong>9 septembre 2026</strong></p>
+Version documentée : <strong>2.3.214</strong><br />
+Documentation mise à jour : <strong>10 septembre 2026</strong></p>
 <blockquote>
 <p>Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour
 l’assistance au développement, à la documentation et aux tests.</p>
@@ -48,7 +48,7 @@ Réparations</strong>.</p>
 centraliser le cycle complet d’une réparation : réception du matériel,
 suivi, client, devis, facture, encaissement, restitution, documents,
 contacts, achats, justificatifs et suivi administratif.</p>
-<p>Cette documentation correspond à la version <strong>2.3.210</strong>
+<p>Cette documentation correspond à la version <strong>2.3.214</strong>
 du paquet public fourni. Elle est volontairement indépendante de
 l’application : elle peut être publiée sur GitHub, sur un site web, ou
 distribuée sous forme de PDF.</p>
@@ -85,18 +85,11 @@ configurées.</li>
 qrcode, cryptography et les bibliothèques Google nécessaires à la
 synchronisation des contacts.</p>
 <h3 id="linux">Linux</h3>
-<p>Le paquet fournit <code>WOPR.desktop</code> et
-<code>Arreter-WOPR.desktop</code>. Le lanceur appelle les scripts de
-démarrage présents dans <code>public/scripts/</code> et ouvre
-l’application locale dans le navigateur.</p>
+<p>Le paquet fournit un <strong>binaire Linux <code>WOPR</code></strong> à la racine. Il utilise le lanceur unifié et ouvre l’application locale dans le navigateur lorsque le serveur est prêt.</p>
 <h3 id="windows">Windows</h3>
-<p>Le paquet fournit <code>WOPR-Windows.cmd</code> /
-<code>WOPR-Windows.vbs</code> ainsi que leurs équivalents d’arrêt. Les
-lanceurs utilisent PowerShell et les scripts contenus dans
-<code>public/scripts/</code>. Le lancement affiche une fenêtre de
-progression pendant l’initialisation, bloque les doubles démarrages et
-ouvre le navigateur uniquement lorsque WOPR répond. Les messages et
-pages HTML utilisent explicitement UTF-8 sous Windows.</p>
+<p>Le paquet fournit un <strong>binaire Windows <code>WOPR.exe</code></strong> à la racine. Il utilise le même lanceur unifié que Linux, bloque les doubles lancements, affiche l’état du serveur et ouvre le navigateur lorsque WOPR est prêt.</p>
+<h3 id="macos">macOS</h3>
+<p><strong>macOS n’est pas supporté.</strong> Aucun binaire officiel n’est fourni, aucun test de compatibilité n’est effectué et aucun support de fonctionnement n’est garanti.</p>
 <h3 id="accès-local">Accès local</h3>
 <p>Une fois WOPR démarré, l’interface est accessible localement,
 habituellement sur :</p>
@@ -495,9 +488,7 @@ autres données réelles.</li>
 <p>Le pack fourni inclut un <code>.gitignore</code> recommandé pour
 compléter celui de l’application.</p>
 <h3 id="licence">Licence</h3>
-<p>Aucune licence logicielle n’est choisie automatiquement par cette
-documentation. Avant de rendre le dépôt réellement open source, ajouter
-la licence correspondant au choix de Foul-Fix.</p>
+<p>WOPR est publié sous licence <strong>GNU General Public License v3.0 (GPLv3)</strong>. Le texte complet est disponible dans le fichier <code>LICENSE</code> à la racine du dépôt.</p>
 <h2 id="20-hébergement-de-la-documentation-sur-un-site">20. Hébergement
 de la documentation sur un site</h2>
 <p>Le dossier <code>docs/</code> fourni est statique et peut être
@@ -566,5 +557,5 @@ tests.</strong></p>
 priorité donnée à la simplicité d’utilisation, à la portabilité et à la
 conservation locale des données sensibles.</p>
 </main>
-<div class="foot">WOPR 2.3.210 - Documentation officielle</div>
+<div class="foot">WOPR 2.3.214 - Documentation officielle</div>
 </body></html>
