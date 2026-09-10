@@ -179,6 +179,8 @@
     <td class="client-actions contact-cell-actions">
       <form id="edit-client-{{ c['id'] }}" method="post" action="{{ url_for('client_edit', client_id=c['id']) }}">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_q" value="{{ q or '' }}">
+        <input type="hidden" name="return_archived" value="{{ 1 if show_archived else 0 }}">
       </form>
       <div class="contact-normal-actions">
         <a class="mini-btn" href="{{ url_for('client_history', client_id=c['id']) }}">Historique</a>
