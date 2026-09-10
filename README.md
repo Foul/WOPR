@@ -7,11 +7,21 @@
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
+**100 % gratuit et open source - GNU GPLv3**
+
 WOPR est une application locale de gestion d’atelier pour suivre les réparations, clients, devis, factures, encaissements, restitutions, achats, justificatifs et tâches administratives.
 
 **Version documentée : 2.3.213**
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
+
+## Plateformes
+
+- **Linux : supporté** - lanceur/binaire Linux.
+- **Windows : supporté** - lanceur/binaire Windows `WOPR.exe`.
+- **macOS : non supporté** - aucun binaire officiel, aucun test de compatibilité et aucun support garanti.
+
+Le lanceur unifié utilise la même logique sous Linux et Windows et ouvre WOPR localement dans le navigateur une fois le serveur prêt.
 
 ## Fonctions principales
 
@@ -29,23 +39,40 @@ WOPR est une application locale de gestion d’atelier pour suivre les réparati
 - sécurité locale, sauvegardes et diagnostic de portabilité ;
 - PDF multilingues.
 
-### Windows
-
-Le lanceur `WOPR-Windows.vbs` affiche désormais une fenêtre de progression pendant l’initialisation, évite les doubles lancements et n’ouvre le navigateur qu’une fois WOPR prêt. La navigation s’adapte également aux écrans portables, en mode normal comme en 8-bit.
-
 ## Documentation
 
 - [Manuel complet en Markdown](docs/manuel.md)
 - [Documentation HTML](docs/index.html)
 - [Manuel PDF](docs/WOPR-Manuel.pdf)
+- [Licence, support et dons](docs/LICENCE-SUPPORT.md)
 - [Historique de la documentation](docs/CHANGELOG-DOC.md)
 
 ## Confidentialité avant publication
 
 Le dossier **`private/` ne doit jamais être publié**. Il peut contenir la base, des clients, documents, sauvegardes, signatures, secrets et paramètres locaux.
 
-Consulte aussi [`GITHUB-PUBLICATION.md`](GITHUB-PUBLICATION.md) avant le premier push public.
+Consulte aussi [`GITHUB-PUBLICATION.md`](GITHUB-PUBLICATION.md) avant toute publication.
 
 ## Licence
 
-Aucune licence n’est imposée dans ce pack. Choisis et ajoute une `LICENSE` avant une publication open source si tu souhaites autoriser la réutilisation du code.
+WOPR est distribué sous licence **GNU General Public License v3.0 (GPLv3)**.
+
+Vous pouvez l’utiliser, l’étudier, le modifier et le redistribuer selon les conditions de la GPLv3. Les versions redistribuées et les travaux dérivés concernés par la licence doivent conserver les libertés prévues par la GPLv3.
+
+Voir le fichier [`LICENSE`](LICENSE).
+
+## Soutenir WOPR
+
+WOPR est **100 % gratuit** : aucun paiement, abonnement ou don n’est nécessaire pour utiliser ses fonctionnalités.
+
+Si vous souhaitez soutenir volontairement son développement :
+
+<p align="center">
+  <a href="https://paypal.me/foul">
+    <img src="docs/images/paypal-qr.png" alt="Faire un don PayPal à WOPR" width="180">
+  </a>
+</p>
+
+<p align="center"><strong><a href="https://paypal.me/foul">paypal.me/foul</a></strong></p>
+
+Un don est entièrement facultatif et ne débloque aucune fonctionnalité ni aucun avantage dans WOPR.

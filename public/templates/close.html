@@ -73,6 +73,11 @@
       <small>Modifiable avant ou après création de la facture.</small>
     </label>
 
+    <label>Date d'encaissement
+      <input type="date" name="accounting_date" value="{{ accounting_date_value }}">
+      <small>Utilisée pour le mois de CA. Par défaut : date de restitution, sinon aujourd'hui.</small>
+    </label>
+
     <div class="invoice-payment-grid">
       <label>Total facture
         <input id="billing-total-display" class="readonly-total"
@@ -144,8 +149,7 @@
       {% else %}
         cette facture a déjà été reconstruite / modifiée dans WOPR.
       {% endif %}
-      La date d'encaissement et les montants de CA historiques ne sont pas déplacés ici :
-      ils restent modifiables depuis le <strong>Suivi</strong>.
+      Les montants historiques sont conservés. La <strong>date d'encaissement</strong> reste modifiable ici.
     {% elif r["invoice_no"] %}
       Le numéro <strong>{{ r["invoice_no"] }}</strong> reste inchangé.
     {% else %}

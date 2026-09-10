@@ -1,1 +1,0 @@
-@echo off\r\nset "ROOT=%~dp0"\r\nset "PWSH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe"\r\nif exist "%PWSH%" (\r\n  "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%ROOT%public\\scripts\\lancer_wopr_windows.ps1"\r\n) else (\r\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%public\\scripts\\lancer_wopr_windows.ps1"\r\n)\r\n

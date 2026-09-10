@@ -14,6 +14,7 @@ import smtplib
 import mimetypes
 import subprocess
 import shutil
+import gzip
 import ssl
 import re
 import unicodedata
@@ -96,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.213"
+APP_VERSION = "2.3.214"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1521,34 +1522,166 @@ def audit_event(action, details="", ip=None):
         pass
 
 
+def _backup_stamp():
+    return now().strftime("%Y-%m-%d_%Hh%Mm%Ss")
+
+
+def _backup_marker_write(path, tag="backup"):
+    """Ajoute un marqueur interne à la COPIE de sauvegarde, jamais à la base active."""
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS wopr_backup_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        values = {
+            "signature": "WOPR_BACKUP_V1",
+            "app_version": APP_VERSION,
+            "created_at": now().isoformat(timespec="seconds"),
+            "tag": str(tag or "backup"),
+        }
+        con.executemany(
+            "INSERT OR REPLACE INTO wopr_backup_meta(key,value) VALUES(?,?)",
+            values.items()
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _validate_wopr_database(path):
+    """Valide le SQLite et vérifie qu'il ressemble bien à une base WOPR.
+
+    Les sauvegardes récentes portent WOPR_BACKUP_V1. Les anciennes restent
+    acceptées si leur structure WOPR essentielle est présente.
+    """
+    ok, detail = database_integrity_check(path)
+    if not ok:
+        return False, f"Contrôle SQLite = {detail}", {}
+    con = None
+    try:
+        con = sqlite3.connect(str(path))
+        tables = {str(r[0]) for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        if not {"clients", "repairs"}.issubset(tables):
+            return False, "Le fichier est un SQLite valide mais pas une base WOPR reconnue.", {}
+        meta = {}
+        if "wopr_backup_meta" in tables:
+            try:
+                meta = {str(k): str(v) for k, v in con.execute(
+                    "SELECT key,value FROM wopr_backup_meta"
+                ).fetchall()}
+            except Exception:
+                meta = {}
+            signature = meta.get("signature", "")
+            if signature and signature != "WOPR_BACKUP_V1":
+                return False, "Marqueur de sauvegarde WOPR inconnu.", meta
+        return True, "OK", meta
+    except Exception as exc:
+        return False, str(exc), {}
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _extract_backup_to_sqlite(source, destination):
+    """Matérialise une sauvegarde en SQLite brut d'après son CONTENU, pas son nom."""
+    source = Path(source)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    with source.open("rb") as f:
+        magic = f.read(16)
+    if magic.startswith(b"SQLite format 3\x00"):
+        shutil.copyfile(source, destination)
+    elif magic.startswith(b"\x1f\x8b"):
+        try:
+            with gzip.open(source, "rb") as src, destination.open("wb") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            raise ValueError(f"Archive GZIP invalide : {exc}") from exc
+    else:
+        raise ValueError("Format non reconnu : attendu SQLite ou GZIP contenant une base WOPR.")
+
+    ok, detail, meta = _validate_wopr_database(destination)
+    if not ok:
+        destination.unlink(missing_ok=True)
+        raise ValueError(detail)
+    return meta
+
+
 def backup_database(force=False, tag="auto"):
     if not DB.exists():
         return None
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    today = now().strftime("%Y%m%d")
-    if not force and list(BACKUP_DIR.glob(f"foulfix_{today}_*.db")):
-        return None
+
+    # La sauvegarde quotidienne ne dépend plus du nom : on regarde la date réelle
+    # des sauvegardes WOPR déjà générées.
+    if not force:
+        today = now().date()
+        for candidate in BACKUP_DIR.glob("foulfix_*"):
+            try:
+                if candidate.is_file() and datetime.fromtimestamp(candidate.stat().st_mtime).date() == today:
+                    return None
+            except OSError:
+                pass
+
     safe_tag = re.sub(r"[^A-Za-z0-9_-]+", "_", tag)[:30] or "backup"
-    dest = BACKUP_DIR / f"foulfix_{now().strftime('%Y%m%d_%H%M%S')}_{safe_tag}.db"
-    src_con = sqlite3.connect(DB)
-    dst_con = sqlite3.connect(dest)
+    dest = BACKUP_DIR / f"foulfix_{_backup_stamp()}_{safe_tag}.db.gz"
+    temp_db = BACKUP_DIR / f".wopr_backup_{secrets.token_hex(5)}.db"
+
     try:
-        src_con.backup(dst_con)
+        _sqlite_backup_copy(DB, temp_db)
+        _backup_marker_write(temp_db, safe_tag)
+        ok, detail, _ = _validate_wopr_database(temp_db)
+        if not ok:
+            raise RuntimeError(f"Sauvegarde SQLite invalide avant compression : {detail}")
+        with temp_db.open("rb") as src, dest.open("wb") as raw_dst:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw_dst, compresslevel=6, mtime=0) as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+        # Contrôle du GZIP final, indépendamment de son extension.
+        verify_tmp = BACKUP_DIR / f".wopr_verify_{secrets.token_hex(5)}.db"
+        try:
+            _extract_backup_to_sqlite(dest, verify_tmp)
+        finally:
+            verify_tmp.unlink(missing_ok=True)
+        try:
+            os.chmod(dest, 0o600)
+        except OSError:
+            pass
     finally:
-        dst_con.close(); src_con.close()
-    try:
-        os.chmod(dest, 0o600)
-    except OSError:
-        pass
-    backups = sorted(BACKUP_DIR.glob("foulfix_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+        temp_db.unlink(missing_ok=True)
+
+    # Rétention uniquement sur les sauvegardes générées par WOPR. Un fichier
+    # renommé/importé manuellement n'est pas supprimé juste à cause de sa présence.
+    managed_pattern = re.compile(
+        r"^foulfix_(?:\d{8}_\d{6}|\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s)_[A-Za-z0-9_-]+\.db(?:\.gz)?$"
+    )
+    backups = []
+    for candidate in BACKUP_DIR.iterdir():
+        try:
+            if candidate.is_file() and managed_pattern.fullmatch(candidate.name):
+                backups.append(candidate)
+        except OSError:
+            pass
+    backups.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     for old in backups[30:]:
-        try: old.unlink()
-        except OSError: pass
+        try:
+            old.unlink()
+        except OSError:
+            pass
     return dest
 
 
 def database_integrity_check(path):
-    """Vérifie qu'un fichier est une base SQLite lisible et intègre."""
+    """Vérifie qu'un fichier SQLite BRUT est lisible et intègre."""
     path = Path(path)
     if not path.is_file():
         return False, "Fichier introuvable."
@@ -1585,40 +1718,45 @@ def _sqlite_backup_copy(source, destination):
 
 
 def restore_database_backup(backup_name):
-    """Rend une sauvegarde WOPR active après validation et backup de sécurité."""
+    """Rend une sauvegarde WOPR active après validation de son contenu."""
     backup_name = str(backup_name or "").strip()
     if not backup_name or Path(backup_name).name != backup_name:
         raise ValueError("Nom de sauvegarde invalide.")
-    if not re.fullmatch(r"foulfix_\d{8}_\d{6}_[A-Za-z0-9_-]+\.db", backup_name):
-        raise ValueError("Cette sauvegarde n'est pas reconnue par WOPR.")
 
     backup_root = BACKUP_DIR.resolve()
     source = (BACKUP_DIR / backup_name).resolve()
     if source.parent != backup_root or not source.is_file():
         raise ValueError("Sauvegarde introuvable.")
 
-    ok, detail = database_integrity_check(source)
-    if not ok:
-        raise ValueError(f"Sauvegarde refusée : contrôle SQLite = {detail}")
+    stamp = now().strftime("%Y%m%d_%H%M%S")
+    restore_tmp = DB.parent / f".foulfix_restore_{stamp}_{secrets.token_hex(3)}.db"
+    rollback_tmp = DB.parent / f".foulfix_rollback_{stamp}_{secrets.token_hex(3)}.db"
+    safety_tmp = DB.parent / f".foulfix_safety_{stamp}_{secrets.token_hex(3)}.db"
+
+    # Reconnaissance par signature binaire + contenu SQLite. Le fichier peut donc
+    # être renommé librement, avec ou sans extension.
+    _extract_backup_to_sqlite(source, restore_tmp)
 
     # On conserve toujours l'état courant avant de basculer sur l'ancienne base.
     safety = backup_database(force=True, tag="avant_restauration")
     if not safety:
+        restore_tmp.unlink(missing_ok=True)
         raise RuntimeError("Impossible de sauvegarder la base actuelle avant restauration.")
 
-    stamp = now().strftime("%Y%m%d_%H%M%S")
-    restore_tmp = DB.parent / f".foulfix_restore_{stamp}_{secrets.token_hex(3)}.db"
-    rollback_tmp = DB.parent / f".foulfix_rollback_{stamp}_{secrets.token_hex(3)}.db"
-
     try:
-        _sqlite_backup_copy(source, restore_tmp)
-        ok, detail = database_integrity_check(restore_tmp)
+        # Le marqueur appartient à l'archive de sauvegarde, pas à la base active.
+        try:
+            marker_con = sqlite3.connect(str(restore_tmp))
+            marker_con.execute("DROP TABLE IF EXISTS wopr_backup_meta")
+            marker_con.commit()
+            marker_con.close()
+        except Exception:
+            pass
+
+        ok, detail, _ = _validate_wopr_database(restore_tmp)
         if not ok:
             raise RuntimeError(f"Copie de restauration invalide : {detail}")
 
-        # Aucun handle SQLite n'est conservé globalement par WOPR. Les éventuels
-        # fichiers temporaires d'une ancienne session ne doivent pas accompagner
-        # la base restaurée.
         for suffix in ("-wal", "-shm"):
             try:
                 Path(str(DB) + suffix).unlink(missing_ok=True)
@@ -1627,16 +1765,20 @@ def restore_database_backup(backup_name):
 
         os.replace(restore_tmp, DB)
         try:
-            # Une sauvegarde plus ancienne peut avoir un schéma antérieur :
-            # les migrations WOPR courantes sont réappliquées avant utilisation.
             init_db()
-            ok, detail = database_integrity_check(DB)
+            ok, detail, _ = _validate_wopr_database(DB)
             if not ok:
                 raise RuntimeError(f"Base restaurée invalide après migration : {detail}")
             harden_local_permissions()
         except Exception as exc:
-            # Retour automatique à la base qui était active avant l'opération.
-            _sqlite_backup_copy(safety, rollback_tmp)
+            _extract_backup_to_sqlite(safety, safety_tmp)
+            try:
+                c = sqlite3.connect(str(safety_tmp))
+                c.execute("DROP TABLE IF EXISTS wopr_backup_meta")
+                c.commit(); c.close()
+            except Exception:
+                pass
+            _sqlite_backup_copy(safety_tmp, rollback_tmp)
             for suffix in ("-wal", "-shm"):
                 try:
                     Path(str(DB) + suffix).unlink(missing_ok=True)
@@ -1648,7 +1790,7 @@ def restore_database_backup(backup_name):
                 f"Restauration annulée ; la base précédente a été remise automatiquement. Détail : {exc}"
             ) from exc
     finally:
-        for tmp in (restore_tmp, rollback_tmp):
+        for tmp in (restore_tmp, rollback_tmp, safety_tmp):
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
@@ -5877,7 +6019,11 @@ def security_page():
             write_smtp_settings(current)
             audit_event("SMTP_SETTINGS", "Configuration SMTP Proton mise à jour", request.remote_addr)
             flash("Configuration SMTP Proton enregistrée localement.")
-    backups = sorted(BACKUP_DIR.glob("foulfix_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    backups = sorted(
+        [p for p in BACKUP_DIR.iterdir() if p.is_file() and not p.name.startswith(".")],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    ) if BACKUP_DIR.exists() else []
     smtp_settings = read_smtp_settings()
     business = cfg()
     return render_template(
@@ -9666,35 +9812,64 @@ def repair_close(rid):
 
         is_historical_invoice = bool(r["legacy_imported"])
 
+        # V2.3.214 — la date d'encaissement appartient à la facture.
+        # Elle reste éditable, y compris sur une facture historique, sans toucher
+        # aux montants historiques. Si elle est vide, on privilégie la restitution.
+        accounting_date_raw = request.form.get("accounting_date", "").strip()
+
+        def parsed_accounting_day(raw_value, fallback_value=""):
+            value = str(raw_value or fallback_value or "").strip()[:10]
+            if not value:
+                return None
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                return None
+
         if is_historical_invoice:
-            # Une facture ODS peut maintenant être modifiée, mais l'éditeur facture
-            # ne doit PAS réécrire l'historique d'encaissement ni déplacer le CA.
-            # Les corrections comptables restent volontairement dans le Suivi.
             paid_flag = int(r["paid"] or 0)
-            accounting_year = r["accounting_year"]
-            accounting_month = r["accounting_month"]
-            accounting_date = r["accounting_date"] or ""
             accounting_service_amount = float(r["accounting_service_amount"] or 0)
             accounting_goods_amount = float(r["accounting_goods_amount"] or 0)
             accounting_status = r["accounting_status"] or "normal"
+
+            if paid_flag:
+                fallback = r["accounting_date"] or r["returned_at"] or now().date().isoformat()
+                accounting_day = parsed_accounting_day(accounting_date_raw, fallback)
+                if accounting_date_raw and not accounting_day:
+                    con.close()
+                    flash("Date d'encaissement invalide.")
+                    return redirect(url_for("repair_close", rid=rid))
+                accounting_day = accounting_day or now().date()
+                accounting_date = accounting_day.isoformat()
+                accounting_year = accounting_day.year
+                accounting_month = accounting_day.month
+                try:
+                    rd = datetime.strptime(r["received_date"], "%Y-%m-%d")
+                    accounting_status = (
+                        "yellow"
+                        if (rd.year, rd.month) != (accounting_year, accounting_month)
+                        else "normal"
+                    )
+                except Exception:
+                    accounting_status = "normal"
+            else:
+                accounting_year = r["accounting_year"]
+                accounting_month = r["accounting_month"]
+                accounting_date = r["accounting_date"] or ""
         else:
             paid_flag = 1 if request.form.get("paid") == "on" else 0
 
             if paid_flag:
-                # Si la facture était déjà réglée, on conserve son mois comptable.
-                if r["paid"] and r["accounting_year"] and r["accounting_month"]:
-                    accounting_year = int(r["accounting_year"])
-                    accounting_month = int(r["accounting_month"])
-                    accounting_date = r["accounting_date"] or ""
-                else:
-                    payment_dt = now()
-                    accounting_year = payment_dt.year
-                    accounting_month = payment_dt.month
-
-                accounting_date = payment_dt.strftime("%Y-%m-%d") if 'payment_dt' in locals() else (
-                    r["accounting_date"] or now().strftime("%Y-%m-%d")
-                )
-
+                fallback = r["accounting_date"] or r["returned_at"] or now().date().isoformat()
+                accounting_day = parsed_accounting_day(accounting_date_raw, fallback)
+                if accounting_date_raw and not accounting_day:
+                    con.close()
+                    flash("Date d'encaissement invalide.")
+                    return redirect(url_for("repair_close", rid=rid))
+                accounting_day = accounting_day or now().date()
+                accounting_date = accounting_day.isoformat()
+                accounting_year = accounting_day.year
+                accounting_month = accounting_day.month
                 accounting_service_amount = service_total
                 accounting_goods_amount = goods_total
 
@@ -9742,7 +9917,7 @@ def repair_close(rid):
         # Une facture non réglée reste Terminé (sauf dossier déjà explicitement restitué).
         if paid_flag:
             close_status = "Restitué"
-            close_returned_at = r["returned_at"] or now().date().isoformat()
+            close_returned_at = r["returned_at"] or accounting_date or now().date().isoformat()
         else:
             close_status = "Restitué" if r["status"] == "Restitué" else "Terminé"
             close_returned_at = r["returned_at"] if close_status == "Restitué" else None
@@ -9888,7 +10063,8 @@ def repair_close(rid):
         invoice_was_reconstructed=invoice_was_reconstructed,
         original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
         payment_split=payment_split_values(r["payment_detail"], r["payment_method"]),
-        invoice_date_value=((r["finished_at"] or now().date().isoformat())[:10])
+        invoice_date_value=((r["finished_at"] or now().date().isoformat())[:10]),
+        accounting_date_value=((r["accounting_date"] or r["returned_at"] or now().date().isoformat())[:10])
     )
 
 @app.route("/sign/<token>", methods=["GET", "POST"])
@@ -12935,9 +13111,11 @@ if __name__ == "__main__":
         try:
             path = backup_database(force=True, tag="arret")
             if path:
-                ok, detail = database_integrity_check(path)
-                if not ok:
-                    raise RuntimeError(f"Contrôle SQLite = {detail}")
+                verify_tmp = DB.parent / f".wopr_cli_verify_{secrets.token_hex(4)}.db"
+                try:
+                    _extract_backup_to_sqlite(path, verify_tmp)
+                finally:
+                    verify_tmp.unlink(missing_ok=True)
                 print(str(path))
                 raise SystemExit(0)
             raise RuntimeError("Aucune base à sauvegarder.")

@@ -69,3 +69,8 @@ Thumbs.db
 *.7z
 *.rar
 .directory
+
+# PyInstaller
+build/
+dist/
+*.spec

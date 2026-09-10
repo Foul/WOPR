@@ -47,7 +47,7 @@
     <h2>💾 Sauvegardes</h2>
     <p>
       WOPR crée une sauvegarde quotidienne et une nouvelle sauvegarde lorsque tu l'arrêtes avec le bouton/script d'arrêt.
-      Les <strong>30 dernières sauvegardes</strong> sont conservées dans <code>private/data/backups/</code>.
+      Les nouvelles sauvegardes sont compressées en <strong>GZIP</strong>. Les <strong>30 dernières sauvegardes générées par WOPR</strong> sont conservées dans <code>private/data/backups/</code>.
     </p>
     <div class="backup-auto-status">✓ Sauvegarde quotidienne + sauvegarde à l'arrêt actives</div>
     <form method="post" style="margin-top:12px;">
@@ -57,7 +57,7 @@
     </form>
     {% if backups %}
       <p style="margin-top:14px;"><strong>Ouvrir une ancienne sauvegarde dans WOPR</strong></p>
-      <small>La base actuelle est automatiquement sauvegardée avant toute restauration.</small>
+      <small>La base actuelle est automatiquement sauvegardée avant toute restauration. WOPR reconnaît une sauvegarde par son contenu SQLite/GZIP, pas par son nom de fichier.</small>
       <ul class="backup-list">
         {% for b in backups %}
         <li style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">

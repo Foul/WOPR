@@ -1,5 +1,14 @@
 # Changelog de la documentation
 
+## 2.3.213 - 10 septembre 2026 - licence, plateformes et soutien
+- WOPR est désormais publié sous licence **GNU GPLv3**.
+- Ajout explicite de la mention **100 % gratuit et open source**.
+- Linux et Windows sont indiqués comme plateformes supportées.
+- macOS est explicitement indiqué comme **non supporté** : aucun binaire officiel, aucun test et aucun support garanti.
+- Ajout d’un bloc de soutien facultatif via PayPal (`paypal.me/foul`) et du QR code associé.
+- Ajout de `docs/LICENCE-SUPPORT.md` et du guide `GITHUB-PUBLICATION.md`.
+- Aucun don n’est requis et aucune fonctionnalité de WOPR n’est réservée aux donateurs.
+
 ## 2.3.210 - 9 septembre 2026 - release
 - Ajout de l’autocomplétion locale des villes par code postal dans la création et la modification d’un suivi.
 - Utilisation de la base postale officielle avec les libellés de communes INSEE 2026 correctement accentués et capitalisés.
