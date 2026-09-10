@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.216"
+APP_VERSION = "2.3.217"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -12733,6 +12733,9 @@ def client_delete(client_id):
                         ).execute()
                     else:
                         google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+                except HttpError as exc:
+                    if getattr(exc.resp, "status", None) != 404:
+                        google_warning = f" Contact Google non supprimé : {exc}"
                 except Exception as exc:
                     google_warning = f" Contact Google non supprimé : {exc}"
 
@@ -12825,6 +12828,12 @@ def client_delete(client_id):
                         google_deleted = True
                     else:
                         google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+                except HttpError as exc:
+                    if getattr(exc.resp, "status", None) == 404:
+                        # Déjà absent de Google : résultat équivalent à une suppression réussie.
+                        google_deleted = True
+                    else:
+                        google_warning = f" Contact Google non supprimé : {exc}"
                 except Exception as exc:
                     google_warning = f" Contact Google non supprimé : {exc}"
 
@@ -12875,6 +12884,9 @@ def client_delete(client_id):
                     ).execute()
                 else:
                     google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+            except HttpError as exc:
+                if getattr(exc.resp, "status", None) != 404:
+                    google_warning = f" Contact Google non supprimé : {exc}"
             except Exception as exc:
                 google_warning = f" Contact Google non supprimé : {exc}"
 

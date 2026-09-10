@@ -35,9 +35,10 @@
 
       {% if client['google_resource_name'] %}
       <label class="checkboxline delete-google-option">
-        <input type="checkbox" name="delete_google" checked>
+        <input type="checkbox" name="delete_google">
         Supprimer aussi ce contact de Google Contacts
       </label>
+      <div class="sheet-note">Option séparée et volontaire : décochée par défaut.</div>
       {% endif %}
 
       <label>
@@ -67,11 +68,13 @@
 
     <form method="post">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
       {% if client['google_resource_name'] %}
       <label class="checkboxline delete-google-option">
-        <input type="checkbox" name="delete_google" checked>
+        <input type="checkbox" name="delete_google">
         Retirer aussi ce contact de Google Contacts
       </label>
+      <div class="sheet-note">Google ne sera modifié que si tu coches volontairement cette option.</div>
       {% endif %}
 
       <label class="checkboxline danger-confirm">
@@ -99,9 +102,10 @@
 
       {% if client['google_resource_name'] %}
       <label class="checkboxline delete-google-option">
-        <input type="checkbox" name="delete_google" checked>
+        <input type="checkbox" name="delete_google">
         Supprimer aussi ce contact de Google Contacts
       </label>
+      <div class="sheet-note">Google ne sera modifié que si tu coches volontairement cette option.</div>
       {% endif %}
 
       <label>
@@ -125,11 +129,13 @@
 
     <form method="post">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
       {% if client['google_resource_name'] %}
       <label class="checkboxline delete-google-option">
-        <input type="checkbox" name="delete_google" checked>
+        <input type="checkbox" name="delete_google">
         Supprimer aussi ce contact de Google Contacts
       </label>
+      <div class="sheet-note">Google ne sera modifié que si tu coches volontairement cette option.</div>
       {% endif %}
 
       <label class="checkboxline danger-confirm">
