@@ -23,9 +23,25 @@
   <button class="button primary" type="submit">RECHERCHER</button>
   {% if q %}
     <a class="button" href="{{ url_for('contacts_page', archived=1) if show_archived else url_for('contacts_page') }}">Effacer</a>
-    <span class="client-search-count">{{ clients|length }} résultat(s) sur {{ total_clients }}</span>
+    <span class="client-search-count">
+      {{ clients|length }} résultat(s) sur {{ total_clients }}
+      {% if not show_archived %}
+        &nbsp;•&nbsp; Google :
+        <span class="sync-ok">{{ google_synced_count }} synchronisé(s)</span>
+        · <span class="sync-wait">{{ google_pending_count }} à synchroniser</span>
+        · <span class="sync-error">{{ google_error_count }} erreur(s)</span>
+      {% endif %}
+    </span>
   {% else %}
-    <span class="client-search-count">{{ total_clients }} client(s)</span>
+    <span class="client-search-count">
+      {{ total_clients }} client(s)
+      {% if not show_archived %}
+        &nbsp;•&nbsp; Google :
+        <span class="sync-ok">{{ google_synced_count }} synchronisé(s)</span>
+        · <span class="sync-wait">{{ google_pending_count }} à synchroniser</span>
+        · <span class="sync-error">{{ google_error_count }} erreur(s)</span>
+      {% endif %}
+    </span>
   {% endif %}
 </form>
 

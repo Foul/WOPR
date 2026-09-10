@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.219"
+APP_VERSION = "2.3.220"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -12673,6 +12673,23 @@ def contacts_page():
     archived_clients_count = con.execute(
         "SELECT COUNT(*) FROM clients WHERE COALESCE(archived,0)=1"
     ).fetchone()[0]
+
+    # Résumé Google des clients actifs uniquement.
+    google_sync_stats = con.execute("""
+        SELECT
+            SUM(CASE WHEN google_sync_status='Synchronisé' THEN 1 ELSE 0 END) AS synced,
+            SUM(CASE WHEN google_sync_status='Erreur' THEN 1 ELSE 0 END) AS errors,
+            SUM(CASE
+                    WHEN COALESCE(google_sync_status,'') NOT IN ('Synchronisé','Erreur')
+                    THEN 1 ELSE 0
+                END) AS pending
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+    """).fetchone()
+    google_synced_count = int(google_sync_stats["synced"] or 0)
+    google_pending_count = int(google_sync_stats["pending"] or 0)
+    google_error_count = int(google_sync_stats["errors"] or 0)
+
     safe_duplicate_groups = len(find_safe_local_duplicate_groups(con))
     con.close()
 
@@ -12688,6 +12705,9 @@ def contacts_page():
         safe_duplicate_groups=safe_duplicate_groups,
         show_archived=show_archived,
         archived_clients_count=archived_clients_count,
+        google_synced_count=google_synced_count,
+        google_pending_count=google_pending_count,
+        google_error_count=google_error_count,
         business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
         google_contact_group=str(
             cfg().get("google_contact_group")
