@@ -61,14 +61,37 @@ def read_pid():
     except Exception: return None
 
 def process_exists(pid):
-    if not pid: return False
+    if not pid:
+        return False
     try:
         if IS_WINDOWS:
-            cp=subprocess.run(["tasklist","/FI",f"PID eq {pid}","/NH"],capture_output=True,text=True,
-                              creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            cp=subprocess.run(
+                ["tasklist","/FI",f"PID eq {pid}","/NH"],
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+            )
             return str(pid) in cp.stdout
-        os.kill(pid,0); return True
-    except Exception: return False
+
+        # Linux : un processus zombie possède encore un PID, mais il est déjà mort.
+        # os.kill(pid, 0) seul le considérait à tort comme encore actif.
+        stat_path=Path(f"/proc/{pid}/stat")
+        if stat_path.is_file():
+            try:
+                stat=stat_path.read_text(encoding="utf-8",errors="ignore")
+                # /proc/<pid>/stat : PID (comm) STATE ...
+                end_comm=stat.rfind(")")
+                if end_comm != -1:
+                    fields=stat[end_comm+2:].split()
+                    if fields and fields[0] == "Z":
+                        return False
+            except Exception:
+                pass
+
+        os.kill(pid,0)
+        return True
+    except Exception:
+        return False
 
 def req_hash():
     if not REQ.exists(): return ""
@@ -139,8 +162,6 @@ def discover_app_pids():
         pids.add(pid)
 
     if IS_WINDOWS:
-        # Retrouve aussi WOPR si le fichier PID a disparu : uniquement Python/pythonw
-        # dont la ligne de commande contient exactement ce public\app.py.
         app=str(APP_PATH).replace("'", "''")
         ps=(
             "$app='"+app+"'; "
@@ -218,7 +239,6 @@ def create_shutdown_backup(status):
     detail=" | ".join(x for x in errors if x)
     raise RuntimeError("Sauvegarde de fermeture impossible" + (f" : {detail}" if detail else "."))
 
-
 def stop_server(status):
     pids=discover_app_pids()
     if not pids:
@@ -263,7 +283,7 @@ def stop_server(status):
         raise RuntimeError("Impossible d'arrêter complètement WOPR (PID : " + ", ".join(map(str,remaining)) + ").")
 
     PID_FILE.unlink(missing_ok=True)
-    log("Serveur arrêté PID=" + ",".join(map(str,pids)))
+    log("Serveur arrêté PID="+",".join(map(str,pids)))
     backup=create_shutdown_backup(status)
     status(f"WOPR arrêté • sauvegarde {backup.name}")
     return backup
@@ -293,11 +313,9 @@ class Launcher(tk.Tk):
         self.resizable(False, False)
         self.configure(bg=self.BG)
 
-        # Police mono : Tk choisit un équivalent disponible selon Linux/Windows.
         mono = ("TkFixedFont", 10)
         mono_bold = ("TkFixedFont", 10, "bold")
 
-        # --- En-tête ---------------------------------------------------------
         header = tk.Frame(self, bg=self.BG)
         header.pack(fill="x", padx=28, pady=(22, 0))
 
@@ -325,7 +343,6 @@ class Launcher(tk.Tk):
             font=("TkFixedFont", 9, "bold"),
         ).pack(anchor="w", pady=(5, 0))
 
-        # --- Console d'état -------------------------------------------------
         console = tk.Frame(
             self,
             bg=self.PANEL,
@@ -372,7 +389,6 @@ class Launcher(tk.Tk):
             font=mono,
         ).pack(anchor="w", padx=14, pady=(0, 10))
 
-        # --- Boutons --------------------------------------------------------
         buttons = tk.Frame(self, bg=self.BG)
         buttons.pack(padx=28, pady=(0, 10), fill="x")
 
@@ -411,7 +427,6 @@ class Launcher(tk.Tk):
         )
         self.refreshb.pack(side="left", expand=True, fill="x", padx=(6, 0))
 
-        # --- Pied -----------------------------------------------------------
         footer = tk.Frame(self, bg=self.BG)
         footer.pack(fill="x", padx=28, pady=(8, 0))
 
