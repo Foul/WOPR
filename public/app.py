@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.221"
+APP_VERSION = "2.3.223"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -852,6 +852,26 @@ def force_utf8_html(response):
     content_type = response.headers.get("Content-Type", "")
     if content_type.lower().startswith("text/html"):
         response.headers["Content-Type"] = "text/html; charset=utf-8"
+
+        # V2.3.222 — correctifs responsive globaux.
+        # Injectés ici pour s'appliquer à toutes les pages sans dupliquer
+        # les inclusions dans chaque template.
+        try:
+            html = response.get_data(as_text=True)
+            css_tag = f'<link rel="stylesheet" href="/static/wopr-responsive.css?v={APP_VERSION}">'
+            js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
+
+            if "wopr-responsive.css" not in html and "</head>" in html:
+                html = html.replace("</head>", css_tag + "\n</head>", 1)
+
+            if "wopr-responsive.js" not in html and "</body>" in html:
+                html = html.replace("</body>", js_tag + "\n</body>", 1)
+
+            response.set_data(html)
+        except Exception:
+            # Un problème cosmétique ne doit jamais empêcher WOPR de répondre.
+            pass
+
     return response
 
 def cfg():
@@ -2329,11 +2349,22 @@ def init_db():
             FOREIGN KEY(repair_id) REFERENCES repairs(id)
         )
     """)
-    # Nom / prénom séparés : on initialise uniquement les anciennes fiches encore vierges.
-    # Les corrections manuelles ne seront donc jamais réécrites au prochain démarrage.
+    # V2.3.223 — Nom / prénom séparés : migration UNIQUEMENT des anciennes
+    # fiches personnelles encore vierges.
+    #
+    # Une entreprise pure peut légitimement avoir :
+    #   first_name = ''
+    #   last_name  = ''
+    #   company    = 'Microrecup'
+    #   name       = 'Microrecup'
+    #
+    # Les anciennes versions remettaient alors "Microrecup" dans last_name
+    # à chaque redémarrage. On exclut donc explicitement les fiches ayant une
+    # raison sociale : une correction manuelle reste enfin corrigée.
     rows_to_split = con.execute("""
         SELECT id,name FROM clients
         WHERE COALESCE(trim(last_name),'')='' AND COALESCE(trim(first_name),'')=''
+          AND COALESCE(trim(company),'')=''
           AND COALESCE(trim(name),'')<>''
     """).fetchall()
     for old_client in rows_to_split:

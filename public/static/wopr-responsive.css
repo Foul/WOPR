@@ -1,0 +1,153 @@
+/* WOPR 2.3.222 — responsive écrans portables + scrollbar horizontale accessible */
+
+/* La zone marque/thème doit pouvoir rétrécir sans pousser le sélecteur hors écran. */
+.brand-zone{
+  min-width:0 !important;
+  max-width:100% !important;
+}
+.brand-zone .brand-link{
+  min-width:0 !important;
+}
+.theme-picker{
+  flex:0 0 auto !important;
+}
+
+/*
+ * Le thème WOPR forçait volontairement toute la barre sur une seule ligne
+ * à partir de 1450 px. Avec le scaling Windows d'un écran 2.5K, cette zone
+ * pouvait être trop étroite et le sélecteur de thème partait hors champ.
+ */
+@media (max-width:1900px){
+  .topbar,
+  body.theme-terminal .topbar{
+    flex-wrap:wrap !important;
+    align-items:center !important;
+    gap:8px !important;
+  }
+
+  .brand-zone,
+  body.theme-terminal .brand-zone{
+    width:100% !important;
+    flex:1 1 100% !important;
+    display:flex !important;
+    align-items:center !important;
+    gap:10px !important;
+    min-width:0 !important;
+  }
+
+  .brand-zone .brand-link,
+  body.theme-terminal .brand-zone .brand-link{
+    flex:0 1 auto !important;
+    min-width:0 !important;
+    overflow:hidden !important;
+  }
+
+  .brand-logo{
+    max-width:min(280px, 42vw) !important;
+  }
+
+  .api-version-badge{
+    flex:0 0 auto !important;
+  }
+
+  .theme-picker,
+  body.theme-terminal .theme-picker{
+    margin-left:auto !important;
+    flex:0 0 auto !important;
+    position:relative !important;
+    z-index:3 !important;
+  }
+
+  .topnav,
+  body.theme-terminal .topnav{
+    width:100% !important;
+    margin-left:0 !important;
+    margin-top:4px !important;
+    justify-content:flex-start !important;
+    flex-wrap:wrap !important;
+    overflow:visible !important;
+  }
+}
+
+/* Sur les écrans encore plus étroits, le logo cède de la place au thème. */
+@media (max-width:1100px){
+  .brand-logo{
+    max-width:210px !important;
+    height:auto !important;
+  }
+
+  .api-version-badge{
+    font-size:11px !important;
+  }
+
+  .theme-picker select{
+    max-width:130px !important;
+  }
+}
+
+/*
+ * Barre horizontale flottante synchronisée avec le tableau actuellement visible.
+ * Elle n'apparaît que si le tableau dépasse réellement la largeur disponible.
+ */
+.wopr-xscroll-dock{
+  position:fixed;
+  left:10px;
+  right:10px;
+  bottom:6px;
+  height:18px;
+  overflow-x:auto;
+  overflow-y:hidden;
+  z-index:9998;
+  background:rgba(15,23,32,.94);
+  border:1px solid rgba(120,150,170,.75);
+  border-radius:5px;
+  box-shadow:0 2px 10px rgba(0,0,0,.35);
+  scrollbar-width:auto;
+  display:none;
+}
+
+.wopr-xscroll-dock.is-visible{
+  display:block;
+}
+
+.wopr-xscroll-spacer{
+  height:1px;
+}
+
+/* Barre suffisamment visible sous Windows/Chromium. */
+.wopr-xscroll-dock::-webkit-scrollbar{
+  height:15px;
+}
+.wopr-xscroll-dock::-webkit-scrollbar-track{
+  background:#17212b;
+}
+.wopr-xscroll-dock::-webkit-scrollbar-thumb{
+  background:#6f8798;
+  border:3px solid #17212b;
+  border-radius:8px;
+}
+.wopr-xscroll-dock::-webkit-scrollbar-thumb:hover{
+  background:#9bb0bf;
+}
+
+/* Thème WOPR : cohérence visuelle avec le vert terminal. */
+body.theme-terminal .wopr-xscroll-dock{
+  background:rgba(0,8,3,.96);
+  border-color:#1ba946;
+  box-shadow:0 0 9px rgba(39,227,95,.24);
+}
+body.theme-terminal .wopr-xscroll-dock::-webkit-scrollbar-track{
+  background:#020a04;
+}
+body.theme-terminal .wopr-xscroll-dock::-webkit-scrollbar-thumb{
+  background:#1ba946;
+  border-color:#020a04;
+}
+body.theme-terminal .wopr-xscroll-dock::-webkit-scrollbar-thumb:hover{
+  background:#49ff79;
+}
+
+/* Laisse un petit espace pour éviter que la barre flottante masque un bouton. */
+body.wopr-has-xscroll{
+  padding-bottom:28px;
+}
