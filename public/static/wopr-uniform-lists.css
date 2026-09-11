@@ -1,0 +1,86 @@
+
+/* WOPR 2.3.253 — langage visuel commun Factures / Devis / Suivi */
+
+/* Actions : mêmes boutons, centrés, sur une grille lisible. */
+.wopr-action-grid{
+  display:grid;
+  align-items:center;
+  justify-content:center;
+  gap:4px;
+  width:100%;
+}
+
+.wopr-action-grid[data-columns="3"]{
+  grid-template-columns:repeat(3,max-content);
+}
+
+.wopr-action-grid[data-columns="2"]{
+  grid-template-columns:repeat(2,minmax(74px, max-content));
+}
+
+.wopr-action-grid > form{
+  margin:0;
+  display:contents;
+}
+
+.wopr-action-grid > a,
+.wopr-action-grid > button,
+.wopr-action-grid > select,
+.wopr-action-grid > span,
+.wopr-action-grid > form > button{
+  margin:0 !important;
+  justify-self:center;
+  box-sizing:border-box;
+}
+
+.wopr-page-factures td.invoice-list-actions,
+.wopr-page-devis td.invoice-list-actions,
+.wopr-page-devis td.quote-list-actions{
+  text-align:center;
+  vertical-align:middle;
+}
+
+/* Suivi : on garde les colonnes utiles mais on enlève l'effet "gros quadrillage". */
+.wopr-page-suivi table.wopr-light-table{
+  border-collapse:separate !important;
+  border-spacing:0 !important;
+}
+
+.wopr-page-suivi table.wopr-light-table th,
+.wopr-page-suivi table.wopr-light-table td{
+  border-left:0 !important;
+  border-right:0 !important;
+  border-top:0 !important;
+  border-bottom:1px solid #dfe5eb !important;
+  background:transparent;
+}
+
+.wopr-page-suivi table.wopr-light-table thead th{
+  border-bottom:2px solid #c7d2df !important;
+}
+
+.wopr-page-suivi table.wopr-light-table tbody tr:hover td{
+  background:rgba(0,0,0,.018);
+}
+
+.wopr-page-suivi table.wopr-light-table td:last-child{
+  text-align:center;
+  vertical-align:middle;
+}
+
+/* Les lignes de séparation/mois restent visibles sans refaire une cage bleue. */
+.wopr-page-suivi table.wopr-light-table tr > td[colspan]{
+  border-bottom:1px solid #c7d2df !important;
+  font-weight:700;
+}
+
+/* Taille cohérente des boutons Dossier. */
+[data-wopr-folder-url],
+.wopr-folder-v248{
+  width:auto !important;
+  min-width:0 !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  white-space:nowrap !important;
+}

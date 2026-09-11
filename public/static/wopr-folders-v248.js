@@ -149,13 +149,66 @@
     });
   }
 
+  function markPage() {
+    document.body.classList.toggle("wopr-page-factures", location.pathname === "/factures");
+    document.body.classList.toggle("wopr-page-devis", location.pathname === "/devis");
+    document.body.classList.toggle("wopr-page-suivi", location.pathname === "/suivi");
+  }
+
+  function wrapActionCell(cell, columns) {
+    if (!cell || cell.dataset.woprActionsWrapped === "1") return;
+
+    const interactive = Array.from(cell.children).filter(el => {
+      if (el.classList?.contains("wopr-action-grid")) return false;
+      const tag = el.tagName;
+      return ["A","BUTTON","SELECT","FORM","SPAN"].includes(tag);
+    });
+    if (!interactive.length) return;
+
+    const grid = document.createElement("div");
+    grid.className = "wopr-action-grid";
+    grid.dataset.columns = String(columns || 3);
+
+    interactive.forEach(el => grid.appendChild(el));
+    cell.appendChild(grid);
+    cell.dataset.woprActionsWrapped = "1";
+  }
+
+  function uniformizeActions() {
+    if (location.pathname === "/factures" || location.pathname === "/devis") {
+      document.querySelectorAll("td.invoice-list-actions, td.quote-list-actions").forEach(cell => {
+        wrapActionCell(cell, 3);
+      });
+    }
+
+    if (location.pathname === "/suivi") {
+      document.querySelectorAll("table tbody tr").forEach(row => {
+        const cells = row.querySelectorAll("td");
+        if (!cells.length) return;
+        const cell = cells[cells.length - 1];
+        if (cell.hasAttribute("colspan")) return;
+
+        const controls = cell.querySelectorAll("a,button,form,select,input[type=button],input[type=submit]");
+        if (controls.length >= 3) wrapActionCell(cell, 2);
+      });
+
+      document.querySelectorAll("table").forEach(table => {
+        if (table.querySelector("th") && table.querySelectorAll("tbody tr").length) {
+          table.classList.add("wopr-light-table");
+        }
+      });
+    }
+  }
+
   function scanAll() {
+    markPage();
     bindStaticFolderButtons();
     scanFactures();
     scanSuivi();
     scanDevis();
     scanLedger();
     scanRepairDetail();
+    uniformizeActions();
   }
 
   document.addEventListener("DOMContentLoaded", scanAll);
