@@ -34,8 +34,18 @@
     <label>Téléphone<input name="phone"></label>
     <label>E-mail<input type="email" name="email"></label>
     <label>Adresse<input name="address_street"></label>
-    <label>Code postal<input name="postal_code"></label>
-    <label>Ville<input name="city"></label>
+    <label>Code postal
+      <input id="simple-postal-code"
+             name="postal_code"
+             inputmode="numeric"
+             maxlength="5"
+             data-postal-autocomplete
+             data-city-target="simple-city"
+             data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}">
+    </label>
+    <label>Ville
+      <input id="simple-city" name="city">
+    </label>
   </div>
 
   <div class="section-title">Lignes de facture</div>
@@ -134,4 +144,6 @@ function updateClientFields(){
 clientSelect.addEventListener('change',updateClientFields);
 updateClientFields();
 </script>
+
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 {% endblock %}
