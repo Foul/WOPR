@@ -1,0 +1,307 @@
+/* WOPR 2.3.281 — 8-BIT HOTFIX FINAL
+   Ciblage ultra-spécifique des boutons encore récalcitrants.
+   Chargé APRÈS wopr-8bit-release.css. */
+
+body.theme-8bit{
+  --w8-blue-bg:#dcecff;
+  --w8-blue-fg:#103d66;
+  --w8-green-bg:#ddf5e6;
+  --w8-green-fg:#14502e;
+  --w8-amber-bg:#ffedbd;
+  --w8-amber-fg:#6b4500;
+  --w8-purple-bg:#eadcff;
+  --w8-purple-fg:#4c2477;
+  --w8-red-bg:#ffdada;
+  --w8-red-fg:#7c2020;
+  --w8-neutral-bg:#f4f7f9;
+  --w8-neutral-fg:#263746;
+  --w8-dark:#07131d;
+}
+
+body.theme-8bit :is(
+  button.wopr-folder-v248.mini-btn.wopr-action-folder,
+  td.invoice-list-actions button.mini-btn.wopr-action-folder[data-wopr-folder-url],
+  td.quote-list-actions a.mini-btn.wopr-action-folder[data-wopr-folder-url],
+  td.quote-list-actions button.mini-btn.wopr-action-folder[data-wopr-folder-url],
+  .ledger-normal-actions a.mini-btn.ledger-folder-btn.wopr-action-folder[data-wopr-folder-url],
+  .ledger-normal-actions button.mini-btn.ledger-folder-btn.wopr-action-folder[data-wopr-folder-url]
+){
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-purple-bg) !important;
+  background-image:none !important;
+  color:var(--w8-purple-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+}
+
+body.theme-8bit :is(
+  .ods-followup-table .wopr-folder-v248,
+  .invoice-list-actions .wopr-action-folder,
+  .quote-list-actions .wopr-action-folder,
+  .ledger-normal-actions .wopr-action-folder
+):hover{
+  transform:translate(1px,1px) !important;
+}
+
+body.theme-8bit :is(
+  .invoice-list-actions select.pdf-lang-select.mini-btn.wopr-action-open.wopr-action-invoice-pdf,
+  .invoice-list-actions a.mini-btn.wopr-action-open,
+  .quote-list-actions a.mini-btn.quote-original-btn.wopr-action-open,
+  .quote-list-actions a.mini-btn.primary.wopr-action-open
+){
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-blue-bg) !important;
+  background-image:none !important;
+  color:var(--w8-blue-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+}
+
+body.theme-8bit .quote-list-actions :is(
+  button.mini-btn.danger-btn.wopr-action-delete.wopr-quote-delete,
+  form button.mini-btn.danger-btn.wopr-action-delete,
+  .danger-btn.wopr-action-delete
+),
+body.theme-8bit .ledger-normal-actions form button.mini-btn.danger-btn.wopr-action-delete{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-red-bg) !important;
+  background-image:none !important;
+  color:var(--w8-red-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+}
+
+body.theme-8bit .contacts-table .contact-normal-actions > button.mini-btn.wopr-action-edit[data-edit-client],
+body.theme-8bit .ledger-normal-actions > button.mini-btn.ledger-edit-btn.wopr-action-edit,
+body.theme-8bit .invoice-list-actions > a.mini-btn.invoice-edit-direct.wopr-action-edit,
+body.theme-8bit .quote-list-actions > a.mini-btn.wopr-action-edit{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-amber-bg) !important;
+  background-image:none !important;
+  color:var(--w8-amber-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+}
+
+body.theme-8bit .contacts-table .contact-edit-actions > button.mini-btn.primary.wopr-action-save,
+body.theme-8bit .ledger-edit-actions > button.mini-btn.primary.wopr-action-save,
+body.theme-8bit .invoice-list-actions > a.mini-btn.invoice-email-btn.wopr-action-send,
+body.theme-8bit .quote-list-actions > a.mini-btn.invoice-email-btn.wopr-action-send,
+body.theme-8bit .contacts-table .contact-normal-actions > a.mini-btn.wopr-action-send{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-green-bg) !important;
+  background-image:none !important;
+  color:var(--w8-green-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+}
+
+body.theme-8bit .ledger-edit-actions > button.mini-btn.wopr-action-neutral,
+body.theme-8bit .contacts-table .contact-edit-actions > button.mini-btn.wopr-action-neutral{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-neutral-bg) !important;
+  background-image:none !important;
+  color:var(--w8-neutral-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+}
+
+/* Achats / Ventes : forcer les 3 boutons récalcitrants. */
+body.theme-8bit .ledger-normal-actions > button.mini-btn.ledger-edit-btn.wopr-action-edit{background:var(--w8-amber-bg) !important;color:var(--w8-amber-fg) !important;}
+body.theme-8bit .ledger-normal-actions form button.mini-btn.danger-btn.wopr-action-delete{background:var(--w8-red-bg) !important;color:var(--w8-red-fg) !important;}
+body.theme-8bit .ledger-normal-actions :is(a,button).mini-btn.ledger-folder-btn.wopr-action-folder[data-wopr-folder-url]{background:var(--w8-purple-bg) !important;color:var(--w8-purple-fg) !important;}
+
+/* Clients : écrase les nth-child du template. */
+body.theme-8bit .contacts-table .contact-normal-actions > a.mini-btn.wopr-action-open{background:var(--w8-blue-bg) !important;color:var(--w8-blue-fg) !important;}
+body.theme-8bit .contacts-table .contact-normal-actions > a.mini-btn.wopr-action-send{background:var(--w8-green-bg) !important;color:var(--w8-green-fg) !important;}
+body.theme-8bit .contacts-table .contact-normal-actions > button.mini-btn.wopr-action-edit[data-edit-client]{background:var(--w8-amber-bg) !important;color:var(--w8-amber-fg) !important;}
+body.theme-8bit .contacts-table .contact-normal-actions > a.mini-btn.wopr-action-special{background:var(--w8-purple-bg) !important;color:var(--w8-purple-fg) !important;}
+body.theme-8bit .contacts-table .contact-normal-actions > a.mini-btn.danger-btn.wopr-action-delete{background:var(--w8-red-bg) !important;color:var(--w8-red-fg) !important;}
+
+/* Tableaux un peu plus arcade, sans exagérer. */
+body.theme-8bit :is(.invoice-list-table,.contacts-table,.ledger-table,.ods-followup-table){
+  border:2px solid #2d5876 !important;
+  box-shadow:3px 3px 0 rgba(7,19,29,.18) !important;
+}
+body.theme-8bit :is(.invoice-list-table,.contacts-table,.ledger-table,.ods-followup-table) thead th{
+  background:#edf6fd !important;
+  color:#173047 !important;
+  border-bottom:2px solid #2d5876 !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  text-transform:uppercase !important;
+}
+body.theme-8bit :is(.invoice-list-table,.contacts-table,.ledger-table,.ods-followup-table) tbody tr:nth-child(even) td{
+  background:#fbfdff !important;
+}
+body.theme-8bit .followup-month-row td,
+body.theme-8bit .ledger-month-title{
+  background:#e5f3ff !important;
+  color:#173047 !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+}
+
+/* Pastilles harmonisées. */
+body.theme-8bit :is(.payment-mode-badge,.repair-state-badge,.return-wait-badge,.quote-status,.legacy-mini,.simple-invoice-mini){
+  border-radius:0 !important;
+  border:1px solid var(--w8-dark) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.65), 1px 1px 0 rgba(7,19,29,.25) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:9px !important;
+  font-weight:800 !important;
+  line-height:1 !important;
+  padding:2px 5px !important;
+}
+body.theme-8bit .quote-status-accepte,
+body.theme-8bit .repair-state-badge-finished{background:#dff5e5 !important;color:#17512e !important;}
+body.theme-8bit .quote-status-historique,
+body.theme-8bit .repair-state-badge-returned{background:#edf2f6 !important;color:#53606b !important;}
+body.theme-8bit .return-wait-warning{background:#ffedbd !important;color:#6b4500 !important;}
+body.theme-8bit .return-wait-critical{background:#ffdada !important;color:#7c2020 !important;}
+/* ===== WOPR 2.3.282 — derniers boutons récalcitrants ===== */
+
+/* Impression Facture/Suivi générée par wopr-print.js */
+body.theme-8bit .wopr-print-pdf-btn,
+body.theme-8bit button.wopr-print-pdf-btn,
+body.theme-8bit .invoice-list-actions .wopr-print-pdf-btn,
+body.theme-8bit .followup-actions .wopr-print-pdf-btn{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-blue-bg) !important;
+  background-image:none !important;
+  color:var(--w8-blue-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+  padding:4px 7px !important;
+  min-height:25px !important;
+}
+
+/* Achats / Ventes : cibler directement les classes, quel que soit l'élément ou l'imbrication. */
+body.theme-8bit .ledger-edit-btn,
+body.theme-8bit .ledger-normal-actions .ledger-edit-btn,
+body.theme-8bit button.ledger-edit-btn{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-amber-bg) !important;
+  background-image:none !important;
+  color:var(--w8-amber-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+}
+
+body.theme-8bit .ledger-normal-actions .danger-btn,
+body.theme-8bit .ledger-normal-actions button.danger-btn,
+body.theme-8bit .ledger-row-actions .danger-btn,
+body.theme-8bit button.danger-btn.wopr-action-delete{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-red-bg) !important;
+  background-image:none !important;
+  color:var(--w8-red-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+}
+
+/* Même effet de pression sur ces derniers boutons. */
+body.theme-8bit :is(.wopr-print-pdf-btn,.ledger-edit-btn,.ledger-normal-actions .danger-btn):hover{
+  transform:translate(1px,1px) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.60),
+    inset -1px -1px 0 rgba(0,0,0,.10),
+    1px 1px 0 var(--w8-dark) !important;
+}
+body.theme-8bit :is(.wopr-print-pdf-btn,.ledger-edit-btn,.ledger-normal-actions .danger-btn):active{
+  transform:translate(2px,2px) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.45) !important;
+}

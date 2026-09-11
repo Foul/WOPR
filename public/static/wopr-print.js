@@ -53,8 +53,8 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = select.classList.contains("mini-btn")
-      ? "mini-btn wopr-print-pdf-btn"
-      : "button wopr-print-pdf-btn";
+      ? "mini-btn wopr-print-pdf-btn wopr-action-open"
+      : "button wopr-print-pdf-btn wopr-action-open";
 
     button.textContent = `🖨 ${kind}`;
     button.title = `Ouvrir le PDF ${kind.toLowerCase()} prêt à imprimer`;
