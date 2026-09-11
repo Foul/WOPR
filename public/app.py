@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.233"
+APP_VERSION = "2.3.234"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4229,6 +4229,21 @@ def ledger_document_file(row):
                 ]
                 if len(invoice_hits) == 1:
                     return invoice_hits[0]
+
+                # V2.3.234 — plusieurs fichiers peuvent contenir le même numéro
+                # (ex. LEB-2026-09-158706.pdf et
+                # "Le Bon Coin_LEB-2026-09-158706.pdf").
+                # Dans ce cas, on privilégie le fichier qui contient aussi le
+                # nom du fournisseur si cela donne un résultat unique.
+                if len(invoice_hits) > 1:
+                    party_key_for_invoice = _match_key(row["party"] or "")
+                    if party_key_for_invoice and len(party_key_for_invoice) >= 3:
+                        party_invoice_hits = [
+                            p for p in invoice_hits
+                            if party_key_for_invoice in _match_key(p.stem)
+                        ]
+                        if len(party_invoice_hits) == 1:
+                            return party_invoice_hits[0]
 
             # 3) Fournisseur + date si c'est sans ambiguïté.
             party_key = _match_key(row["party"] or "")
