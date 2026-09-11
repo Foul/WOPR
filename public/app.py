@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.236"
+APP_VERSION = "2.3.237"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -3354,53 +3354,92 @@ def normalize_client_filename_name(value):
     return " ".join(parts).strip()
 
 
+def canonical_client_invoice_no(value):
+    """Normalise les anciens numéros de facture client.
+
+    Les imports ODS ont parfois perdu le zéro initial d'un numéro JJMMYYYYHHMM :
+    040820261400 est ainsi devenu 40820261400 dans ledger_entries.
+    """
+    raw = str(value or "").strip()
+    if raw.isdigit() and len(raw) == 11:
+        return raw.zfill(12)
+    return raw
+
+
 def find_client_invoice_pdf(invoice_no, client_name):
     """
     Retrouve le PDF client réellement classé dans Factures.
-    Priorité absolue au nom canonique sans civilité, ex.
-    Jacquement_180820261600.pdf plutôt que Mme_Jacquement_180820261600.pdf.
-    Lecture seule : aucun fichier n'est renommé, déplacé ou créé.
+
+    V2.3.237 :
+    - corrige les numéros historiques ayant perdu leur zéro initial ;
+    - exige que le numéro soit en FIN de nom de fichier, donc
+      40820261400 ne peut plus matcher Pinson_140820261400.pdf ;
+    - si plusieurs clients partagent le même numéro, privilégie le nom/surnom
+      présent dans le fichier (ex. Lacombe_240820261100.pdf).
     """
     if not FACTURES_ROOT.exists():
         return None
-    needle = str(invoice_no or "").strip()
+
+    needle = canonical_client_invoice_no(invoice_no)
     if not needle:
         return None
 
-    candidates = [
-        p for p in FACTURES_ROOT.rglob("*.pdf")
-        if needle.casefold() in p.name.casefold()
-        and "fournisseurs" not in {part.casefold() for part in p.parts}
-    ]
+    invoice_key = _match_key(needle)
+    if not invoice_key:
+        return None
+
+    candidates = []
+    for p in FACTURES_ROOT.rglob("*.pdf"):
+        if "fournisseurs" in {part.casefold() for part in p.parts}:
+            continue
+        stem_key = _match_key(p.stem)
+        # Le numéro de facture doit être le suffixe du nom, pas une simple
+        # sous-chaîne. Évite 40820261400 -> 140820261400.
+        if stem_key.endswith(invoice_key):
+            candidates.append(p)
+
     if not candidates:
         return None
 
     client_key = normalize_client_filename_name(client_name)
-    client_slug = "_".join(client_key.split())
-    invoice_key = normalize_history_name(needle).replace(" ", "")
+    client_tokens = [
+        t for t in normalize_history_name(client_name).split()
+        if len(t) >= 2
+    ]
 
     def score(path):
         stem_key = normalize_history_name(path.stem)
-        stem_compact = stem_key.replace(" ", "")
+        stem_compact = _match_key(path.stem)
         points = 0
-        # Numéro exact présent dans le nom.
-        if invoice_key and invoice_key in stem_compact:
-            points += 40
-        if client_key:
-            if stem_key == f"{client_key} {normalize_history_name(needle)}":
-                points += 120
-            elif stem_key.startswith(client_key + " "):
-                points += 80
-            elif client_key in stem_key:
-                points += 50
-        # Une civilité dans le nom de fichier est moins prioritaire que le nom canonique.
+
+        if stem_compact.endswith(invoice_key):
+            points += 100
+
+        # Nom complet quand il est présent.
+        if client_key and client_key in stem_key:
+            points += 120
+
+        # Les anciens PDF sont souvent nommés uniquement avec le nom de famille.
+        # On donne donc un fort bonus à chaque token du client présent avant le n°.
+        name_part = stem_key
+        needle_norm = normalize_history_name(needle)
+        if needle_norm and name_part.endswith(needle_norm):
+            name_part = name_part[:-len(needle_norm)].strip()
+
+        matched_tokens = sum(1 for t in client_tokens if t in name_part.split())
+        points += matched_tokens * 80
+
+        # Bonus supplémentaire si le premier/dernier token du nom client apparaît.
+        if client_tokens:
+            if client_tokens[0] in name_part.split():
+                points += 30
+            if client_tokens[-1] in name_part.split():
+                points += 40
+
         first = stem_key.split()[0] if stem_key.split() else ""
         if first in {"m", "mr", "mme", "mlle", "monsieur", "madame", "mademoiselle"}:
             points -= 35
-        # Petit bonus si le basename correspond exactement au format historique attendu.
-        expected = f"{client_slug}_{needle}.pdf".casefold() if client_slug else ""
-        if expected and path.name.casefold() == expected:
-            points += 200
+
         return (points, -len(path.name), str(path).casefold())
 
     return max(candidates, key=score)
@@ -12701,7 +12740,8 @@ def achats_ventes_sale_invoice_view(entry_id):
     if not invoice_no:
         return "Aucun numéro de facture", 404
 
-    pdf = find_client_invoice_pdf(invoice_no, row["party"] or "")
+    canonical_invoice_no = canonical_client_invoice_no(invoice_no)
+    pdf = find_client_invoice_pdf(canonical_invoice_no, row["party"] or "")
     if pdf and pdf.exists():
         return send_file(pdf, mimetype="application/pdf", as_attachment=False, download_name=pdf.name)
 
@@ -12710,9 +12750,9 @@ def achats_ventes_sale_invoice_view(entry_id):
     members = con.execute("""
         SELECT r.id, c.name AS client_name, r.legacy_imported
         FROM repairs r JOIN clients c ON c.id=r.client_id
-        WHERE trim(COALESCE(r.invoice_no,''))=?
+        WHERE trim(COALESCE(r.invoice_no,'')) IN (?, ?)
         ORDER BY r.id DESC
-    """, (invoice_no,)).fetchall()
+    """, (invoice_no, canonical_invoice_no)).fetchall()
     con.close()
     party_key = normalize_client_filename_name(row["party"] or "")
     best = None
