@@ -4450,3 +4450,62 @@ body.theme-terminal .page .contacts-table .contact-normal-actions > .mini-btn:nt
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5){
   background:#fff0f0 !important;background-image:none !important;border-color:#e7aaaa !important;color:#8a2f2f !important;text-shadow:none !important;
 }
+
+/* ===== WOPR 2.3.265 — Achats / Ventes : palette d'actions directe =====
+   Ciblage des vraies classes du template, indépendamment du thème. */
+
+/* Modifier = ambre */
+body .page .ledger-normal-actions > .ledger-edit-btn,
+body.theme-dark .page .ledger-normal-actions > .ledger-edit-btn,
+body.theme-terminal .page .ledger-normal-actions > .ledger-edit-btn,
+body.theme-8bit .page .ledger-normal-actions > .ledger-edit-btn{
+  background:#fff7e8 !important;
+  background-color:#fff7e8 !important;
+  background-image:none !important;
+  border-color:#e6c98b !important;
+  color:#745116 !important;
+  text-shadow:none !important;
+  box-shadow:none !important;
+}
+
+/* Supprimer = rouge */
+body .page .ledger-normal-actions form > .danger-btn,
+body.theme-dark .page .ledger-normal-actions form > .danger-btn,
+body.theme-terminal .page .ledger-normal-actions form > .danger-btn,
+body.theme-8bit .page .ledger-normal-actions form > .danger-btn{
+  background:#fff0f0 !important;
+  background-color:#fff0f0 !important;
+  background-image:none !important;
+  border-color:#e7aaaa !important;
+  color:#8a2f2f !important;
+  text-shadow:none !important;
+  box-shadow:none !important;
+}
+
+/* Dossier = violet */
+body .page .ledger-normal-actions > .ledger-folder-btn,
+body.theme-dark .page .ledger-normal-actions > .ledger-folder-btn,
+body.theme-terminal .page .ledger-normal-actions > .ledger-folder-btn,
+body.theme-8bit .page .ledger-normal-actions > .ledger-folder-btn{
+  background:#f5efff !important;
+  background-color:#f5efff !important;
+  background-image:none !important;
+  border-color:#c9b2ea !important;
+  color:#56358a !important;
+  text-shadow:none !important;
+  box-shadow:none !important;
+}
+
+/* Enregistrer = vert */
+body .page .ledger-edit-actions > button[type="submit"],
+body.theme-dark .page .ledger-edit-actions > button[type="submit"],
+body.theme-terminal .page .ledger-edit-actions > button[type="submit"],
+body.theme-8bit .page .ledger-edit-actions > button[type="submit"]{
+  background:#eefaf3 !important;
+  background-color:#eefaf3 !important;
+  background-image:none !important;
+  border-color:#9fd6b5 !important;
+  color:#23613b !important;
+  text-shadow:none !important;
+  box-shadow:none !important;
+}
