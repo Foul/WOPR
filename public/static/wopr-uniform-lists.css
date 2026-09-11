@@ -84,3 +84,56 @@
   justify-content:center !important;
   white-space:nowrap !important;
 }
+
+/* 2.3.254 — petit dépassement de la barre légende/résumé du Suivi */
+.wopr-page-suivi .sheet-note,
+.wopr-page-suivi .followup-legend,
+.wopr-page-suivi .followup-summary,
+.wopr-page-suivi .legend,
+.wopr-page-suivi .summary-bar {
+  box-sizing:border-box !important;
+  width:100% !important;
+  max-width:100% !important;
+}
+
+/* Achats / Ventes : même philosophie visuelle légère que Suivi. */
+.wopr-page-achats-ventes table.wopr-light-table{
+  border-collapse:separate !important;
+  border-spacing:0 !important;
+}
+
+.wopr-page-achats-ventes table.wopr-light-table th,
+.wopr-page-achats-ventes table.wopr-light-table td{
+  border-left:0 !important;
+  border-right:0 !important;
+  border-top:0 !important;
+  border-bottom:1px solid #dfe5eb !important;
+  background:transparent !important;
+}
+
+.wopr-page-achats-ventes table.wopr-light-table thead th{
+  border-bottom:2px solid #c7d2df !important;
+}
+
+.wopr-page-achats-ventes table.wopr-light-table tbody tr:hover td{
+  background:rgba(0,0,0,.018) !important;
+}
+
+.wopr-page-achats-ventes .ledger-month,
+.wopr-page-achats-ventes .ledger-section,
+.wopr-page-achats-ventes section{
+  box-shadow:none !important;
+}
+
+.wopr-page-achats-ventes .ledger-row-actions{
+  text-align:center !important;
+  vertical-align:middle !important;
+}
+
+.wopr-page-achats-ventes .wopr-action-grid{
+  justify-content:center !important;
+}
+
+.wopr-page-achats-ventes .ledger-normal-actions{
+  margin:0 !important;
+}
