@@ -62,10 +62,20 @@
 
     button.addEventListener("click", () => {
       const target = inlineUrl(frenchPdfUrl(select));
-      const win = window.open(target, "_blank", "noopener");
-      if (!win) {
-        alert("Le navigateur a bloqué l'ouverture du PDF. Autorise les fenêtres pop-up pour WOPR.");
-      }
+
+      /*
+       * V2.3.227 — certains navigateurs renvoient null avec noopener
+       * même quand l'ouverture est autorisée. On utilise donc un vrai lien
+       * target=_blank déclenché directement par le clic utilisateur.
+       */
+      const link = document.createElement("a");
+      link.href = target;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
     });
 
     select.insertAdjacentElement("afterend", button);
