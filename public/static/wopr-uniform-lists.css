@@ -137,3 +137,65 @@
 .wopr-page-achats-ventes .ledger-normal-actions{
   margin:0 !important;
 }
+
+
+/* 2.3.255 — Contacts : actions plus compactes pour réduire la hauteur des lignes */
+.wopr-page-contacts table.wopr-light-table{
+  border-collapse:separate !important;
+  border-spacing:0 !important;
+}
+
+.wopr-page-contacts table.wopr-light-table th,
+.wopr-page-contacts table.wopr-light-table td{
+  border-left:0 !important;
+  border-right:0 !important;
+  border-top:0 !important;
+  border-bottom:1px solid #dfe5eb !important;
+  background:transparent !important;
+  vertical-align:top;
+}
+
+.wopr-page-contacts table.wopr-light-table thead th{
+  border-bottom:2px solid #c7d2df !important;
+}
+
+.wopr-page-contacts table.wopr-light-table tbody tr:hover td{
+  background:rgba(0,0,0,.018) !important;
+}
+
+.wopr-page-contacts .contacts-actions-cell,
+.wopr-page-contacts td:last-child{
+  width:255px;
+  min-width:255px;
+  text-align:center !important;
+  vertical-align:middle !important;
+  white-space:normal !important;
+}
+
+.wopr-page-contacts .wopr-action-grid{
+  display:grid !important;
+  grid-template-columns:repeat(2, minmax(0, 1fr)) !important;
+  gap:4px !important;
+  align-items:center !important;
+  justify-items:stretch !important;
+  width:100% !important;
+  max-width:240px;
+  margin:0 auto !important;
+}
+
+.wopr-page-contacts .wopr-action-grid > *{
+  min-width:0 !important;
+  width:100% !important;
+  box-sizing:border-box !important;
+}
+
+.wopr-page-contacts .wopr-action-grid a,
+.wopr-page-contacts .wopr-action-grid button,
+.wopr-page-contacts .wopr-action-grid input[type="button"],
+.wopr-page-contacts .wopr-action-grid input[type="submit"]{
+  padding:4px 6px !important;
+  min-height:26px !important;
+  line-height:1.1 !important;
+  font-size:12px !important;
+  border-radius:7px !important;
+}
