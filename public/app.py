@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.227"
+APP_VERSION = "2.3.228"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -861,6 +861,7 @@ def force_utf8_html(response):
             css_tag = f'<link rel="stylesheet" href="/static/wopr-responsive.css?v={APP_VERSION}">'
             js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
             print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
+            google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}" defer></script>'
 
             if "wopr-responsive.css" not in html and "</head>" in html:
                 html = html.replace("</head>", css_tag + "\n</head>", 1)
@@ -870,6 +871,9 @@ def force_utf8_html(response):
 
             if "wopr-print.js" not in html and "</body>" in html:
                 html = html.replace("</body>", print_js_tag + "\n</body>", 1)
+
+            if "wopr-google-sync.js" not in html and "</body>" in html:
+                html = html.replace("</body>", google_sync_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
@@ -13511,6 +13515,24 @@ def contacts_import_google_live():
     return redirect(url_for("contacts_page"))
 
 
+# V2.3.228 — état de la synchro Google en arrière-plan.
+_google_sync_progress = {
+    "running": False,
+    "total": 0,
+    "done": 0,
+    "ok": 0,
+    "errors": 0,
+    "finished_at": None,
+}
+_google_sync_progress_lock = threading.Lock()
+
+
+@app.route("/contacts/sync-google/status")
+def contacts_sync_google_status():
+    with _google_sync_progress_lock:
+        return jsonify(dict(_google_sync_progress))
+
+
 @app.route("/contacts/sync-google", methods=["POST"])
 def contacts_sync_google():
     con = db()
@@ -13527,17 +13549,47 @@ def contacts_sync_google():
         flash("Google : aucun contact en attente de synchronisation.")
         return redirect(url_for("contacts_page"))
 
+    with _google_sync_progress_lock:
+        _google_sync_progress.update({
+            "running": True,
+            "total": len(ids),
+            "done": 0,
+            "ok": 0,
+            "errors": 0,
+            "finished_at": None,
+        })
+
     def _bulk_worker(contact_ids):
+        ok_count = 0
+        error_count = 0
+
         for cid in contact_ids:
             try:
-                sync_client_to_google(cid)
+                ok, _msg = sync_client_to_google(cid)
+                if ok:
+                    ok_count += 1
+                else:
+                    error_count += 1
             except Exception as exc:
+                error_count += 1
                 try:
                     set_google_sync_state(cid, "Erreur", error=str(exc))
                 except Exception:
                     pass
-            # Limite volontairement la cadence pour respecter le quota People API.
+
+            with _google_sync_progress_lock:
+                _google_sync_progress["done"] = ok_count + error_count
+                _google_sync_progress["ok"] = ok_count
+                _google_sync_progress["errors"] = error_count
+
             time.sleep(1.0)
+
+        with _google_sync_progress_lock:
+            _google_sync_progress["running"] = False
+            _google_sync_progress["done"] = len(contact_ids)
+            _google_sync_progress["ok"] = ok_count
+            _google_sync_progress["errors"] = error_count
+            _google_sync_progress["finished_at"] = now().isoformat(timespec="seconds")
 
     threading.Thread(
         target=_bulk_worker,
@@ -13546,9 +13598,8 @@ def contacts_sync_google():
         daemon=True,
     ).start()
 
-    flash(f"Google : synchronisation de {len(ids)} contact(s) lancée en arrière-plan. "
-          "Tu peux continuer à utiliser WOPR pendant ce temps.")
-    return redirect(url_for("contacts_page"))
+    flash(f"Google : synchronisation de {len(ids)} contact(s) lancée en arrière-plan.")
+    return redirect(url_for("contacts_page", sync_watch=1))
 
 
 @app.route("/contacts/<int:client_id>/sync-google", methods=["POST"])
