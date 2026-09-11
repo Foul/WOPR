@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.230"
+APP_VERSION = "2.3.231"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4161,21 +4161,59 @@ def ledger_document_file(row):
     if candidate.is_file():
         return candidate
 
-    # V2.3.229 — migration d'arborescence :
+    # V2.3.231 — migration d'arborescence robuste :
     # ancien : Factures/YYYY/MM - Mois/Fournisseurs/fichier.pdf
     # nouveau : Fournisseurs/YYYY/MM - Mois/fichier.pdf
     #
-    # On ne déplace rien ici : si le fichier a déjà été déplacé manuellement,
-    # on le retrouve dans le bon mois et repair_dead_supplier_document_links()
-    # mettra ensuite à jour le chemin mémorisé en base.
+    # On cherche D'ABORD dans le mois calculé depuis entry_date, qui est désormais
+    # la source de vérité pour le classement des fournisseurs.
     try:
         d = datetime.strptime(str(row["entry_date"] or ""), "%Y-%m-%d")
         new_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
-        old_name = Path(rel).name
-        if old_name:
-            moved = new_folder / old_name
-            if moved.is_file():
-                return moved
+
+        if new_folder.is_dir():
+            # Les anciens chemins ont pu être enregistrés sous Windows ou Linux.
+            # Path(...).name sous Linux ne découpe pas les antislashs Windows,
+            # donc on normalise explicitement les séparateurs.
+            def _stored_basename(value):
+                return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
+
+            stored_names = []
+            for value in (rel, row["document_original_name"] or ""):
+                name = _stored_basename(value)
+                if name and name not in stored_names:
+                    stored_names.append(name)
+
+            # 1) Même nom de fichier après simple déplacement.
+            month_files = [p for p in new_folder.iterdir() if p.is_file()]
+            by_casefold = {p.name.casefold(): p for p in month_files}
+            for name in stored_names:
+                hit = by_casefold.get(name.casefold())
+                if hit and hit.is_file():
+                    return hit
+
+            # 2) Numéro de facture présent dans le nom : pour une ligne déjà liée,
+            # c'est le meilleur moyen de retrouver un fichier qui aurait aussi été renommé.
+            invoice_key = _match_key(row["invoice_no"] or "")
+            if invoice_key:
+                invoice_hits = [
+                    p for p in month_files
+                    if invoice_key in _match_key(p.stem)
+                ]
+                if len(invoice_hits) == 1:
+                    return invoice_hits[0]
+
+            # 3) Fournisseur + date si c'est sans ambiguïté.
+            party_key = _match_key(row["party"] or "")
+            date_key = _match_key(str(row["entry_date"] or "").replace("-", ""))
+            party_hits = []
+            if party_key and len(party_key) >= 3:
+                for p in month_files:
+                    name_key = _match_key(p.stem)
+                    if party_key in name_key and (not date_key or date_key in name_key):
+                        party_hits.append(p)
+                if len(party_hits) == 1:
+                    return party_hits[0]
     except Exception:
         pass
 
@@ -4204,14 +4242,14 @@ def ledger_document_file(row):
     except Exception:
         folder = None
     if folder and folder.is_dir():
-        original_name = Path(str(row["document_original_name"] or "")).name
+        original_name = str(row["document_original_name"] or "").replace("\\", "/").rstrip("/").split("/")[-1]
         if original_name:
             exact = folder / original_name
             if exact.is_file():
                 return exact
 
         # Puis le basename mémorisé dans l'ancien chemin, au cas où seul le dossier a changé.
-        old_name = Path(rel).name
+        old_name = str(rel or "").replace("\\", "/").rstrip("/").split("/")[-1]
         if old_name:
             exact_old = folder / old_name
             if exact_old.is_file():
