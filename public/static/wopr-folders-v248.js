@@ -37,16 +37,26 @@
     const b = document.createElement("button");
     b.type = "button";
     b.className = BTN_CLASS;
-    b.textContent = "📁";
+    b.textContent = "📁 Dossier";
     b.title = title;
     b.setAttribute("aria-label", title);
     b.dataset.folderUrl = url;
     Object.assign(b.style, {
-      display:"inline-flex", alignItems:"center", justifyContent:"center",
-      width:"21px", minWidth:"21px", height:"21px", minHeight:"21px",
-      padding:"0", marginLeft:"4px", border:"1px solid #aeb8c4",
-      borderRadius:"4px", background:"#fff", cursor:"pointer",
-      fontSize:"11px", lineHeight:"1", verticalAlign:"middle", boxSizing:"border-box"
+      display:"block",
+      width:"100%",
+      minWidth:"0",
+      height:"auto",
+      padding:"4px 7px",
+      margin:"4px 0 0 0",
+      border:"1px solid #c7d2df",
+      borderRadius:"6px",
+      background:"#fff",
+      cursor:"pointer",
+      fontSize:"11px",
+      lineHeight:"1.15",
+      verticalAlign:"middle",
+      boxSizing:"border-box",
+      whiteSpace:"nowrap"
     });
     b.addEventListener("click", ev => {
       ev.preventDefault();
@@ -75,7 +85,7 @@
   }
 
   function actionCell(row) {
-    return row.querySelector("td:last-child") || row.querySelector(".actions,.action,.row-actions") || row;
+    return row.querySelector(".ledger-row-actions,.actions,.action,.row-actions,td:last-child") || row;
   }
 
   function addAtEnd(row, url, title, key) {
@@ -116,20 +126,35 @@
   function scanLedger() {
     if (!/^\/achats-ventes(?:\/|$)/.test(location.pathname)) return;
 
-    document.querySelectorAll('a[href*="/achats-ventes/"][href*="/document/view"]').forEach(a => {
-      const m = a.getAttribute("href").match(/\/achats-ventes\/(\d+)\/document\/view/i);
-      if (!m || a.parentElement?.querySelector(`.${BTN_CLASS}[data-folder-key="ledger-${m[1]}"]`)) return;
-      const b = makeButton(`/achats-ventes/${m[1]}/document/folder`, "Ouvrir le dossier de ce justificatif");
-      b.dataset.folderKey = `ledger-${m[1]}`;
-      a.insertAdjacentElement("afterend", b);
-    });
+    document.querySelectorAll("tbody tr, table tr").forEach(row => {
+      // Achat fournisseur : justificatif lié.
+      const supplier = row.querySelector('a[href*="/achats-ventes/"][href*="/document/view"]');
+      if (supplier) {
+        const m = supplier.getAttribute("href").match(/\/achats-ventes\/(\d+)\/document\/view/i);
+        if (m) {
+          addAtEnd(
+            row,
+            `/achats-ventes/${m[1]}/document/folder`,
+            "Ouvrir le dossier de ce justificatif",
+            `ledger-${m[1]}`
+          );
+          return;
+        }
+      }
 
-    document.querySelectorAll('a[href*="/achats-ventes/vente/"][href*="/facture"]').forEach(a => {
-      const m = a.getAttribute("href").match(/\/achats-ventes\/vente\/(\d+)\/facture/i);
-      if (!m || a.parentElement?.querySelector(`.${BTN_CLASS}[data-folder-key="sale-${m[1]}"]`)) return;
-      const b = makeButton(`/achats-ventes/vente/${m[1]}/folder`, "Ouvrir le dossier de cette facture client");
-      b.dataset.folderKey = `sale-${m[1]}`;
-      a.insertAdjacentElement("afterend", b);
+      // Vente client : facture liée.
+      const sale = row.querySelector('a[href*="/achats-ventes/vente/"][href*="/facture"]');
+      if (sale) {
+        const m = sale.getAttribute("href").match(/\/achats-ventes\/vente\/(\d+)\/facture/i);
+        if (m) {
+          addAtEnd(
+            row,
+            `/achats-ventes/vente/${m[1]}/folder`,
+            "Ouvrir le dossier de cette facture client",
+            `sale-${m[1]}`
+          );
+        }
+      }
     });
   }
 
