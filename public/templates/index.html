@@ -225,17 +225,17 @@
 
           <td class="row-actions followup-actions">
             {% if r.get('_virtual_payment') %}
-              <a class="mini-btn" href="{{ url_for('repair_detail', rid=r['id']) }}">Voir dossier</a>
+              <a class="mini-btn wopr-action-open" href="{{ url_for('repair_detail', rid=r['id']) }}">Voir dossier</a>
             {% else %}
-              <a class="mini-btn" href="{{ url_for('repair_detail', rid=r['id']) }}">Ouvrir</a>
+              <a class="mini-btn wopr-action-open" href="{{ url_for('repair_detail', rid=r['id']) }}">Ouvrir</a>
               {% if r['client_phone'] %}
-                <a class="mini-btn client-message-mini" href="{{ url_for('client_message', rid=r['id']) }}" title="Préparer un message pour le client">💬</a>
+                <a class="mini-btn client-message-mini wopr-action-send" href="{{ url_for('client_message', rid=r['id']) }}" title="Préparer un message pour le client">💬</a>
               {% endif %}
-              <a class="mini-btn edit-inline-btn" href="{{ url_for('repair_edit', rid=r['id']) }}">Modifier</a>
+              <a class="mini-btn edit-inline-btn wopr-action-edit" href="{{ url_for('repair_edit', rid=r['id']) }}">Modifier</a>
 
 
               {% if not r['invoice_no'] and not r['legacy_imported'] %}
-                <a class="mini-btn invoice-row-btn"
+                <a class="mini-btn invoice-row-btn wopr-action-special"
                    href="{{ url_for('repair_close', rid=r['id'], return='suivi') }}">FACTURER</a>
               {% endif %}
             {% endif %}
@@ -349,7 +349,7 @@
               </div>
 
               <div class="inline-edit-actions">
-                <button type="submit" class="button primary">ENREGISTRER</button>
+                <button type="submit" class="button primary wopr-action-save">ENREGISTRER</button>
                 <a class="button" href="{{ url_for('index', year=selected_year) }}#suivi-{{ r['id'] }}">Annuler</a>
                 <a class="button" href="{{ url_for('repair_edit', rid=r['id']) }}">Modification complète</a>
               </div>

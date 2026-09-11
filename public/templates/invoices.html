@@ -76,23 +76,23 @@
         {% endif %}
       </td>
       <td class="invoice-list-actions">
-        <a class="mini-btn invoice-edit-direct"
+        <a class="mini-btn invoice-edit-direct wopr-action-edit"
            href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">
           Modifier facture
         </a>
-        <select class="pdf-lang-select mini-btn" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+        <select class="pdf-lang-select mini-btn wopr-action-open" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
           <option value="">🌐 Facture PDF</option>
           {% for code, info in pdf_languages.items() %}
             <option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>
           {% endfor %}
         </select>
         {% if r['client_email'] %}
-        <a class="mini-btn invoice-email-btn" href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">📧 Envoyer</a>
+        <a class="mini-btn invoice-email-btn wopr-action-send" href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">📧 Envoyer</a>
         {% else %}
         <span class="invoice-email-missing" title="Aucune adresse e-mail client">📧 —</span>
         {% endif %}
         <button type="button"
-                class="mini-btn"
+                class="mini-btn wopr-action-folder"
                 data-wopr-folder-url="{{ url_for('repair_invoice_folder', rid=r['id']) }}">
           📁 Dossier
         </button>

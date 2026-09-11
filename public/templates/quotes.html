@@ -50,21 +50,21 @@
       </td>
       <td class="invoice-list-actions quote-list-actions">
         {% if q['document_count'] > 0 %}
-          <a class="mini-btn quote-original-btn"
+          <a class="mini-btn quote-original-btn wopr-action-open"
              target="_blank"
              href="{{ url_for('quote_original_real', quote_id=q['id'], doc_index=0) }}">
             Original{% if q['document_count'] > 1 %} ({{ q['document_count'] }}){% endif %}
           </a>
         {% endif %}
-        <a class="mini-btn" href="{{ url_for('quote_edit', quote_id=q['id']) }}">Modifier</a>
-        <a class="mini-btn primary" href="{{ url_for('quote_pdf', quote_id=q['id']) }}">PDF</a>
+        <a class="mini-btn wopr-action-edit" href="{{ url_for('quote_edit', quote_id=q['id']) }}">Modifier</a>
+        <a class="mini-btn primary wopr-action-open" href="{{ url_for('quote_pdf', quote_id=q['id']) }}">PDF</a>
         {% if q['client_email'] %}
-          <a class="mini-btn invoice-email-btn" href="{{ url_for('quote_email', quote_id=q['id']) }}">📧 Envoyer</a>
+          <a class="mini-btn invoice-email-btn wopr-action-send" href="{{ url_for('quote_email', quote_id=q['id']) }}">📧 Envoyer</a>
         {% else %}
           <span class="mini-btn disabled-btn" title="Aucune adresse e-mail client">📧 —</span>
         {% endif %}
         <button type="button"
-                class="mini-btn"
+                class="mini-btn wopr-action-folder"
                 data-wopr-folder-url="{{ url_for('quote_folder_open', quote_id=q['id']) }}">
           📁 Dossier
         </button>
@@ -73,7 +73,7 @@
               onsubmit="return confirm('Supprimer définitivement le devis {{ q['quote_no'] }} ?');"
               style="display:inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-          <button class="mini-btn danger-btn" type="submit">Supprimer</button>
+          <button class="mini-btn danger-btn wopr-action-delete" type="submit">Supprimer</button>
         </form>
       </td>
     </tr>

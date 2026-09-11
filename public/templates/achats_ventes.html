@@ -247,21 +247,21 @@
               </form>
 
               <div class="ledger-normal-actions">
-                <button type="button" class="mini-btn ledger-edit-btn" data-ledger-edit="{{ e['id'] }}">Modifier</button>
+                <button type="button" class="mini-btn ledger-edit-btn wopr-action-edit" data-ledger-edit="{{ e['id'] }}">Modifier</button>
                 <form method="post" action="{{ url_for('achats_ventes_delete', entry_id=e['id']) }}" onsubmit="return confirm('Supprimer définitivement cette ligne ?');">
                   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="mini-btn danger-btn">Supprimer</button>
+                  <button type="submit" class="mini-btn danger-btn wopr-action-delete">Supprimer</button>
                 </form>
 
                 {% if e['operation']=='Achat' %}
                   <button type="button"
-                          class="mini-btn ledger-folder-btn"
+                          class="mini-btn ledger-folder-btn wopr-action-folder"
                           data-wopr-folder-url="{{ url_for('achats_ventes_document_folder', entry_id=e['id']) }}">
                     📁 Dossier
                   </button>
                 {% else %}
                   <button type="button"
-                          class="mini-btn ledger-folder-btn"
+                          class="mini-btn ledger-folder-btn wopr-action-folder"
                           data-wopr-folder-url="{{ url_for('achats_ventes_sale_invoice_folder', entry_id=e['id']) }}">
                     📁 Dossier
                   </button>
@@ -269,7 +269,7 @@
               </div>
 
               <div class="ledger-edit-actions">
-                <button type="submit" form="ledger-edit-{{ e['id'] }}" class="mini-btn primary">Enregistrer</button>
+                <button type="submit" form="ledger-edit-{{ e['id'] }}" class="mini-btn primary wopr-action-save">Enregistrer</button>
                 <button type="button" class="mini-btn" data-ledger-cancel="{{ e['id'] }}">Annuler</button>
               </div>
             </td>
