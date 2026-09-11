@@ -99,7 +99,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.283"
+APP_VERSION = "2.3.284"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -957,6 +957,7 @@ def force_utf8_html(response):
             print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
             google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}" defer></script>'
             folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}" defer></script>'
+            actions_8bit_runtime_js_tag = f'<script src="/static/wopr-8bit-actions-runtime.js?v={APP_VERSION}" defer></script>'
             uniform_css_tag = f'<link rel="stylesheet" href="/static/wopr-uniform-lists.css?v={APP_VERSION}">'
             action_colors_css_tag = f'<link rel="stylesheet" href="/static/wopr-action-colors.css?v={APP_VERSION}">'
             release_8bit_css_tag = f'<link rel="stylesheet" href="/static/wopr-8bit-release.css?v={APP_VERSION}">'
@@ -985,6 +986,8 @@ def force_utf8_html(response):
 
             if "wopr-folders-v248.js" not in html and "</body>" in html:
                 html = html.replace("</body>", folders_v248_js_tag + "\n</body>", 1)
+            if "wopr-8bit-actions-runtime.js" not in html and "</body>" in html:
+                html = html.replace("</body>", actions_8bit_runtime_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
