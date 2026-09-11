@@ -36,7 +36,7 @@
   function makeButton(url, title) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = BTN_CLASS + " mini-btn";
+    b.className = BTN_CLASS + " mini-btn wopr-action-folder";
     b.textContent = "📁 Dossier";
     b.title = title;
     b.setAttribute("aria-label", title);
@@ -153,7 +153,6 @@
     document.body.classList.toggle("wopr-page-factures", location.pathname === "/factures");
     document.body.classList.toggle("wopr-page-devis", location.pathname === "/devis");
     document.body.classList.toggle("wopr-page-suivi", location.pathname === "/suivi");
-    document.body.classList.toggle("wopr-page-achats-ventes", /^\/achats-ventes(?:\/|$)/.test(location.pathname));
   }
 
   function wrapActionCell(cell, columns) {
@@ -197,18 +196,6 @@
         if (table.querySelector("th") && table.querySelectorAll("tbody tr").length) {
           table.classList.add("wopr-light-table");
         }
-      });
-    }
-
-    if (/^\/achats-ventes(?:\/|$)/.test(location.pathname)) {
-      document.querySelectorAll(".ledger-table, .ledger-month table, table").forEach(table => {
-        if (table.querySelector("th") && table.querySelectorAll("tbody tr").length) {
-          table.classList.add("wopr-light-table");
-        }
-      });
-
-      document.querySelectorAll("td.ledger-row-actions, .ledger-row-actions").forEach(cell => {
-        wrapActionCell(cell, 2);
       });
     }
   }

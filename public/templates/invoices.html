@@ -80,7 +80,7 @@
            href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">
           Modifier facture
         </a>
-        <select class="pdf-lang-select mini-btn wopr-action-open" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+        <select class="pdf-lang-select mini-btn wopr-action-open wopr-action-invoice-pdf" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
           <option value="">🌐 Facture PDF</option>
           {% for code, info in pdf_languages.items() %}
             <option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>

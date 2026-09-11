@@ -1,0 +1,358 @@
+/* WOPR 2.3.280 — 8-BIT Release Candidate
+   Palette métier + boutons pixel + tableaux/badges harmonisés.
+   Ce fichier est chargé après wopr-action-colors.css. */
+
+body.theme-8bit{
+  --px-dark:#07131d;
+  --px-mid:#173047;
+  --px-line:#2d5876;
+
+  --px-blue-bg:#dcecff;
+  --px-blue-fg:#103d66;
+
+  --px-green-bg:#ddf5e6;
+  --px-green-fg:#14502e;
+
+  --px-amber-bg:#ffedbd;
+  --px-amber-fg:#6b4500;
+
+  --px-purple-bg:#eadcff;
+  --px-purple-fg:#4c2477;
+
+  --px-red-bg:#ffdada;
+  --px-red-fg:#7c2020;
+
+  --px-neutral-bg:#f4f7f9;
+  --px-neutral-fg:#263746;
+}
+
+/* ==========================================================
+   BOUTONS D'ACTIONS : même logique sur toutes les pages
+   ========================================================== */
+
+body.theme-8bit .page :is(
+  .wopr-action-open,
+  .wopr-action-send,
+  .wopr-action-save,
+  .wopr-action-edit,
+  .wopr-action-folder,
+  .wopr-action-special,
+  .wopr-action-delete,
+  .wopr-action-neutral,
+  .wopr-folder-v248,
+  .invoice-list-actions .pdf-lang-select,
+  .invoice-list-actions [data-wopr-folder-url],
+  .quote-list-actions [data-wopr-folder-url],
+  .quote-list-actions .danger-btn,
+  .contact-normal-actions .mini-btn,
+  .contact-edit-actions .mini-btn,
+  .ledger-document-cell .mini-btn,
+  .ledger-normal-actions .mini-btn,
+  .ledger-edit-actions .mini-btn
+){
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--px-dark) !important;
+  border-radius:0 !important;
+  background-image:none !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--px-dark) !important;
+  color:var(--px-neutral-fg) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  letter-spacing:0 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+  min-height:25px !important;
+  padding:4px 7px !important;
+  transform:none !important;
+  transition:none !important;
+  filter:none !important;
+  clip-path:none !important;
+}
+
+body.theme-8bit .page :is(
+  .wopr-action-open,
+  .invoice-list-actions .pdf-lang-select
+){
+  background:var(--px-blue-bg) !important;
+  color:var(--px-blue-fg) !important;
+}
+
+body.theme-8bit .page :is(
+  .wopr-action-send,
+  .wopr-action-save
+){
+  background:var(--px-green-bg) !important;
+  color:var(--px-green-fg) !important;
+}
+
+body.theme-8bit .page .wopr-action-edit{
+  background:var(--px-amber-bg) !important;
+  color:var(--px-amber-fg) !important;
+}
+
+body.theme-8bit .page :is(
+  .wopr-action-folder,
+  .wopr-action-special,
+  .wopr-folder-v248,
+  [data-wopr-folder-url]
+){
+  background:var(--px-purple-bg) !important;
+  color:var(--px-purple-fg) !important;
+}
+
+body.theme-8bit .page :is(
+  .wopr-action-delete,
+  .quote-list-actions .danger-btn
+){
+  background:var(--px-red-bg) !important;
+  color:var(--px-red-fg) !important;
+}
+
+body.theme-8bit .page .wopr-action-neutral{
+  background:var(--px-neutral-bg) !important;
+  color:var(--px-neutral-fg) !important;
+}
+
+/* Ciblage de secours pour les écrans historiques. */
+body.theme-8bit .page .contact-normal-actions [data-edit-client]{
+  background:var(--px-amber-bg) !important;
+  color:var(--px-amber-fg) !important;
+}
+body.theme-8bit .page .invoice-list-actions [data-wopr-folder-url],
+body.theme-8bit .page .quote-list-actions [data-wopr-folder-url]{
+  background:var(--px-purple-bg) !important;
+  color:var(--px-purple-fg) !important;
+}
+body.theme-8bit .page .quote-list-actions form .danger-btn{
+  background:var(--px-red-bg) !important;
+  color:var(--px-red-fg) !important;
+}
+
+/* Achats/Ventes : les vraies classes de la page. */
+body.theme-8bit .page .ledger-document-cell .ledger-doc-link{
+  background:var(--px-blue-bg) !important;
+  color:var(--px-blue-fg) !important;
+}
+body.theme-8bit .page .ledger-document-cell .ledger-attach-btn{
+  background:var(--px-purple-bg) !important;
+  color:var(--px-purple-fg) !important;
+}
+body.theme-8bit .page .ledger-normal-actions .ledger-edit-btn{
+  background:var(--px-amber-bg) !important;
+  color:var(--px-amber-fg) !important;
+}
+body.theme-8bit .page .ledger-normal-actions .danger-btn{
+  background:var(--px-red-bg) !important;
+  color:var(--px-red-fg) !important;
+}
+body.theme-8bit .page .ledger-normal-actions .ledger-folder-btn{
+  background:var(--px-purple-bg) !important;
+  color:var(--px-purple-fg) !important;
+}
+body.theme-8bit .page .ledger-edit-actions button[type="submit"]{
+  background:var(--px-green-bg) !important;
+  color:var(--px-green-fg) !important;
+}
+
+/* Clients : classes sémantiques + fallback selon texte/position ancienne. */
+body.theme-8bit .page .contact-normal-actions .wopr-action-open{background:var(--px-blue-bg) !important;color:var(--px-blue-fg) !important;}
+body.theme-8bit .page .contact-normal-actions .wopr-action-send{background:var(--px-green-bg) !important;color:var(--px-green-fg) !important;}
+body.theme-8bit .page .contact-normal-actions .wopr-action-edit{background:var(--px-amber-bg) !important;color:var(--px-amber-fg) !important;}
+body.theme-8bit .page .contact-normal-actions .wopr-action-special{background:var(--px-purple-bg) !important;color:var(--px-purple-fg) !important;}
+body.theme-8bit .page .contact-normal-actions .wopr-action-delete{background:var(--px-red-bg) !important;color:var(--px-red-fg) !important;}
+
+/* Appui façon bouton de borne d'arcade. */
+body.theme-8bit .page :is(
+  .wopr-action-open,
+  .wopr-action-send,
+  .wopr-action-save,
+  .wopr-action-edit,
+  .wopr-action-folder,
+  .wopr-action-special,
+  .wopr-action-delete,
+  .wopr-action-neutral,
+  .wopr-folder-v248,
+  .invoice-list-actions .pdf-lang-select,
+  .invoice-list-actions [data-wopr-folder-url],
+  .quote-list-actions [data-wopr-folder-url],
+  .quote-list-actions .danger-btn,
+  .contact-normal-actions .mini-btn,
+  .contact-edit-actions .mini-btn,
+  .ledger-document-cell .mini-btn,
+  .ledger-normal-actions .mini-btn,
+  .ledger-edit-actions .mini-btn
+):hover{
+  transform:translate(1px,1px) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.60),
+    inset -1px -1px 0 rgba(0,0,0,.10),
+    1px 1px 0 var(--px-dark) !important;
+  filter:brightness(1.03) !important;
+}
+
+body.theme-8bit .page :is(
+  .wopr-action-open,
+  .wopr-action-send,
+  .wopr-action-save,
+  .wopr-action-edit,
+  .wopr-action-folder,
+  .wopr-action-special,
+  .wopr-action-delete,
+  .wopr-action-neutral,
+  .wopr-folder-v248,
+  .invoice-list-actions .pdf-lang-select,
+  .invoice-list-actions [data-wopr-folder-url],
+  .quote-list-actions [data-wopr-folder-url],
+  .quote-list-actions .danger-btn,
+  .contact-normal-actions .mini-btn,
+  .contact-edit-actions .mini-btn,
+  .ledger-document-cell .mini-btn,
+  .ledger-normal-actions .mini-btn,
+  .ledger-edit-actions .mini-btn
+):active{
+  transform:translate(2px,2px) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.45) !important;
+}
+
+/* ==========================================================
+   TABLEAUX : un soupçon d'arcade, sans rendre les données illisibles
+   ========================================================== */
+
+body.theme-8bit .page :is(
+  .ods-followup-table,
+  .invoice-list-table,
+  .contacts-table,
+  .ledger-table
+){
+  border-collapse:separate !important;
+  border-spacing:0 !important;
+  border:2px solid var(--px-line) !important;
+  box-shadow:3px 3px 0 rgba(7,19,29,.18) !important;
+  background:#fff !important;
+}
+
+body.theme-8bit .page :is(
+  .ods-followup-table,
+  .invoice-list-table,
+  .contacts-table,
+  .ledger-table
+) thead th{
+  background:#edf6fd !important;
+  color:#132c40 !important;
+  border-bottom:2px solid var(--px-line) !important;
+  border-right:1px solid #c5d8e5 !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:11px !important;
+  font-weight:800 !important;
+  text-transform:uppercase !important;
+  letter-spacing:0 !important;
+}
+
+body.theme-8bit .page :is(
+  .ods-followup-table,
+  .invoice-list-table,
+  .contacts-table,
+  .ledger-table
+) tbody td{
+  border-bottom:1px solid #d6e1e8 !important;
+}
+
+body.theme-8bit .page :is(
+  .invoice-list-table,
+  .contacts-table,
+  .ledger-table
+) tbody tr:nth-child(even) td{
+  background:#fbfdff !important;
+}
+
+/* Mois du Suivi / Achats-Ventes : bandeau pixel discret. */
+body.theme-8bit .page .followup-month-row td,
+body.theme-8bit .page .ledger-month-title{
+  background:#e5f3ff !important;
+  border-color:var(--px-line) !important;
+  color:#173047 !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+}
+
+/* ==========================================================
+   BADGES / PASTILLES : même langage visuel
+   ========================================================== */
+
+body.theme-8bit .page :is(
+  .payment-mode-badge,
+  .repair-state-badge,
+  .return-wait-badge,
+  .quote-status,
+  .legacy-mini,
+  .simple-invoice-mini
+){
+  border-radius:0 !important;
+  border:1px solid var(--px-dark) !important;
+  box-shadow:
+    inset 1px 1px 0 rgba(255,255,255,.65),
+    1px 1px 0 rgba(7,19,29,.25) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:9px !important;
+  font-weight:800 !important;
+  line-height:1 !important;
+  padding:2px 5px !important;
+  letter-spacing:0 !important;
+}
+
+body.theme-8bit .page .quote-status-accepte,
+body.theme-8bit .page .repair-state-badge-finished{
+  background:#dff5e5 !important;
+  color:#17512e !important;
+}
+
+body.theme-8bit .page .quote-status-historique,
+body.theme-8bit .page .repair-state-badge-returned{
+  background:#edf2f6 !important;
+  color:#53606b !important;
+}
+
+body.theme-8bit .page .return-wait-warning{
+  background:#ffedbd !important;
+  color:#6b4500 !important;
+}
+
+body.theme-8bit .page .return-wait-critical{
+  background:#ffdada !important;
+  color:#7c2020 !important;
+}
+
+/* Synchronisation Google : petite pastille carrée, texte lisible. */
+body.theme-8bit .page .contact-cell-google :is(.sync-ok,.sync-wait,.sync-error){
+  display:inline-block !important;
+  border:1px solid var(--px-dark) !important;
+  border-radius:0 !important;
+  padding:2px 4px !important;
+  box-shadow:1px 1px 0 rgba(7,19,29,.22) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:9px !important;
+  font-weight:800 !important;
+}
+body.theme-8bit .page .contact-cell-google .sync-ok{background:#dff5e5 !important;color:#17512e !important;}
+body.theme-8bit .page .contact-cell-google .sync-wait{background:#fff0c8 !important;color:#6b4b00 !important;}
+body.theme-8bit .page .contact-cell-google .sync-error{background:#ffdada !important;color:#7c2020 !important;}
+
+/* Les couleurs comptables du Suivi restent prioritaires. */
+body.theme-8bit .page .ods-followup-table td.ods-yellow-cell{
+  background:#fff36b !important;
+  color:#111 !important;
+}
+body.theme-8bit .page :is(
+  .ods-followup-table td.ods-red-cell,
+  .total-mode-cell.ods-red-cell,
+  .accounting-date-cell.ods-red-cell
+){
+  color:#d00000 !important;
+  font-weight:800 !important;
+}

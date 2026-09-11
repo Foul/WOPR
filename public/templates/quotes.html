@@ -64,7 +64,7 @@
           <span class="mini-btn disabled-btn" title="Aucune adresse e-mail client">📧 —</span>
         {% endif %}
         <button type="button"
-                class="mini-btn wopr-action-folder"
+                class="mini-btn wopr-action-folder wopr-quote-folder"
                 data-wopr-folder-url="{{ url_for('quote_folder_open', quote_id=q['id']) }}">
           📁 Dossier
         </button>
@@ -73,7 +73,7 @@
               onsubmit="return confirm('Supprimer définitivement le devis {{ q['quote_no'] }} ?');"
               style="display:inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-          <button class="mini-btn danger-btn wopr-action-delete" type="submit">Supprimer</button>
+          <button class="mini-btn danger-btn wopr-action-delete wopr-quote-delete" type="submit">Supprimer</button>
         </form>
       </td>
     </tr>

@@ -4510,40 +4510,6 @@ body.theme-8bit .page .ledger-edit-actions > button[type="submit"]{
   box-shadow:none !important;
 }
 
-/* ===== WOPR 2.3.266 — Emulogic sur le thème 8-BIT =====
-   Le fichier emulogic.ttf doit être placé dans public/static/fonts/emulogic.ttf */
-@font-face{
-  font-family:"Emulogic";
-  src:url("/static/fonts/emulogic.ttf") format("truetype");
-  font-style:normal;
-  font-weight:400;
-  font-display:swap;
-}
-
-body.theme-8bit,
-body.theme-8bit .page,
-body.theme-8bit .page *,
-body.theme-8bit .topbar,
-body.theme-8bit .topbar *{
-  font-family:"Emulogic","DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
-}
-
-/* Emulogic est plus large que Roboto : on garde la nav compacte. */
-body.theme-8bit .topbar .topnav .nav-btn,
-body.theme-8bit .topbar .topnav .navbtn.navbtn-new,
-body.theme-8bit .topbar .topnav .lock-btn{
-  font-size:9px !important;
-  letter-spacing:0 !important;
-}
-
-body.theme-8bit .page .mini-btn{
-  font-size:10px !important;
-}
-
-body.theme-8bit .page .button,
-body.theme-8bit .page button{
-  letter-spacing:0 !important;
-}
 /* ===== WOPR 2.3.273 — Suivi : largeur de légende pilotée par mesure réelle ===== */
 .followup-legend{
   box-sizing:border-box !important;
@@ -4553,289 +4519,189 @@ body.theme-8bit .page button{
   margin-left:auto !important;
   white-space:nowrap !important;
 }
-/* ===== WOPR 2.3.276 — 8-BIT lisible =====
-   Le look rétro reste sur la navigation, les titres et les repères visuels.
-   Les données métier reviennent sur une police plus lisible. */
 
-/* Contenu général : lisible */
-body.theme-8bit .page{
-  font-family:"Roboto",Arial,sans-serif !important;
-  color:#111 !important;
-}
+/* ===== WOPR 2.3.278 — retour au thème 8-BIT d'origine =====
+   Suppression des essais de police externe et des surcharges typographiques associées.
+   Le thème 8-BIT historique reprend son rendu initial. */
 
-/* Look rétro conservé sur les éléments visuels */
-body.theme-8bit .page .sheet-banner,
-body.theme-8bit .page .banner-top,
-body.theme-8bit .page .banner-title,
-body.theme-8bit .page .section-title,
-body.theme-8bit .page .followup-month-row td,
-body.theme-8bit .page .ods-followup-table thead th{
-  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
-  font-weight:800 !important;
-  letter-spacing:0 !important;
-}
+/* ===== WOPR 2.3.279 — thème 8-BIT : vrais boutons d'actions colorés =====
+   Objectif :
+   - garder les couleurs métier déjà validées ;
+   - donner aux boutons d'action le rendu pixel / arcade des boutons du menu ;
+   - sans retoucher la typo générale des pages.
+*/
 
-/* Bandeau Suivi */
-body.theme-8bit .page .banner-top{
-  font-size:11px !important;
-  line-height:1.25 !important;
-  padding:7px 10px !important;
-}
-body.theme-8bit .page .banner-title{
-  font-size:18px !important;
-  line-height:1.15 !important;
-  padding:9px 12px !important;
-}
-
-/* Légende */
-body.theme-8bit .page .followup-legend,
-body.theme-8bit .page .legend-counters,
-body.theme-8bit .page .legend-item{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:12px !important;
-  line-height:1.3 !important;
-}
-
-/* En-têtes du Suivi : rétro mais contenus */
-body.theme-8bit .page .ods-followup-table thead th{
-  font-size:10px !important;
-  line-height:1.08 !important;
-  padding:7px 5px !important;
-  text-align:center !important;
-  vertical-align:middle !important;
-  overflow-wrap:normal !important;
-  word-break:normal !important;
-  hyphens:none !important;
-}
-
-/* Mois */
-body.theme-8bit .page .followup-month-row td{
-  font-size:15px !important;
-  line-height:1.1 !important;
-  padding:8px !important;
-}
-
-/* Corps du tableau : données métier lisibles */
-body.theme-8bit .page .ods-followup-table tbody td{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:12px !important;
-  line-height:1.25 !important;
-  padding:7px 6px !important;
-  vertical-align:middle !important;
-  letter-spacing:0 !important;
-}
-
-/* Éviter les coupures moches dans les zones courtes */
-body.theme-8bit .page .followup-first-name,
-body.theme-8bit .page .followup-last-name,
-body.theme-8bit .page .followup-date,
-body.theme-8bit .page .money-cell,
-body.theme-8bit .page .accounting-date-cell,
-body.theme-8bit .page .total-mode-cell{
-  word-break:normal !important;
-  overflow-wrap:normal !important;
-}
-
-/* Panne / Remarques : retour à la ligne naturel */
-body.theme-8bit .page .ods-followup-table td:nth-child(4),
-body.theme-8bit .page .ods-followup-table td:nth-last-child(2){
-  overflow-wrap:break-word !important;
-  word-break:normal !important;
-  line-height:1.3 !important;
-}
-
-/* Badges */
-body.theme-8bit .page .payment-mode-badge,
-body.theme-8bit .page .repair-state-badge,
-body.theme-8bit .page .return-wait-badge{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:9px !important;
-  line-height:1.05 !important;
-  letter-spacing:0 !important;
-}
-
-/* Boutons métier : couleurs conservées, texte lisible */
 body.theme-8bit .page .followup-actions .mini-btn,
-body.theme-8bit .page .mini-btn,
-body.theme-8bit .page .button{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:11px !important;
-  font-weight:700 !important;
-  line-height:1.1 !important;
-  letter-spacing:0 !important;
-}
-
-/* Actions du Suivi plus compactes */
-body.theme-8bit .page .followup-actions .mini-btn{
-  padding:5px 6px !important;
-  min-height:25px !important;
-  margin:2px 0 !important;
-}
-
-/* Lignes plus douces, sans la grosse grille "tableur" */
-body.theme-8bit .page .ods-followup-table tbody td{
-  border-color:#d7e1e9 !important;
-  border-left-width:1px !important;
-  border-right-width:1px !important;
-}
-body.theme-8bit .page .followup-data-row:nth-child(even) td:not(:last-child){
-  background:#fbfdff !important;
-}
-
-/* Garder les repères comptables visibles */
-body.theme-8bit .page .ods-followup-table td.ods-yellow-cell{
-  background:#fff36b !important;
-  color:#111 !important;
-}
-body.theme-8bit .page .ods-followup-table td.ods-red-cell,
-body.theme-8bit .page .total-mode-cell.ods-red-cell,
-body.theme-8bit .page .accounting-date-cell.ods-red-cell{
-  color:#d00000 !important;
-  font-weight:800 !important;
-}
-/* ===== WOPR 2.3.277 — 8-BIT plus compact =====
-   Objectif : garder le caractère rétro sans écraser les données métier. */
-
-/* --- Achats / Ventes : beaucoup plus lisible --- */
-body.theme-8bit .page .ledger-table,
-body.theme-8bit .page .ledger-table th,
-body.theme-8bit .page .ledger-table td,
-body.theme-8bit .page .ledger-month-title,
-body.theme-8bit .page .ledger-summary-card,
-body.theme-8bit .page .ledger-history-note,
-body.theme-8bit .page .ledger-add-form,
-body.theme-8bit .page .ledger-add-box,
-body.theme-8bit .page .ledger-search-form,
-body.theme-8bit .page .ledger-normal-actions,
-body.theme-8bit .page .ledger-edit-actions{
-  font-family:"Roboto",Arial,sans-serif !important;
-  letter-spacing:0 !important;
-}
-
-/* Titres de mois : petit accent rétro, sans taille énorme */
-body.theme-8bit .page .ledger-month-title > span{
-  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
-  font-size:14px !important;
-  line-height:1.1 !important;
-  letter-spacing:0 !important;
-}
-body.theme-8bit .page .ledger-month-title > div{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:11px !important;
-  line-height:1.15 !important;
-}
-
-/* En-têtes du tableau Achats / Ventes */
-body.theme-8bit .page .ledger-table th{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:10px !important;
-  line-height:1.08 !important;
-  padding:5px 4px !important;
-  letter-spacing:0 !important;
-  overflow-wrap:normal !important;
-  word-break:normal !important;
-  hyphens:none !important;
-}
-
-/* Données du tableau Achats / Ventes */
-body.theme-8bit .page .ledger-table td{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:11px !important;
-  line-height:1.18 !important;
-  padding:5px 5px !important;
-  letter-spacing:0 !important;
-  word-break:normal !important;
-}
-
-/* Les champs texte un peu longs peuvent revenir proprement à la ligne */
-body.theme-8bit .page .ledger-table td:nth-child(2),
-body.theme-8bit .page .ledger-table td:nth-child(4),
-body.theme-8bit .page .ledger-table td:nth-child(8){
-  overflow-wrap:break-word !important;
-  word-break:normal !important;
-}
-
-/* Résumé du haut */
-body.theme-8bit .page .ledger-summary-card span{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:10px !important;
-}
-body.theme-8bit .page .ledger-summary-card strong{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:18px !important;
-  line-height:1.05 !important;
-}
-
-/* Bloc historique / info */
-body.theme-8bit .page .ledger-history-note{
-  font-size:10px !important;
-  line-height:1.3 !important;
-}
-
-/* Factures fournisseurs */
-body.theme-8bit .page .ledger-supplier-audit,
-body.theme-8bit .page .ledger-supplier-panel,
-body.theme-8bit .page .ledger-supplier-summary{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:11px !important;
-  line-height:1.25 !important;
-}
-
-/* Ajouter une opération */
-body.theme-8bit .page .ledger-add-box > summary{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:12px !important;
-  letter-spacing:0 !important;
-}
-
-/* Boutons Achats / Ventes : plus petits */
+body.theme-8bit .page .invoice-list-actions .mini-btn,
+body.theme-8bit .page .quote-list-actions .mini-btn,
+body.theme-8bit .page .contact-normal-actions .mini-btn,
+body.theme-8bit .page .contact-edit-actions .mini-btn,
 body.theme-8bit .page .ledger-normal-actions .mini-btn,
 body.theme-8bit .page .ledger-edit-actions .mini-btn,
-body.theme-8bit .page .ledger-table .mini-btn{
-  font-family:"Roboto",Arial,sans-serif !important;
-  font-size:9px !important;
-  line-height:1.05 !important;
-  padding:4px 5px !important;
-  min-height:22px !important;
-}
-
-/* Boutons et champs généraux des pages 8-bit */
-body.theme-8bit .page input,
-body.theme-8bit .page textarea,
-body.theme-8bit .page select{
-  font-family:"Roboto",Arial,sans-serif !important;
+body.theme-8bit .page .simple-done-actions .mini-btn,
+body.theme-8bit .page .client-message-actions .mini-btn,
+body.theme-8bit .page .client-message-actions .button,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-open,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-send,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-save,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-edit,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-folder,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-special,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-delete,
+body.theme-8bit .page :is(a,button,select,input)[data-wopr-folder-url]{
+  border-radius:0 !important;
+  border:2px solid #08131f !important;
+  outline:none !important;
+  box-shadow:
+    inset 1px 1px 0 rgba(255,255,255,.55),
+    2px 2px 0 #08131f !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
   font-size:11px !important;
-  line-height:1.15 !important;
-}
-
-/* Suivi : encore un cran plus compact */
-body.theme-8bit .page .ods-followup-table thead th{
-  font-size:9px !important;
+  font-weight:800 !important;
   line-height:1.05 !important;
-  padding:5px 4px !important;
-}
-body.theme-8bit .page .ods-followup-table tbody td{
-  font-size:11px !important;
-  line-height:1.18 !important;
-  padding:5px 5px !important;
-}
-body.theme-8bit .page .followup-month-row td{
-  font-size:13px !important;
-  padding:6px !important;
-}
-body.theme-8bit .page .followup-actions .mini-btn{
-  font-size:9px !important;
-  padding:4px 5px !important;
-  min-height:22px !important;
+  text-transform:uppercase !important;
+  letter-spacing:0 !important;
+  min-height:24px !important;
+  padding:4px 8px !important;
+  text-shadow:1px 1px 0 rgba(255,255,255,.35) !important;
+  transform:translate(0,0) !important;
+  transition:none !important;
+  background-image:none !important;
+  clip-path:none !important;
 }
 
-/* Les gros titres restent rétro mais plus sages */
-body.theme-8bit .page .banner-title{
-  font-size:16px !important;
+body.theme-8bit .page .followup-actions .mini-btn:hover,
+body.theme-8bit .page .invoice-list-actions .mini-btn:hover,
+body.theme-8bit .page .quote-list-actions .mini-btn:hover,
+body.theme-8bit .page .contact-normal-actions .mini-btn:hover,
+body.theme-8bit .page .contact-edit-actions .mini-btn:hover,
+body.theme-8bit .page .ledger-normal-actions .mini-btn:hover,
+body.theme-8bit .page .ledger-edit-actions .mini-btn:hover,
+body.theme-8bit .page .simple-done-actions .mini-btn:hover,
+body.theme-8bit .page .client-message-actions .mini-btn:hover,
+body.theme-8bit .page .client-message-actions .button:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-open:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-send:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-save:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-edit:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-folder:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-special:hover,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-delete:hover,
+body.theme-8bit .page :is(a,button,select,input)[data-wopr-folder-url]:hover{
+  filter:brightness(1.04) !important;
+  transform:translate(1px,1px) !important;
+  box-shadow:
+    inset 1px 1px 0 rgba(255,255,255,.5),
+    1px 1px 0 #08131f !important;
 }
-body.theme-8bit .page .banner-top{
-  font-size:10px !important;
+
+body.theme-8bit .page .followup-actions .mini-btn:active,
+body.theme-8bit .page .invoice-list-actions .mini-btn:active,
+body.theme-8bit .page .quote-list-actions .mini-btn:active,
+body.theme-8bit .page .contact-normal-actions .mini-btn:active,
+body.theme-8bit .page .contact-edit-actions .mini-btn:active,
+body.theme-8bit .page .ledger-normal-actions .mini-btn:active,
+body.theme-8bit .page .ledger-edit-actions .mini-btn:active,
+body.theme-8bit .page .simple-done-actions .mini-btn:active,
+body.theme-8bit .page .client-message-actions .mini-btn:active,
+body.theme-8bit .page .client-message-actions .button:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-open:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-send:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-save:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-edit:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-folder:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-special:active,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-delete:active,
+body.theme-8bit .page :is(a,button,select,input)[data-wopr-folder-url]:active{
+  transform:translate(2px,2px) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.4) !important;
+  filter:brightness(.96) !important;
 }
-body.theme-8bit .page .section-title{
-  font-size:13px !important;
+
+body.theme-8bit .page .followup-actions .mini-btn:focus-visible,
+body.theme-8bit .page .invoice-list-actions .mini-btn:focus-visible,
+body.theme-8bit .page .quote-list-actions .mini-btn:focus-visible,
+body.theme-8bit .page .contact-normal-actions .mini-btn:focus-visible,
+body.theme-8bit .page .contact-edit-actions .mini-btn:focus-visible,
+body.theme-8bit .page .ledger-normal-actions .mini-btn:focus-visible,
+body.theme-8bit .page .ledger-edit-actions .mini-btn:focus-visible,
+body.theme-8bit .page .simple-done-actions .mini-btn:focus-visible,
+body.theme-8bit .page .client-message-actions .mini-btn:focus-visible,
+body.theme-8bit .page .client-message-actions .button:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-open:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-send:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-save:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-edit:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-folder:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-special:focus-visible,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-delete:focus-visible,
+body.theme-8bit .page :is(a,button,select,input)[data-wopr-folder-url]:focus-visible{
+  outline:2px solid #3399ff !important;
+  outline-offset:1px !important;
 }
+
+/* Renforce légèrement la lisibilité des couleurs déjà en place en mode 8-BIT. */
+body.theme-8bit .page :is(a,button,select,input).wopr-action-open{
+  color:#103d66 !important;
+  background:#ddebff !important;
+  border-color:#08131f !important;
+}
+body.theme-8bit .page :is(a,button,select,input).wopr-action-send,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-save{
+  color:#12472a !important;
+  background:#dff6e7 !important;
+  border-color:#08131f !important;
+}
+body.theme-8bit .page :is(a,button,select,input).wopr-action-edit{
+  color:#6a4500 !important;
+  background:#ffefc9 !important;
+  border-color:#08131f !important;
+}
+body.theme-8bit .page :is(a,button,select,input).wopr-action-folder,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-special,
+body.theme-8bit .page :is(a,button,select,input)[data-wopr-folder-url]{
+  color:#4e2478 !important;
+  background:#eadcff !important;
+  border-color:#08131f !important;
+}
+body.theme-8bit .page :is(a,button,select,input).wopr-action-delete{
+  color:#7a1f1f !important;
+  background:#ffdede !important;
+  border-color:#08131f !important;
+}
+
+/* Achats / Ventes : comme ces boutons n'ont pas tous les classes génériques,
+   on force la même palette pixel-art directement sur leurs vraies classes. */
+body.theme-8bit .page .ledger-normal-actions > .ledger-edit-btn{
+  background:#ffefc9 !important;
+  border-color:#08131f !important;
+  color:#6a4500 !important;
+}
+body.theme-8bit .page .ledger-normal-actions form > .danger-btn{
+  background:#ffdede !important;
+  border-color:#08131f !important;
+  color:#7a1f1f !important;
+}
+body.theme-8bit .page .ledger-normal-actions > .ledger-folder-btn{
+  background:#eadcff !important;
+  border-color:#08131f !important;
+  color:#4e2478 !important;
+}
+body.theme-8bit .page .ledger-edit-actions > button[type="submit"]{
+  background:#dff6e7 !important;
+  border-color:#08131f !important;
+  color:#12472a !important;
+}
+body.theme-8bit .page .ledger-edit-actions > .mini-btn,
+body.theme-8bit .page .ledger-edit-actions > a.mini-btn{
+  background:#ffdede !important;
+  border-color:#08131f !important;
+  color:#7a1f1f !important;
+}
+
+/* Clients : garde les 5 couleurs déjà définies mais avec le rendu pixel du thème. */
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(1){background:#ddebff !important;color:#103d66 !important;border-color:#08131f !important;}
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(2){background:#dff6e7 !important;color:#12472a !important;border-color:#08131f !important;}
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(3){background:#ffefc9 !important;color:#6a4500 !important;border-color:#08131f !important;}
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(4){background:#eadcff !important;color:#4e2478 !important;border-color:#08131f !important;}
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5){background:#ffdede !important;color:#7a1f1f !important;border-color:#08131f !important;}
