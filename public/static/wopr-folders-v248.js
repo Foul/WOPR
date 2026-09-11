@@ -154,7 +154,6 @@
     document.body.classList.toggle("wopr-page-devis", location.pathname === "/devis");
     document.body.classList.toggle("wopr-page-suivi", location.pathname === "/suivi");
     document.body.classList.toggle("wopr-page-achats-ventes", /^\/achats-ventes(?:\/|$)/.test(location.pathname));
-    document.body.classList.toggle("wopr-page-contacts", location.pathname === "/contacts");
   }
 
   function wrapActionCell(cell, columns) {
@@ -213,25 +212,6 @@
       });
     }
 
-    if (location.pathname === "/contacts") {
-      document.querySelectorAll("table").forEach(table => {
-        if (table.querySelector("th") && table.querySelectorAll("tbody tr").length) {
-          table.classList.add("wopr-light-table");
-        }
-      });
-
-      document.querySelectorAll("table tbody tr").forEach(row => {
-        const cells = row.querySelectorAll("td");
-        if (!cells.length) return;
-        const cell = cells[cells.length - 1];
-        if (cell.hasAttribute("colspan")) return;
-        const controls = cell.querySelectorAll("a,button,form,select,input[type=button],input[type=submit]");
-        if (controls.length >= 4) {
-          cell.classList.add("contacts-actions-cell");
-          wrapActionCell(cell, 2);
-        }
-      });
-    }
   }
 
   function scanAll() {
