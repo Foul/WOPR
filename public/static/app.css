@@ -4544,28 +4544,34 @@ body.theme-8bit .page .button,
 body.theme-8bit .page button{
   letter-spacing:0 !important;
 }
-
-/* ===== WOPR 2.3.269 — Suivi : compteur de légende toujours contenu ===== */
+/* ===== WOPR 2.3.270 — Suivi : compteur intégré à la légende =====
+   Le compteur n'occupe plus une ligne entière et ne peut plus pousser la zone vers la droite. */
 .followup-legend{
-  width:100% !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-start !important;
+  gap:14px !important;
+  flex-wrap:wrap !important;
+  width:auto !important;
   max-width:100% !important;
   box-sizing:border-box !important;
+  overflow:hidden !important;
+}
+
+.followup-legend .legend-item{
+  flex:0 1 auto !important;
+  min-width:0 !important;
+  max-width:100% !important;
 }
 
 .followup-legend .legend-counters{
-  flex:0 0 100% !important;
-  width:100% !important;
+  flex:0 0 auto !important;
+  width:auto !important;
   max-width:100% !important;
   min-width:0 !important;
   margin-left:0 !important;
-  box-sizing:border-box !important;
-  text-align:right !important;
-  white-space:normal !important;
-  overflow-wrap:anywhere !important;
-}
-
-/* Les éléments de légende peuvent se réduire au lieu de pousser le compteur hors écran. */
-.followup-legend .legend-item{
-  min-width:0 !important;
-  max-width:100% !important;
+  padding-left:0 !important;
+  text-align:left !important;
+  white-space:nowrap !important;
+  overflow:visible !important;
 }
