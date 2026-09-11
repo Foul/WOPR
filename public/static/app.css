@@ -4544,34 +4544,38 @@ body.theme-8bit .page .button,
 body.theme-8bit .page button{
   letter-spacing:0 !important;
 }
-/* ===== WOPR 2.3.270 — Suivi : compteur intégré à la légende =====
-   Le compteur n'occupe plus une ligne entière et ne peut plus pousser la zone vers la droite. */
+/* ===== WOPR 2.3.271 — Suivi : compteur aligné avec le bord du tableau =====
+   On garde le compteur à droite, mais on le rentre légèrement pour qu'il
+   s'arrête au niveau du tableau / colonne Actions au lieu de dépasser. */
 .followup-legend{
   display:flex !important;
   align-items:center !important;
-  justify-content:flex-start !important;
-  gap:14px !important;
+  gap:16px !important;
   flex-wrap:wrap !important;
-  width:auto !important;
+  width:100% !important;
   max-width:100% !important;
   box-sizing:border-box !important;
-  overflow:hidden !important;
-}
-
-.followup-legend .legend-item{
-  flex:0 1 auto !important;
-  min-width:0 !important;
-  max-width:100% !important;
+  padding-right:54px !important;
 }
 
 .followup-legend .legend-counters{
   flex:0 0 auto !important;
   width:auto !important;
-  max-width:100% !important;
   min-width:0 !important;
-  margin-left:0 !important;
-  padding-left:0 !important;
-  text-align:left !important;
+  margin-left:auto !important;
+  text-align:right !important;
   white-space:nowrap !important;
-  overflow:visible !important;
+}
+
+/* Sur écran étroit, on retire ce décalage et on laisse revenir à la ligne. */
+@media(max-width:900px){
+  .followup-legend{
+    padding-right:0 !important;
+  }
+  .followup-legend .legend-counters{
+    flex-basis:100% !important;
+    width:100% !important;
+    margin-left:0 !important;
+    text-align:left !important;
+  }
 }
