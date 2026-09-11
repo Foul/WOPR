@@ -1,23 +1,17 @@
-# Prototype lanceur WOPR unifié
+# Lanceur WOPR unifié
 
-Ce prototype ne remplace pas encore les anciens lanceurs.
+Version documentée : **2.3.285**.
 
-Fonctions :
-- DÉMARRER WOPR
-- OUVRIR WOPR si déjà actif
-- ARRÊTER WOPR
-- PID unique pour éviter les doubles instances
-- création du venv et vérification des dépendances
-- affichage de la date et de la taille de `private/data/foulfix.db`
-- logs dans `private/data/`
+Le lanceur Python `wopr_launcher.py` est la source commune Linux/Windows.
 
-Fermer la fenêtre du lanceur ne coupe pas WOPR.
+Fonctions principales :
+- démarrer / ouvrir / arrêter WOPR ;
+- éviter les doubles instances ;
+- préparer l’environnement Python ;
+- ouvrir le navigateur lorsque le serveur est prêt ;
+- déclencher une sauvegarde intelligente à l’arrêt.
 
-Build Windows :
-`public/scripts/build_wopr_launcher_windows.ps1`
-=> `public/launcher/dist/WOPR.exe`
+Binaires officiels : `WOPR` sous Linux et `WOPR.exe` sous Windows.
+macOS n’est pas supporté.
 
-Build Linux :
-`chmod +x public/scripts/build_wopr_launcher_linux.sh`
-`public/scripts/build_wopr_launcher_linux.sh`
-=> `public/launcher/dist/WOPR`
+L’interface rétro/terminal actuelle est la référence visuelle du lanceur.
