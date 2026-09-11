@@ -4509,3 +4509,94 @@ body.theme-8bit .page .ledger-edit-actions > button[type="submit"]{
   text-shadow:none !important;
   box-shadow:none !important;
 }
+/* ===== WOPR 2.3.267 — Emulogic 8-BIT compact ===== */
+@font-face{
+  font-family:"Emulogic";
+  src:url("/static/fonts/emulogic.ttf") format("truetype");
+  font-style:normal;
+  font-weight:400;
+  font-display:swap;
+}
+
+/* Emulogic partout dans le thème 8-bit, mais avec des tailles réduites :
+   cette police occupe beaucoup plus de largeur que Roboto/mono. */
+body.theme-8bit,
+body.theme-8bit .page,
+body.theme-8bit .page *,
+body.theme-8bit .topbar,
+body.theme-8bit .topbar *{
+  font-family:"Emulogic","DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+}
+
+/* Navigation */
+body.theme-8bit .topbar .topnav .nav-btn,
+body.theme-8bit .topbar .topnav .navbtn.navbtn-new,
+body.theme-8bit .topbar .topnav .lock-btn{
+  font-size:7px !important;
+  line-height:1.15 !important;
+  letter-spacing:0 !important;
+}
+body.theme-8bit .api-version-badge,
+body.theme-8bit .theme-picker,
+body.theme-8bit .theme-picker select{
+  font-size:7px !important;
+}
+
+/* Contenu général */
+body.theme-8bit .page{
+  font-size:10px !important;
+}
+body.theme-8bit .page h1,
+body.theme-8bit .page .banner-title{
+  font-size:18px !important;
+}
+body.theme-8bit .page h2,
+body.theme-8bit .page .section-title{
+  font-size:14px !important;
+}
+body.theme-8bit .page h3{
+  font-size:12px !important;
+}
+body.theme-8bit .page small,
+body.theme-8bit .page .tiny-note{
+  font-size:8px !important;
+}
+
+/* Tableaux : c'est là que ça faisait le plus "bouillie". */
+body.theme-8bit .page table,
+body.theme-8bit .page .sheet-table,
+body.theme-8bit .page .ledger-table,
+body.theme-8bit .page .followup-table,
+body.theme-8bit .page .invoice-list-table,
+body.theme-8bit .page .quotes-table{
+  font-size:9px !important;
+}
+body.theme-8bit .page table th,
+body.theme-8bit .page table td,
+body.theme-8bit .page .sheet-table th,
+body.theme-8bit .page .sheet-table td,
+body.theme-8bit .page .ledger-table th,
+body.theme-8bit .page .ledger-table td,
+body.theme-8bit .page .followup-table th,
+body.theme-8bit .page .followup-table td{
+  font-size:9px !important;
+  line-height:1.15 !important;
+}
+
+/* Boutons métier */
+body.theme-8bit .page .mini-btn{
+  font-size:8px !important;
+  line-height:1.1 !important;
+}
+body.theme-8bit .page .button,
+body.theme-8bit .page button{
+  font-size:9px !important;
+  letter-spacing:0 !important;
+}
+
+/* Tableau de bord : garder les gros chiffres lisibles sans gonfler tout le texte. */
+body.theme-8bit .page .stats-card strong,
+body.theme-8bit .page .dashboard-card strong,
+body.theme-8bit .page .kpi-card strong{
+  font-size:16px !important;
+}

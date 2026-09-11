@@ -218,18 +218,18 @@
             <td class="ledger-document-cell">
               {% if e['operation']=='Achat' %}
                 {% if e['document_path'] %}
-                  <a class="mini-btn ledger-doc-link" href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture fournisseur">📄 Ouvrir</a>
+                  <a class="mini-btn ledger-doc-link" style="background:#eef6ff !important;background-image:none !important;border-color:#9fc6ef !important;color:#184f82 !important;text-shadow:none !important;box-shadow:none !important;" href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture fournisseur">📄 Ouvrir</a>
                 {% else %}
                   <form method="post" enctype="multipart/form-data" action="{{ url_for('achats_ventes_document_add', entry_id=e['id']) }}" class="ledger-attach-form">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                    <label class="mini-btn ledger-attach-btn" title="Joindre la facture fournisseur">📎 Joindre
+                    <label class="mini-btn ledger-attach-btn" style="background:#f5efff !important;background-image:none !important;border-color:#c9b2ea !important;color:#56358a !important;text-shadow:none !important;box-shadow:none !important;" title="Joindre la facture fournisseur">📎 Joindre
                       <input type="file" name="supplier_document" accept=".pdf,.xml,.jpg,.jpeg,.png,application/pdf,text/xml,image/jpeg,image/png" onchange="this.form.submit()">
                     </label>
                   </form>
                 {% endif %}
               {% else %}
                 {% if e['invoice_no'] %}
-                  <a class="mini-btn ledger-doc-link" href="{{ url_for('achats_ventes_sale_invoice_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture de vente client">📄 Ouvrir</a>
+                  <a class="mini-btn ledger-doc-link" style="background:#eef6ff !important;background-image:none !important;border-color:#9fc6ef !important;color:#184f82 !important;text-shadow:none !important;box-shadow:none !important;" href="{{ url_for('achats_ventes_sale_invoice_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture de vente client">📄 Ouvrir</a>
                 {% else %}
                   <span class="muted">—</span>
                 {% endif %}
@@ -247,21 +247,21 @@
               </form>
 
               <div class="ledger-normal-actions">
-                <button type="button" class="mini-btn ledger-edit-btn wopr-action-edit" data-ledger-edit="{{ e['id'] }}">Modifier</button>
+                <button type="button" class="mini-btn ledger-edit-btn wopr-action-edit" style="background:#fff7e8 !important;background-image:none !important;border-color:#e6c98b !important;color:#745116 !important;text-shadow:none !important;box-shadow:none !important;" data-ledger-edit="{{ e['id'] }}">Modifier</button>
                 <form method="post" action="{{ url_for('achats_ventes_delete', entry_id=e['id']) }}" onsubmit="return confirm('Supprimer définitivement cette ligne ?');">
                   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="mini-btn danger-btn wopr-action-delete">Supprimer</button>
+                  <button type="submit" class="mini-btn danger-btn wopr-action-delete" style="background:#fff0f0 !important;background-image:none !important;border-color:#e7aaaa !important;color:#8a2f2f !important;text-shadow:none !important;box-shadow:none !important;">Supprimer</button>
                 </form>
 
                 {% if e['operation']=='Achat' %}
                   <button type="button"
-                          class="mini-btn ledger-folder-btn wopr-action-folder"
+                          class="mini-btn ledger-folder-btn wopr-action-folder" style="background:#f5efff !important;background-image:none !important;border-color:#c9b2ea !important;color:#56358a !important;text-shadow:none !important;box-shadow:none !important;"
                           data-wopr-folder-url="{{ url_for('achats_ventes_document_folder', entry_id=e['id']) }}">
                     📁 Dossier
                   </button>
                 {% else %}
                   <button type="button"
-                          class="mini-btn ledger-folder-btn wopr-action-folder"
+                          class="mini-btn ledger-folder-btn wopr-action-folder" style="background:#f5efff !important;background-image:none !important;border-color:#c9b2ea !important;color:#56358a !important;text-shadow:none !important;box-shadow:none !important;"
                           data-wopr-folder-url="{{ url_for('achats_ventes_sale_invoice_folder', entry_id=e['id']) }}">
                     📁 Dossier
                   </button>
@@ -269,7 +269,7 @@
               </div>
 
               <div class="ledger-edit-actions">
-                <button type="submit" form="ledger-edit-{{ e['id'] }}" class="mini-btn primary wopr-action-save">Enregistrer</button>
+                <button type="submit" form="ledger-edit-{{ e['id'] }}" class="mini-btn primary wopr-action-save" style="background:#eefaf3 !important;background-image:none !important;border-color:#9fd6b5 !important;color:#23613b !important;text-shadow:none !important;box-shadow:none !important;">Enregistrer</button>
                 <button type="button" class="mini-btn" data-ledger-cancel="{{ e['id'] }}">Annuler</button>
               </div>
             </td>
