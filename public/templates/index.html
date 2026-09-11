@@ -386,4 +386,55 @@
 </table>
 </div>
 
+<script>
+(function () {
+  const legend = document.querySelector('.followup-legend');
+  const wrapper = document.getElementById('followupSheetWrapper');
+  const table = wrapper ? wrapper.querySelector('.followup-table') : null;
+  if (!legend || !wrapper || !table) return;
+
+  let raf = 0;
+
+  function alignLegendToTable() {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(function () {
+      const legendRect = legend.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+
+      // On aligne le bord droit VISUEL de la légende sur le bord droit VISUEL du tableau.
+      // Pas de valeur magique en px : la largeur suit réellement le tableau.
+      const measuredWidth = Math.max(0, Math.round(tableRect.right - legendRect.left));
+
+      if (measuredWidth > 0) {
+        legend.style.width = measuredWidth + 'px';
+        legend.style.maxWidth = measuredWidth + 'px';
+      }
+    });
+  }
+
+  alignLegendToTable();
+  window.addEventListener('resize', alignLegendToTable);
+
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(alignLegendToTable);
+    ro.observe(table);
+    ro.observe(wrapper);
+  }
+
+  // Le changement de thème peut modifier métriques/polices après le premier rendu.
+  const themeSelect = document.getElementById('themeSelect');
+  if (themeSelect) {
+    themeSelect.addEventListener('change', function () {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(alignLegendToTable);
+      });
+    });
+  }
+
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(alignLegendToTable).catch(function(){});
+  }
+})();
+</script>
+
 {% endblock %}

@@ -4544,38 +4544,12 @@ body.theme-8bit .page .button,
 body.theme-8bit .page button{
   letter-spacing:0 !important;
 }
-/* ===== WOPR 2.3.271 — Suivi : compteur aligné avec le bord du tableau =====
-   On garde le compteur à droite, mais on le rentre légèrement pour qu'il
-   s'arrête au niveau du tableau / colonne Actions au lieu de dépasser. */
+/* ===== WOPR 2.3.273 — Suivi : largeur de légende pilotée par mesure réelle ===== */
 .followup-legend{
-  display:flex !important;
-  align-items:center !important;
-  gap:16px !important;
-  flex-wrap:wrap !important;
-  width:100% !important;
-  max-width:100% !important;
   box-sizing:border-box !important;
-  padding-right:54px !important;
+  max-width:100% !important;
 }
-
 .followup-legend .legend-counters{
-  flex:0 0 auto !important;
-  width:auto !important;
-  min-width:0 !important;
   margin-left:auto !important;
-  text-align:right !important;
   white-space:nowrap !important;
-}
-
-/* Sur écran étroit, on retire ce décalage et on laisse revenir à la ligne. */
-@media(max-width:900px){
-  .followup-legend{
-    padding-right:0 !important;
-  }
-  .followup-legend .legend-counters{
-    flex-basis:100% !important;
-    width:100% !important;
-    margin-left:0 !important;
-    text-align:left !important;
-  }
 }
