@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.239"
+APP_VERSION = "2.3.241"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -863,6 +863,7 @@ def force_utf8_html(response):
             js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
             print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
             google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}" defer></script>'
+            document_folders_js_tag = f'<script src="/static/wopr-document-folders.js?v={APP_VERSION}" defer></script>'
 
             if "wopr-responsive.css" not in html and "</head>" in html:
                 html = html.replace("</head>", css_tag + "\n</head>", 1)
@@ -875,6 +876,9 @@ def force_utf8_html(response):
 
             if "wopr-google-sync.js" not in html and "</body>" in html:
                 html = html.replace("</body>", google_sync_js_tag + "\n</body>", 1)
+
+            if "wopr-document-folders.js" not in html and "</body>" in html:
+                html = html.replace("</body>", document_folders_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
@@ -8346,6 +8350,133 @@ def quote_pdf(quote_id):
         as_attachment=False,
         download_name=quote_filename
     )
+
+
+def open_local_document_folder(folder):
+    """Ouvre un dossier local dans l'explorateur du système."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if os.name == "nt":
+            os.startfile(str(folder))
+        elif sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", str(folder)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.Popen(
+                ["xdg-open", str(folder)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _folder_open_response(folder):
+    ok, error = open_local_document_folder(folder)
+    if ok:
+        return Response(status=204)
+    return Response(
+        error or "Impossible d'ouvrir le dossier",
+        status=500,
+        mimetype="text/plain"
+    )
+
+
+@app.route("/repair/<int:rid>/intake-folder", methods=["GET", "POST"])
+def repair_intake_folder(rid):
+    con = db()
+    row = con.execute(
+        "SELECT received_date, created_at FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Dossier introuvable"), 404
+
+    document_date = str(row["received_date"] or row["created_at"] or "")[:10]
+    folder = year_month_folder(
+        SUIVI_REPARATIONS_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+@app.route("/repair/<int:rid>/invoice-folder", methods=["GET", "POST"])
+def repair_invoice_folder(rid):
+    con = db()
+    row = con.execute(
+        "SELECT invoice_no, finished_at, received_date FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Facture introuvable"), 404
+
+    document_date = invoice_no_date(row["invoice_no"])
+    if not document_date:
+        document_date = str(row["finished_at"] or row["received_date"] or "")[:10]
+
+    folder = year_month_folder(
+        FACTURES_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+@app.route("/devis/<int:quote_id>/folder", methods=["GET", "POST"])
+def quote_folder_open(quote_id):
+    con = db()
+    row = con.execute(
+        "SELECT quote_date FROM quotes WHERE id=?",
+        (quote_id,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Devis introuvable"), 404
+
+    folder = year_month_folder(
+        DEVIS_ROOT,
+        row["quote_date"],
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+@app.route("/achats-ventes/vente/<int:entry_id>/folder", methods=["GET", "POST"])
+def achats_ventes_sale_invoice_folder(entry_id):
+    con = db()
+    row = con.execute(
+        "SELECT * FROM ledger_entries WHERE id=?",
+        (entry_id,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Ligne introuvable"), 404
+    if (row["operation"] or "").casefold() != "vente":
+        return jsonify(ok=False, error="Cette ligne n'est pas une vente"), 400
+
+    invoice_no = canonical_client_invoice_no(row["invoice_no"])
+    pdf = find_client_invoice_pdf(invoice_no, row["party"] or "")
+    if pdf and pdf.exists():
+        return _folder_open_response(pdf.parent)
+
+    document_date = invoice_no_date(invoice_no)
+    if not document_date:
+        document_date = str(row["entry_date"] or "")[:10]
+    folder = year_month_folder(
+        FACTURES_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
 
 
 @app.route("/achats-ventes")
