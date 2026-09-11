@@ -399,18 +399,15 @@
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(function () {
       const legendRect = legend.getBoundingClientRect();
-      const wrapperRect = wrapper.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
 
-      // IMPORTANT :
-      // le tableau est plus large que la zone visible et déborde horizontalement.
-      // Ce qu'on doit suivre n'est donc PAS tableRect.right, mais le bord droit
-      // réel du conteneur visible du tableau.
-      const measuredWidth = Math.max(0, Math.round(wrapperRect.right - legendRect.left));
+      // La capture montre que le wrapper est plus large que le tableau visible.
+      // On aligne donc la légende sur le BORD DROIT RÉEL DU TABLEAU.
+      const measuredWidth = Math.max(0, Math.round(tableRect.right - legendRect.left));
 
       if (measuredWidth > 0) {
-        // Le CSS global wopr-uniform-lists.css impose width:100% !important
-        // sur .followup-legend. Il faut donc gagner la cascade avec un
-        // style inline lui aussi marqué !important.
+        // Le CSS global impose width:100% !important sur la légende :
+        // l'override inline doit donc être lui aussi !important.
         legend.style.setProperty('width', measuredWidth + 'px', 'important');
         legend.style.setProperty('max-width', measuredWidth + 'px', 'important');
       }
