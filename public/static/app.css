@@ -4553,3 +4553,289 @@ body.theme-8bit .page button{
   margin-left:auto !important;
   white-space:nowrap !important;
 }
+/* ===== WOPR 2.3.276 — 8-BIT lisible =====
+   Le look rétro reste sur la navigation, les titres et les repères visuels.
+   Les données métier reviennent sur une police plus lisible. */
+
+/* Contenu général : lisible */
+body.theme-8bit .page{
+  font-family:"Roboto",Arial,sans-serif !important;
+  color:#111 !important;
+}
+
+/* Look rétro conservé sur les éléments visuels */
+body.theme-8bit .page .sheet-banner,
+body.theme-8bit .page .banner-top,
+body.theme-8bit .page .banner-title,
+body.theme-8bit .page .section-title,
+body.theme-8bit .page .followup-month-row td,
+body.theme-8bit .page .ods-followup-table thead th{
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+  letter-spacing:0 !important;
+}
+
+/* Bandeau Suivi */
+body.theme-8bit .page .banner-top{
+  font-size:11px !important;
+  line-height:1.25 !important;
+  padding:7px 10px !important;
+}
+body.theme-8bit .page .banner-title{
+  font-size:18px !important;
+  line-height:1.15 !important;
+  padding:9px 12px !important;
+}
+
+/* Légende */
+body.theme-8bit .page .followup-legend,
+body.theme-8bit .page .legend-counters,
+body.theme-8bit .page .legend-item{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:12px !important;
+  line-height:1.3 !important;
+}
+
+/* En-têtes du Suivi : rétro mais contenus */
+body.theme-8bit .page .ods-followup-table thead th{
+  font-size:10px !important;
+  line-height:1.08 !important;
+  padding:7px 5px !important;
+  text-align:center !important;
+  vertical-align:middle !important;
+  overflow-wrap:normal !important;
+  word-break:normal !important;
+  hyphens:none !important;
+}
+
+/* Mois */
+body.theme-8bit .page .followup-month-row td{
+  font-size:15px !important;
+  line-height:1.1 !important;
+  padding:8px !important;
+}
+
+/* Corps du tableau : données métier lisibles */
+body.theme-8bit .page .ods-followup-table tbody td{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:12px !important;
+  line-height:1.25 !important;
+  padding:7px 6px !important;
+  vertical-align:middle !important;
+  letter-spacing:0 !important;
+}
+
+/* Éviter les coupures moches dans les zones courtes */
+body.theme-8bit .page .followup-first-name,
+body.theme-8bit .page .followup-last-name,
+body.theme-8bit .page .followup-date,
+body.theme-8bit .page .money-cell,
+body.theme-8bit .page .accounting-date-cell,
+body.theme-8bit .page .total-mode-cell{
+  word-break:normal !important;
+  overflow-wrap:normal !important;
+}
+
+/* Panne / Remarques : retour à la ligne naturel */
+body.theme-8bit .page .ods-followup-table td:nth-child(4),
+body.theme-8bit .page .ods-followup-table td:nth-last-child(2){
+  overflow-wrap:break-word !important;
+  word-break:normal !important;
+  line-height:1.3 !important;
+}
+
+/* Badges */
+body.theme-8bit .page .payment-mode-badge,
+body.theme-8bit .page .repair-state-badge,
+body.theme-8bit .page .return-wait-badge{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:9px !important;
+  line-height:1.05 !important;
+  letter-spacing:0 !important;
+}
+
+/* Boutons métier : couleurs conservées, texte lisible */
+body.theme-8bit .page .followup-actions .mini-btn,
+body.theme-8bit .page .mini-btn,
+body.theme-8bit .page .button{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:11px !important;
+  font-weight:700 !important;
+  line-height:1.1 !important;
+  letter-spacing:0 !important;
+}
+
+/* Actions du Suivi plus compactes */
+body.theme-8bit .page .followup-actions .mini-btn{
+  padding:5px 6px !important;
+  min-height:25px !important;
+  margin:2px 0 !important;
+}
+
+/* Lignes plus douces, sans la grosse grille "tableur" */
+body.theme-8bit .page .ods-followup-table tbody td{
+  border-color:#d7e1e9 !important;
+  border-left-width:1px !important;
+  border-right-width:1px !important;
+}
+body.theme-8bit .page .followup-data-row:nth-child(even) td:not(:last-child){
+  background:#fbfdff !important;
+}
+
+/* Garder les repères comptables visibles */
+body.theme-8bit .page .ods-followup-table td.ods-yellow-cell{
+  background:#fff36b !important;
+  color:#111 !important;
+}
+body.theme-8bit .page .ods-followup-table td.ods-red-cell,
+body.theme-8bit .page .total-mode-cell.ods-red-cell,
+body.theme-8bit .page .accounting-date-cell.ods-red-cell{
+  color:#d00000 !important;
+  font-weight:800 !important;
+}
+/* ===== WOPR 2.3.277 — 8-BIT plus compact =====
+   Objectif : garder le caractère rétro sans écraser les données métier. */
+
+/* --- Achats / Ventes : beaucoup plus lisible --- */
+body.theme-8bit .page .ledger-table,
+body.theme-8bit .page .ledger-table th,
+body.theme-8bit .page .ledger-table td,
+body.theme-8bit .page .ledger-month-title,
+body.theme-8bit .page .ledger-summary-card,
+body.theme-8bit .page .ledger-history-note,
+body.theme-8bit .page .ledger-add-form,
+body.theme-8bit .page .ledger-add-box,
+body.theme-8bit .page .ledger-search-form,
+body.theme-8bit .page .ledger-normal-actions,
+body.theme-8bit .page .ledger-edit-actions{
+  font-family:"Roboto",Arial,sans-serif !important;
+  letter-spacing:0 !important;
+}
+
+/* Titres de mois : petit accent rétro, sans taille énorme */
+body.theme-8bit .page .ledger-month-title > span{
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:14px !important;
+  line-height:1.1 !important;
+  letter-spacing:0 !important;
+}
+body.theme-8bit .page .ledger-month-title > div{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:11px !important;
+  line-height:1.15 !important;
+}
+
+/* En-têtes du tableau Achats / Ventes */
+body.theme-8bit .page .ledger-table th{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:10px !important;
+  line-height:1.08 !important;
+  padding:5px 4px !important;
+  letter-spacing:0 !important;
+  overflow-wrap:normal !important;
+  word-break:normal !important;
+  hyphens:none !important;
+}
+
+/* Données du tableau Achats / Ventes */
+body.theme-8bit .page .ledger-table td{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:11px !important;
+  line-height:1.18 !important;
+  padding:5px 5px !important;
+  letter-spacing:0 !important;
+  word-break:normal !important;
+}
+
+/* Les champs texte un peu longs peuvent revenir proprement à la ligne */
+body.theme-8bit .page .ledger-table td:nth-child(2),
+body.theme-8bit .page .ledger-table td:nth-child(4),
+body.theme-8bit .page .ledger-table td:nth-child(8){
+  overflow-wrap:break-word !important;
+  word-break:normal !important;
+}
+
+/* Résumé du haut */
+body.theme-8bit .page .ledger-summary-card span{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:10px !important;
+}
+body.theme-8bit .page .ledger-summary-card strong{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:18px !important;
+  line-height:1.05 !important;
+}
+
+/* Bloc historique / info */
+body.theme-8bit .page .ledger-history-note{
+  font-size:10px !important;
+  line-height:1.3 !important;
+}
+
+/* Factures fournisseurs */
+body.theme-8bit .page .ledger-supplier-audit,
+body.theme-8bit .page .ledger-supplier-panel,
+body.theme-8bit .page .ledger-supplier-summary{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:11px !important;
+  line-height:1.25 !important;
+}
+
+/* Ajouter une opération */
+body.theme-8bit .page .ledger-add-box > summary{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:12px !important;
+  letter-spacing:0 !important;
+}
+
+/* Boutons Achats / Ventes : plus petits */
+body.theme-8bit .page .ledger-normal-actions .mini-btn,
+body.theme-8bit .page .ledger-edit-actions .mini-btn,
+body.theme-8bit .page .ledger-table .mini-btn{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:9px !important;
+  line-height:1.05 !important;
+  padding:4px 5px !important;
+  min-height:22px !important;
+}
+
+/* Boutons et champs généraux des pages 8-bit */
+body.theme-8bit .page input,
+body.theme-8bit .page textarea,
+body.theme-8bit .page select{
+  font-family:"Roboto",Arial,sans-serif !important;
+  font-size:11px !important;
+  line-height:1.15 !important;
+}
+
+/* Suivi : encore un cran plus compact */
+body.theme-8bit .page .ods-followup-table thead th{
+  font-size:9px !important;
+  line-height:1.05 !important;
+  padding:5px 4px !important;
+}
+body.theme-8bit .page .ods-followup-table tbody td{
+  font-size:11px !important;
+  line-height:1.18 !important;
+  padding:5px 5px !important;
+}
+body.theme-8bit .page .followup-month-row td{
+  font-size:13px !important;
+  padding:6px !important;
+}
+body.theme-8bit .page .followup-actions .mini-btn{
+  font-size:9px !important;
+  padding:4px 5px !important;
+  min-height:22px !important;
+}
+
+/* Les gros titres restent rétro mais plus sages */
+body.theme-8bit .page .banner-title{
+  font-size:16px !important;
+}
+body.theme-8bit .page .banner-top{
+  font-size:10px !important;
+}
+body.theme-8bit .page .section-title{
+  font-size:13px !important;
+}
