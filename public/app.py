@@ -97,7 +97,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.224"
+APP_VERSION = "2.3.226"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -860,12 +860,16 @@ def force_utf8_html(response):
             html = response.get_data(as_text=True)
             css_tag = f'<link rel="stylesheet" href="/static/wopr-responsive.css?v={APP_VERSION}">'
             js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
+            print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
 
             if "wopr-responsive.css" not in html and "</head>" in html:
                 html = html.replace("</head>", css_tag + "\n</head>", 1)
 
             if "wopr-responsive.js" not in html and "</body>" in html:
                 html = html.replace("</body>", js_tag + "\n</body>", 1)
+
+            if "wopr-print.js" not in html and "</body>" in html:
+                html = html.replace("</body>", print_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
@@ -9111,7 +9115,7 @@ def client_message_from_client(client_id):
     else:
         display_name = ""
 
-    salutation = f"Bonjour {display_name}," if display_name else "Bonjour,"
+    salutation = "Bonjour,"
     ident = business_identity()
     footer = message_signature()
 
@@ -9168,7 +9172,7 @@ def client_message(rid):
     r = dict(row)
     first_name = str(r.get("client_first_name") or "").strip()
     display_name = first_name or str(r.get("client_name") or "").strip()
-    salutation = f"Bonjour {display_name}," if display_name else "Bonjour,"
+    salutation = "Bonjour,"
 
     device_bits = [
         str(r.get("device_type") or "").strip(),
@@ -10811,7 +10815,9 @@ def intake_pdf(rid):
     return send_file(
         bio,
         mimetype="application/pdf",
-        as_attachment=True,
+        # V2.3.226 : le bouton Imprimer ouvre le PDF dans le lecteur intégré
+        # du navigateur au lieu de forcer son téléchargement.
+        as_attachment=request.args.get("inline") != "1",
         download_name=suivi_filename
     )
 
@@ -11512,7 +11518,9 @@ def invoice_pdf(rid):
     return send_file(
         bio,
         mimetype="application/pdf",
-        as_attachment=True,
+        # V2.3.226 : ?inline=1 est réservé à l'affichage/impression dans
+        # le lecteur PDF du navigateur. Le téléchargement classique reste inchangé.
+        as_attachment=request.args.get("inline") != "1",
         download_name=invoice_filename
     )
 
