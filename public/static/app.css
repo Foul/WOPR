@@ -4705,3 +4705,225 @@ body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-ch
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(3){background:#ffefc9 !important;color:#6a4500 !important;border-color:#08131f !important;}
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(4){background:#eadcff !important;color:#4e2478 !important;border-color:#08131f !important;}
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5){background:#ffdede !important;color:#7a1f1f !important;border-color:#08131f !important;}
+/* =====================================================================
+   WOPR 2.3.283 — 8-BIT ACTIONS FINAL
+   Source de vérité finale : app.css, chargé directement par base.html.
+   Aucun sélecteur ne dépend de la structure DOM : on cible les classes
+   réelles des boutons eux-mêmes.
+   ===================================================================== */
+
+body.theme-8bit{
+  --w8f-dark:#07131d;
+  --w8f-blue-bg:#dcecff;
+  --w8f-blue-fg:#103d66;
+  --w8f-green-bg:#ddf5e6;
+  --w8f-green-fg:#14502e;
+  --w8f-amber-bg:#ffedbd;
+  --w8f-amber-fg:#6b4500;
+  --w8f-purple-bg:#eadcff;
+  --w8f-purple-fg:#4c2477;
+  --w8f-red-bg:#ffdada;
+  --w8f-red-fg:#7c2020;
+  --w8f-neutral-bg:#f4f7f9;
+  --w8f-neutral-fg:#263746;
+}
+
+/* Skin pixel commun — ciblage DIRECT des classes réelles. */
+body.theme-8bit .wopr-action-open,
+body.theme-8bit .wopr-action-send,
+body.theme-8bit .wopr-action-save,
+body.theme-8bit .wopr-action-edit,
+body.theme-8bit .wopr-action-folder,
+body.theme-8bit .wopr-action-special,
+body.theme-8bit .wopr-action-delete,
+body.theme-8bit .wopr-action-neutral,
+body.theme-8bit .wopr-folder-v248,
+body.theme-8bit .wopr-print-pdf-btn,
+body.theme-8bit .ledger-edit-btn,
+body.theme-8bit .ledger-folder-btn,
+body.theme-8bit .ledger-normal-actions .danger-btn{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  border:2px solid var(--w8f-dark) !important;
+  border-radius:0 !important;
+  background-image:none !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 var(--w8f-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  line-height:1.05 !important;
+  letter-spacing:0 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+  min-height:24px !important;
+  padding:4px 7px !important;
+  transform:none !important;
+  transition:none !important;
+  clip-path:none !important;
+}
+
+/* BLEU — ouvrir / PDF / impression */
+body.theme-8bit .wopr-action-open,
+body.theme-8bit .wopr-print-pdf-btn{
+  background:var(--w8f-blue-bg) !important;
+  background-color:var(--w8f-blue-bg) !important;
+  color:var(--w8f-blue-fg) !important;
+  border-color:var(--w8f-dark) !important;
+}
+
+/* VERT — envoyer / enregistrer */
+body.theme-8bit .wopr-action-send,
+body.theme-8bit .wopr-action-save{
+  background:var(--w8f-green-bg) !important;
+  background-color:var(--w8f-green-bg) !important;
+  color:var(--w8f-green-fg) !important;
+  border-color:var(--w8f-dark) !important;
+}
+
+/* AMBRE — modifier */
+body.theme-8bit .wopr-action-edit,
+body.theme-8bit .ledger-edit-btn{
+  background:var(--w8f-amber-bg) !important;
+  background-color:var(--w8f-amber-bg) !important;
+  color:var(--w8f-amber-fg) !important;
+  border-color:var(--w8f-dark) !important;
+}
+
+/* VIOLET — dossier / fusionner / joindre */
+body.theme-8bit .wopr-action-folder,
+body.theme-8bit .wopr-action-special,
+body.theme-8bit .wopr-folder-v248,
+body.theme-8bit .ledger-folder-btn{
+  background:var(--w8f-purple-bg) !important;
+  background-color:var(--w8f-purple-bg) !important;
+  color:var(--w8f-purple-fg) !important;
+  border-color:var(--w8f-dark) !important;
+}
+
+/* ROUGE — supprimer */
+body.theme-8bit .wopr-action-delete,
+body.theme-8bit .danger-btn.wopr-action-delete,
+body.theme-8bit .ledger-normal-actions .danger-btn{
+  background:var(--w8f-red-bg) !important;
+  background-color:var(--w8f-red-bg) !important;
+  color:var(--w8f-red-fg) !important;
+  border-color:var(--w8f-dark) !important;
+}
+
+/* NEUTRE — annuler */
+body.theme-8bit .wopr-action-neutral{
+  background:var(--w8f-neutral-bg) !important;
+  background-color:var(--w8f-neutral-bg) !important;
+  color:var(--w8f-neutral-fg) !important;
+  border-color:var(--w8f-dark) !important;
+}
+
+/* Les select Facture PDF ont un rendu natif qui peut survivre selon Chromium.
+   On le neutralise explicitement tout en gardant la flèche du select. */
+body.theme-8bit select.pdf-lang-select.wopr-action-open{
+  appearance:auto !important;
+  -webkit-appearance:menulist !important;
+  background-color:var(--w8f-blue-bg) !important;
+  color:var(--w8f-blue-fg) !important;
+  border:2px solid var(--w8f-dark) !important;
+  border-radius:0 !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    2px 2px 0 var(--w8f-dark) !important;
+}
+
+/* Appui arcade */
+body.theme-8bit .wopr-action-open:hover,
+body.theme-8bit .wopr-action-send:hover,
+body.theme-8bit .wopr-action-save:hover,
+body.theme-8bit .wopr-action-edit:hover,
+body.theme-8bit .wopr-action-folder:hover,
+body.theme-8bit .wopr-action-special:hover,
+body.theme-8bit .wopr-action-delete:hover,
+body.theme-8bit .wopr-action-neutral:hover,
+body.theme-8bit .wopr-folder-v248:hover,
+body.theme-8bit .wopr-print-pdf-btn:hover,
+body.theme-8bit .ledger-edit-btn:hover,
+body.theme-8bit .ledger-folder-btn:hover,
+body.theme-8bit .ledger-normal-actions .danger-btn:hover{
+  transform:translate(1px,1px) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.60),
+    1px 1px 0 var(--w8f-dark) !important;
+}
+
+body.theme-8bit .wopr-action-open:active,
+body.theme-8bit .wopr-action-send:active,
+body.theme-8bit .wopr-action-save:active,
+body.theme-8bit .wopr-action-edit:active,
+body.theme-8bit .wopr-action-folder:active,
+body.theme-8bit .wopr-action-special:active,
+body.theme-8bit .wopr-action-delete:active,
+body.theme-8bit .wopr-action-neutral:active,
+body.theme-8bit .wopr-folder-v248:active,
+body.theme-8bit .wopr-print-pdf-btn:active,
+body.theme-8bit .ledger-edit-btn:active,
+body.theme-8bit .ledger-folder-btn:active,
+body.theme-8bit .ledger-normal-actions .danger-btn:active{
+  transform:translate(2px,2px) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.45) !important;
+}
+
+/* ==========================================================
+   Tables 8-bit : touche arcade légère, données toujours lisibles
+   ========================================================== */
+body.theme-8bit .invoice-list-table,
+body.theme-8bit .contacts-table,
+body.theme-8bit .ledger-table,
+body.theme-8bit .ods-followup-table{
+  border:2px solid #2d5876 !important;
+  border-collapse:separate !important;
+  border-spacing:0 !important;
+  box-shadow:3px 3px 0 rgba(7,19,29,.18) !important;
+}
+
+body.theme-8bit .invoice-list-table thead th,
+body.theme-8bit .contacts-table thead th,
+body.theme-8bit .ledger-table thead th,
+body.theme-8bit .ods-followup-table thead th{
+  background:#edf6fd !important;
+  color:#173047 !important;
+  border-bottom:2px solid #2d5876 !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+  text-transform:uppercase !important;
+  letter-spacing:0 !important;
+}
+
+body.theme-8bit .followup-month-row td,
+body.theme-8bit .ledger-month-title{
+  background:#e5f3ff !important;
+  color:#173047 !important;
+  border-color:#2d5876 !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+}
+
+/* ==========================================================
+   Badges / pastilles
+   ========================================================== */
+body.theme-8bit .payment-mode-badge,
+body.theme-8bit .repair-state-badge,
+body.theme-8bit .return-wait-badge,
+body.theme-8bit .quote-status,
+body.theme-8bit .legacy-mini,
+body.theme-8bit .simple-invoice-mini{
+  border-radius:0 !important;
+  border:1px solid var(--w8f-dark) !important;
+  box-shadow:
+    inset 1px 1px 0 rgba(255,255,255,.65),
+    1px 1px 0 rgba(7,19,29,.25) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:9px !important;
+  font-weight:800 !important;
+  line-height:1 !important;
+  padding:2px 5px !important;
+}
