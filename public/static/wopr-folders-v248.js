@@ -211,7 +211,6 @@
         wrapActionCell(cell, 2);
       });
     }
-
   }
 
   function scanAll() {

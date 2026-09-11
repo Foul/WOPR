@@ -138,39 +138,52 @@
   margin:0 !important;
 }
 
-/* 2.3.256 — Contacts : compacter seulement les actions, sans modifier le tableau. */
+/* 2.3.257 — Clients : garder le tableau d'origine et compacter UNIQUEMENT Actions. */
 .wopr-page-contacts table tbody td:last-child{
-  width:220px !important;
-  min-width:220px !important;
+  width:205px !important;
+  min-width:205px !important;
+  max-width:205px !important;
+  padding:5px !important;
+  vertical-align:middle !important;
   text-align:center !important;
-  vertical-align:middle !important;
-  white-space:normal !important;
-}
 
-.wopr-page-contacts table tbody td:last-child > a,
-.wopr-page-contacts table tbody td:last-child > button,
-.wopr-page-contacts table tbody td:last-child > form{
-  display:inline-block !important;
-  width:auto !important;
-  min-width:92px !important;
-  margin:2px !important;
-  vertical-align:middle !important;
-}
-
-.wopr-page-contacts table tbody td:last-child > form{
-  padding:0 !important;
-}
-
-.wopr-page-contacts table tbody td:last-child > form > button,
-.wopr-page-contacts table tbody td:last-child > a,
-.wopr-page-contacts table tbody td:last-child > button{
-  width:100% !important;
+  display:grid !important;
+  grid-template-columns:repeat(2, minmax(0, 1fr)) !important;
+  gap:4px !important;
+  align-content:center !important;
+  align-items:stretch !important;
   box-sizing:border-box !important;
-  padding:4px 7px !important;
-  min-height:27px !important;
-  line-height:1.1 !important;
 }
 
-.wopr-page-contacts table tbody td:last-child .mini-btn{
-  margin:2px !important;
+/* Tous les éléments d'action deviennent de vrais items de la grille. */
+.wopr-page-contacts table tbody td:last-child > *{
+  min-width:0 !important;
+  width:100% !important;
+  margin:0 !important;
+  box-sizing:border-box !important;
+}
+
+/* Les formulaires ne doivent pas recréer une colonne verticale interne. */
+.wopr-page-contacts table tbody td:last-child > form{
+  display:block !important;
+}
+
+/* Boutons / liens compacts et de même hauteur. */
+.wopr-page-contacts table tbody td:last-child a,
+.wopr-page-contacts table tbody td:last-child button,
+.wopr-page-contacts table tbody td:last-child input[type="button"],
+.wopr-page-contacts table tbody td:last-child input[type="submit"]{
+  width:100% !important;
+  min-width:0 !important;
+  min-height:26px !important;
+  padding:4px 6px !important;
+  margin:0 !important;
+  line-height:1.1 !important;
+  box-sizing:border-box !important;
+  white-space:nowrap !important;
+}
+
+/* Si un conteneur d'actions existe déjà, il se fond dans la grille du TD. */
+.wopr-page-contacts table tbody td:last-child > div{
+  display:contents !important;
 }
