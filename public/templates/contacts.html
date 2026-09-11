@@ -1,6 +1,47 @@
 {% extends "base.html" %}
 {% block title %}{{ "Clients archivés" if show_archived else "Clients" }} - {{ business_name }}{% endblock %}
 {% block body %}
+
+<style>
+/* Clients 2.3.259 — actions normales compactes, directement dans le template. */
+.contacts-table .contact-cell-actions{
+  vertical-align: middle;
+  text-align: center;
+}
+
+.contacts-table .contact-normal-actions{
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  gap: 4px;
+  width: 100%;
+  max-width: 190px;
+  margin: 0 auto;
+  align-items: stretch;
+}
+
+.contacts-table .contact-normal-actions > .mini-btn{
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px !important;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* 5 boutons : le dernier (Supprimer) reste centré sur une 3e ligne courte. */
+.contacts-table .contact-normal-actions > .mini-btn:last-child:nth-child(odd){
+  grid-column: 1 / -1;
+  width: calc(50% - 2px) !important;
+  justify-self: center;
+}
+
+/* Le mode édition reste entièrement géré par le CSS/JS existant de WOPR. */
+</style>
+
 <div class="sheet-banner narrow">
   <div class="banner-top">WOPR</div>
   <div class="banner-title">{{ "Clients archivés" if show_archived else "Clients" }}</div>
