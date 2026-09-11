@@ -124,38 +124,8 @@
   }
 
   function scanLedger() {
-    if (!/^\/achats-ventes(?:\/|$)/.test(location.pathname)) return;
-
-    document.querySelectorAll("tbody tr, table tr").forEach(row => {
-      // Achat fournisseur : justificatif lié.
-      const supplier = row.querySelector('a[href*="/achats-ventes/"][href*="/document/view"]');
-      if (supplier) {
-        const m = supplier.getAttribute("href").match(/\/achats-ventes\/(\d+)\/document\/view/i);
-        if (m) {
-          addAtEnd(
-            row,
-            `/achats-ventes/${m[1]}/document/folder`,
-            "Ouvrir le dossier de ce justificatif",
-            `ledger-${m[1]}`
-          );
-          return;
-        }
-      }
-
-      // Vente client : facture liée.
-      const sale = row.querySelector('a[href*="/achats-ventes/vente/"][href*="/facture"]');
-      if (sale) {
-        const m = sale.getAttribute("href").match(/\/achats-ventes\/vente\/(\d+)\/facture/i);
-        if (m) {
-          addAtEnd(
-            row,
-            `/achats-ventes/vente/${m[1]}/folder`,
-            "Ouvrir le dossier de cette facture client",
-            `sale-${m[1]}`
-          );
-        }
-      }
-    });
+    // Géré directement dans achats_ventes.html depuis 2.3.251.
+    // Cela garantit : bouton Ouvrir => bouton Dossier, sans exception ni doublon.
   }
 
   function scanRepairDetail() {
