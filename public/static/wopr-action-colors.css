@@ -1,0 +1,142 @@
+/* WOPR 2.3.263 — palette sémantique des actions, robuste quel que soit le thème.
+   Bleu = ouvrir / PDF / historique
+   Vert = message / envoyer / enregistrer
+   Ambre = modifier
+   Violet = dossier / fusionner / facturer / action spéciale
+   Rouge = supprimer
+*/
+
+:root{
+  --wopr-action-blue-bg:#eef6ff;
+  --wopr-action-blue-border:#9fc6ef;
+  --wopr-action-blue-text:#184f82;
+
+  --wopr-action-green-bg:#eefaf3;
+  --wopr-action-green-border:#9fd6b5;
+  --wopr-action-green-text:#23613b;
+
+  --wopr-action-amber-bg:#fff7e8;
+  --wopr-action-amber-border:#e6c98b;
+  --wopr-action-amber-text:#745116;
+
+  --wopr-action-purple-bg:#f5efff;
+  --wopr-action-purple-border:#c9b2ea;
+  --wopr-action-purple-text:#56358a;
+
+  --wopr-action-red-bg:#fff0f0;
+  --wopr-action-red-border:#e7aaaa;
+  --wopr-action-red-text:#8a2f2f;
+}
+
+/* Haute spécificité + suppression des gradients éventuels imposés par les thèmes. */
+html body :is(a,button,select,input).wopr-action-open{
+  background:var(--wopr-action-blue-bg) !important;
+  background-color:var(--wopr-action-blue-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-blue-border) !important;
+  color:var(--wopr-action-blue-text) !important;
+  box-shadow:none !important;
+  text-shadow:none !important;
+}
+
+html body :is(a,button,select,input).wopr-action-send,
+html body :is(a,button,select,input).wopr-action-save{
+  background:var(--wopr-action-green-bg) !important;
+  background-color:var(--wopr-action-green-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-green-border) !important;
+  color:var(--wopr-action-green-text) !important;
+  box-shadow:none !important;
+  text-shadow:none !important;
+}
+
+html body :is(a,button,select,input).wopr-action-edit{
+  background:var(--wopr-action-amber-bg) !important;
+  background-color:var(--wopr-action-amber-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-amber-border) !important;
+  color:var(--wopr-action-amber-text) !important;
+  box-shadow:none !important;
+  text-shadow:none !important;
+}
+
+html body :is(a,button,select,input).wopr-action-folder,
+html body :is(a,button,select,input).wopr-action-special,
+html body :is(a,button,select,input)[data-wopr-folder-url]{
+  background:var(--wopr-action-purple-bg) !important;
+  background-color:var(--wopr-action-purple-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-purple-border) !important;
+  color:var(--wopr-action-purple-text) !important;
+  box-shadow:none !important;
+  text-shadow:none !important;
+}
+
+html body :is(a,button,select,input).wopr-action-delete{
+  background:var(--wopr-action-red-bg) !important;
+  background-color:var(--wopr-action-red-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-red-border) !important;
+  color:var(--wopr-action-red-text) !important;
+  box-shadow:none !important;
+  text-shadow:none !important;
+}
+
+/* Clients : même palette, sans dépendre du thème. */
+html body .contacts-table .contact-normal-actions > .mini-btn:nth-child(1){
+  background:var(--wopr-action-blue-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-blue-border) !important;
+  color:var(--wopr-action-blue-text) !important;
+}
+html body .contacts-table .contact-normal-actions > .mini-btn:nth-child(2){
+  background:var(--wopr-action-green-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-green-border) !important;
+  color:var(--wopr-action-green-text) !important;
+}
+html body .contacts-table .contact-normal-actions > .mini-btn:nth-child(3){
+  background:var(--wopr-action-amber-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-amber-border) !important;
+  color:var(--wopr-action-amber-text) !important;
+}
+html body .contacts-table .contact-normal-actions > .mini-btn:nth-child(4){
+  background:var(--wopr-action-purple-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-purple-border) !important;
+  color:var(--wopr-action-purple-text) !important;
+}
+html body .contacts-table .contact-normal-actions > .mini-btn:nth-child(5){
+  background:var(--wopr-action-red-bg) !important;
+  background-image:none !important;
+  border-color:var(--wopr-action-red-border) !important;
+  color:var(--wopr-action-red-text) !important;
+}
+
+html body :is(
+  .wopr-action-open,
+  .wopr-action-send,
+  .wopr-action-save,
+  .wopr-action-edit,
+  .wopr-action-folder,
+  .wopr-action-special,
+  .wopr-action-delete,
+  [data-wopr-folder-url]
+):hover{
+  filter:brightness(.96) !important;
+}
+
+html body :is(
+  .wopr-action-open,
+  .wopr-action-send,
+  .wopr-action-save,
+  .wopr-action-edit,
+  .wopr-action-folder,
+  .wopr-action-special,
+  .wopr-action-delete,
+  [data-wopr-folder-url]
+):focus-visible{
+  outline:2px solid currentColor !important;
+  outline-offset:2px !important;
+}
