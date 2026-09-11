@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.235"
+APP_VERSION = "2.3.236"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4153,254 +4153,133 @@ def auto_link_supplier_documents(years=(2025, 2026)):
 
 
 def ledger_document_file(row):
-    """Résout une pièce fournisseur, même si l'ancien chemin SQL est devenu invalide."""
+    """Résout une pièce fournisseur déplacée dans documents/Fournisseurs.
+
+    Ordre volontairement déterministe :
+      1. vraie référence de facture si connue ;
+      2. nom original enregistré ;
+      3. nom du fichier de l'ancien document_path ;
+      4. fournisseur + date si résultat unique ;
+      5. même logique dans toute l'arborescence Fournisseurs.
+
+    Un ancien chemin faux ne doit jamais empêcher la recherche.
+    """
     if not row:
         return None
 
     rel = str(row["document_path"] or "").strip()
+    original_name = str(row["document_original_name"] or "").strip()
+    invoice_no = str(row["invoice_no"] or "").strip()
+    party = str(row["party"] or "").strip()
+    entry_date = str(row["entry_date"] or "").strip()
 
-    # V2.3.232 — IMPORTANT :
-    # un ancien document_path peut être vide, absolu, Windows, ou pointer vers
-    # l'ancienne arborescence. Cela ne doit JAMAIS empêcher la recherche dans
-    # private/documents/Fournisseurs/AAAA/MM - Mois/.
-    #
-    # On tente donc le chemin mémorisé seulement comme raccourci. S'il est mauvais,
-    # on continue au lieu de retourner None.
+    def _basename(value):
+        return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
+
+    def _files(folder):
+        try:
+            return [
+                p for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+            ]
+        except Exception:
+            return []
+
+    def _pick(candidates):
+        if not candidates:
+            return None
+
+        # 1) La référence de facture est prioritaire sur les anciens noms.
+        invoice_key = _match_key(invoice_no)
+        if invoice_key and len(invoice_key) >= 4:
+            hits = [p for p in candidates if invoice_key in _match_key(p.stem)]
+            if len(hits) == 1:
+                return hits[0]
+            if len(hits) > 1:
+                party_key = _match_key(party)
+                if party_key and len(party_key) >= 3:
+                    narrowed = [p for p in hits if party_key in _match_key(p.stem)]
+                    if len(narrowed) == 1:
+                        return narrowed[0]
+
+        # 2) Nom original puis ancien basename document_path.
+        for wanted in (_basename(original_name), _basename(rel)):
+            if not wanted:
+                continue
+            hits = [p for p in candidates if p.name.casefold() == wanted.casefold()]
+            if len(hits) == 1:
+                return hits[0]
+
+        # 3) Fournisseur + date, seulement si sans ambiguïté.
+        party_key = _match_key(party)
+        date_keys = set()
+        try:
+            d = datetime.strptime(entry_date, "%Y-%m-%d")
+            date_keys.update({
+                _match_key(d.strftime("%Y%m%d")),
+                _match_key(d.strftime("%d%m%Y")),
+            })
+        except Exception:
+            pass
+        date_keys.discard("")
+
+        if party_key and len(party_key) >= 3:
+            hits = []
+            for p in candidates:
+                key = _match_key(p.stem)
+                if party_key in key and (not date_keys or any(dk in key for dk in date_keys)):
+                    hits.append(p)
+            if len(hits) == 1:
+                return hits[0]
+
+        return None
+
+    # Ancien chemin encore valide ? On l'accepte uniquement si le fichier existe.
+    # Mais si invoice_no est renseigné et que le basename ne correspond pas à cette
+    # référence, on ne fait PAS confiance à ce vieux lien (cas FR6201Q9ABEI qui
+    # pointait encore vers FR61SZP5ABEI).
     if rel:
         try:
             candidate = (FOULFIX_ROOT / rel).resolve()
-            supplier_root = FOURNISSEURS_ROOT.resolve()
-            old_supplier_root = FACTURES_ROOT.resolve()
-
             allowed = False
-            try:
-                candidate.relative_to(supplier_root)
-                allowed = True
-            except Exception:
+            for root in (FOURNISSEURS_ROOT.resolve(), FACTURES_ROOT.resolve()):
                 try:
-                    candidate.relative_to(old_supplier_root)
+                    candidate.relative_to(root)
                     allowed = True
+                    break
                 except Exception:
-                    pass
-
-            if allowed and candidate.is_file():
-                return candidate
+                    continue
         except Exception:
-            pass
+            allowed = False
 
-    # V2.3.231 — migration d'arborescence robuste :
-    # ancien : Factures/YYYY/MM - Mois/Fournisseurs/fichier.pdf
-    # nouveau : Fournisseurs/YYYY/MM - Mois/fichier.pdf
-    #
-    # On cherche D'ABORD dans le mois calculé depuis entry_date, qui est désormais
-    # la source de vérité pour le classement des fournisseurs.
+        if allowed and candidate.is_file():
+            invoice_key = _match_key(invoice_no)
+            if not invoice_key or invoice_key in _match_key(candidate.stem):
+                return candidate
+
+    # D'abord le mois réel de la ligne.
     try:
-        d = datetime.strptime(str(row["entry_date"] or ""), "%Y-%m-%d")
-        new_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
-
-        if new_folder.is_dir():
-            # Les anciens chemins ont pu être enregistrés sous Windows ou Linux.
-            # Path(...).name sous Linux ne découpe pas les antislashs Windows,
-            # donc on normalise explicitement les séparateurs.
-            def _stored_basename(value):
-                return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
-
-            stored_names = []
-            for value in (rel, row["document_original_name"] or ""):
-                name = _stored_basename(value)
-                if name and name not in stored_names:
-                    stored_names.append(name)
-
-            # 1) Même nom de fichier après simple déplacement.
-            month_files = [p for p in new_folder.iterdir() if p.is_file()]
-            by_casefold = {p.name.casefold(): p for p in month_files}
-            for name in stored_names:
-                hit = by_casefold.get(name.casefold())
-                if hit and hit.is_file():
-                    return hit
-
-            # 2) Numéro de facture présent dans le nom : pour une ligne déjà liée,
-            # c'est le meilleur moyen de retrouver un fichier qui aurait aussi été renommé.
-            invoice_key = _match_key(row["invoice_no"] or "")
-            if invoice_key:
-                invoice_hits = [
-                    p for p in month_files
-                    if invoice_key in _match_key(p.stem)
-                ]
-                if len(invoice_hits) == 1:
-                    return invoice_hits[0]
-
-                # V2.3.234 — plusieurs fichiers peuvent contenir le même numéro
-                # (ex. LEB-2026-09-158706.pdf et
-                # "Le Bon Coin_LEB-2026-09-158706.pdf").
-                # Dans ce cas, on privilégie le fichier qui contient aussi le
-                # nom du fournisseur si cela donne un résultat unique.
-                if len(invoice_hits) > 1:
-                    party_key_for_invoice = _match_key(row["party"] or "")
-                    if party_key_for_invoice and len(party_key_for_invoice) >= 3:
-                        party_invoice_hits = [
-                            p for p in invoice_hits
-                            if party_key_for_invoice in _match_key(p.stem)
-                        ]
-                        if len(party_invoice_hits) == 1:
-                            return party_invoice_hits[0]
-
-            # 3) Fournisseur + date si c'est sans ambiguïté.
-            party_key = _match_key(row["party"] or "")
-            party_hits = []
-
-            date_keys = set()
-            try:
-                d2 = datetime.strptime(str(row["entry_date"] or ""), "%Y-%m-%d")
-                date_keys.update({
-                    _match_key(d2.strftime("%Y%m%d")),
-                    _match_key(d2.strftime("%d%m%Y")),
-                })
-            except Exception:
-                pass
-            date_keys.discard("")
-
-            if party_key and len(party_key) >= 3:
-                for p in month_files:
-                    name_key = _match_key(p.stem)
-                    if party_key in name_key and (not date_keys or any(k in name_key for k in date_keys)):
-                        party_hits.append(p)
-                if len(party_hits) == 1:
-                    return party_hits[0]
+        d = datetime.strptime(entry_date, "%Y-%m-%d")
+        month_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
+        hit = _pick(_files(month_folder))
+        if hit:
+            return hit
     except Exception:
         pass
 
-    # V2.3.235 — dernier filet de sécurité AVANT les anciens fallbacks :
-    # le classement manuel dans Fournisseurs/ fait foi. Si la date enregistrée
-    # dans Achats/Ventes ne correspond pas au mois réel du PDF, on cherche dans
-    # toute l'arborescence Fournisseurs au lieu de rester bloqué dans le mois SQL.
-    #
-    # Priorités sûres :
-    #   1. nom de fichier exact mémorisé ;
-    #   2. numéro de facture présent dans un seul fichier ;
-    #   3. si plusieurs fichiers portent le même numéro, fournisseur + numéro.
+    # Puis toute l'arborescence : utile après déplacement manuel ou date historique
+    # légèrement différente du mois où le justificatif a été classé.
     try:
-        all_supplier_files = [
+        all_files = [
             p for p in FOURNISSEURS_ROOT.rglob("*")
             if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
         ]
-
-        def _global_basename(value):
-            return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
-
-        # 1) Nom exact, indépendamment de l'année/mois enregistré en base.
-        stored_global_names = []
-        for value in (rel, row["document_original_name"] or ""):
-            name = _global_basename(value)
-            if name and name not in stored_global_names:
-                stored_global_names.append(name)
-
-        for stored_name in stored_global_names:
-            exact_hits = [
-                p for p in all_supplier_files
-                if p.name.casefold() == stored_name.casefold()
-            ]
-            if len(exact_hits) == 1:
-                return exact_hits[0]
-
-        # 2) Numéro de facture unique dans toute l'arborescence.
-        invoice_key_global = _match_key(row["invoice_no"] or "")
-        if invoice_key_global and len(invoice_key_global) >= 4:
-            invoice_hits_global = [
-                p for p in all_supplier_files
-                if invoice_key_global in _match_key(p.stem)
-            ]
-            if len(invoice_hits_global) == 1:
-                return invoice_hits_global[0]
-
-            # 3) Plusieurs résultats : on affine avec le fournisseur.
-            if len(invoice_hits_global) > 1:
-                party_key_global = _match_key(row["party"] or "")
-                if party_key_global and len(party_key_global) >= 3:
-                    narrowed_global = [
-                        p for p in invoice_hits_global
-                        if party_key_global in _match_key(p.stem)
-                    ]
-                    if len(narrowed_global) == 1:
-                        return narrowed_global[0]
+        hit = _pick(all_files)
+        if hit:
+            return hit
     except Exception:
         pass
 
-    # Racines utilisées plus bas par les fallbacks de compatibilité.
-    supplier_root = FOURNISSEURS_ROOT.resolve()
-
-    # Compatibilité avec les quelques liens créés par 2.3.91/2.3.92 au singulier.
-    # Aucun dossier singulier n'est recréé : on tente seulement le chemin pluriel.
-    rel_plural = rel.replace("/Fournisseur/", "/Fournisseurs/").replace("\\Fournisseur\\", "\\Fournisseurs\\")
-    if rel_plural != rel:
-        try:
-            alt = (FOULFIX_ROOT / rel_plural).resolve()
-            # Ancien stockage sous Factures/... accepté uniquement en lecture de compatibilité.
-            allowed_old_root = FACTURES_ROOT.resolve()
-            try:
-                alt.relative_to(supplier_root)
-            except Exception:
-                alt.relative_to(allowed_old_root)
-            if alt.is_file():
-                return alt
-        except Exception:
-            pass
-
-    # V2.3.96 — si une ancienne version a créé puis supprimé une copie, le lien SQL
-    # peut pointer vers ce nom disparu alors que LE fichier original est toujours dans
-    # Fournisseurs. On cherche d'abord le nom d'origine exact (sans rien copier/renommer).
-    try:
-        folder = year_month_folder(FOURNISSEURS_ROOT, row["entry_date"], supplier=False, create=False)
-    except Exception:
-        folder = None
-    if folder and folder.is_dir():
-        original_name = str(row["document_original_name"] or "").replace("\\", "/").rstrip("/").split("/")[-1]
-        if original_name:
-            exact = folder / original_name
-            if exact.is_file():
-                return exact
-
-        # Puis le basename mémorisé dans l'ancien chemin, au cas où seul le dossier a changé.
-        old_name = str(rel or "").replace("\\", "/").rstrip("/").split("/")[-1]
-        if old_name:
-            exact_old = folder / old_name
-            if exact_old.is_file():
-                return exact_old
-
-        # Compatibilité anciens liens composés : certaines versions ont mémorisé un nom
-        # reconstruit contenant à la fois l'ancien numéro du registre et le vrai numéro
-        # présent dans le nom du fichier (ex. Amazon_OLD-REAL.pdf).
-        # On récupère uniquement sur un identifiant alphanumérique long ET unique dans
-        # le dossier du mois. Aucun fichier n'est créé, copié ou renommé.
-        stored_names = [original_name, old_name]
-        invoice_key = _match_key(row["invoice_no"] or "")
-        party_key = _match_key(row["party"] or "")
-        recovery_tokens = set()
-        for stored_name in stored_names:
-            stem = Path(stored_name or "").stem
-            for token in re.findall(r"[A-Za-z0-9]{8,}", stem):
-                token_key = _match_key(token)
-                if not token_key or token_key == invoice_key or token_key == party_key:
-                    continue
-                recovery_tokens.add(token_key)
-
-        if recovery_tokens:
-            token_matches = []
-            for path in _supplier_document_candidates(row["entry_date"]):
-                name_key = _match_key(path.stem)
-                if any(tok in name_key for tok in recovery_tokens):
-                    token_matches.append(path)
-            unique_matches = list(dict.fromkeys(token_matches))
-            if len(unique_matches) == 1 and unique_matches[0].is_file():
-                return unique_matches[0]
-
-        # Dernier recours : uniquement le même moteur de rapprochement "sûr" que le bouton auto.
-        try:
-            match, _reason = _supplier_auto_match(row, _supplier_document_candidates(row["entry_date"]))
-            if match and match.is_file():
-                return match
-        except Exception:
-            pass
     return None
 
 
