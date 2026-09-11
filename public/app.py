@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, jsonify, Response, session, abort
+from html import escape as html_escape
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -98,7 +99,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.246"
+APP_VERSION = "2.3.247"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -845,6 +846,97 @@ app.config.update(
 )
 
 
+
+def _wopr_remove_topbar_simple_invoice(html):
+    """Supprime UNIQUEMENT le premier bouton Facture simple de la navigation haute."""
+    # Dans base.html, la navigation principale est rendue avant le menu/pages.
+    # On retire donc seulement le premier lien /invoice/simple dont le texte est Facture simple.
+    pattern = re.compile(
+        r'<a\b(?=[^>]*\bhref=["\']/invoice/simple(?:[?#][^"\']*)?["\'])[^>]*>'
+        r'(?:(?!</a>).)*?Facture\s+simple(?:(?!</a>).)*?</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.sub("", html, count=1)
+
+
+def _wopr_folder_button(folder_url):
+    safe = html_escape(folder_url, quote=True)
+    return (
+        f'<button type="button" class="wopr-folder-direct" '
+        f'title="Ouvrir le dossier du PDF" aria-label="Ouvrir le dossier du PDF" '
+        f'onclick="fetch(\'{safe}\',{{cache:\'no-store\'}});return false;">📁</button>'
+    )
+
+
+def _wopr_add_pdf_folder_buttons(html):
+    """Ajoute 📁 directement après les liens PDF réellement présents dans le HTML."""
+    if 'wopr-folder-direct' in html:
+        return html
+
+    # Factures liées à un suivi : /repair/<id>/invoice.pdf
+    invoice_link = re.compile(
+        r'(<a\b[^>]*\bhref=["\'](?:https?://[^"\']+)?/repair/(\d+)/invoice\.pdf(?:[?#][^"\']*)?["\'][^>]*>.*?</a>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    html = invoice_link.sub(
+        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/invoice-folder"),
+        html,
+    )
+
+    # PDF de suivi / prise en charge : /repair/<id>/intake.pdf
+    intake_link = re.compile(
+        r'(<a\b[^>]*\bhref=["\'](?:https?://[^"\']+)?/repair/(\d+)/intake\.pdf(?:[?#][^"\']*)?["\'][^>]*>.*?</a>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    html = intake_link.sub(
+        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/intake-folder"),
+        html,
+    )
+
+    # Factures ouvertes depuis Achats/Ventes.
+    ledger_link = re.compile(
+        r'(<a\b[^>]*\bhref=["\'](?:https?://[^"\']+)?/achats-ventes/vente/(\d+)/facture(?:[?#][^"\']*)?["\'][^>]*>.*?</a>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    html = ledger_link.sub(
+        lambda m: m.group(1) + _wopr_folder_button(f"/achats-ventes/vente/{m.group(2)}/folder"),
+        html,
+    )
+
+    # Certains boutons PDF utilisent formaction au lieu de href.
+    invoice_formaction = re.compile(
+        r'(<(?:button|input)\b[^>]*\bformaction=["\'](?:https?://[^"\']+)?/repair/(\d+)/invoice\.pdf(?:[?#][^"\']*)?["\'][^>]*>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    html = invoice_formaction.sub(
+        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/invoice-folder"),
+        html,
+    )
+
+    intake_formaction = re.compile(
+        r'(<(?:button|input)\b[^>]*\bformaction=["\'](?:https?://[^"\']+)?/repair/(\d+)/intake\.pdf(?:[?#][^"\']*)?["\'][^>]*>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    html = intake_formaction.sub(
+        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/intake-folder"),
+        html,
+    )
+
+    # Style compact : n'élargit pas les boutons existants.
+    style = """<style id="wopr-folder-direct-style">
+.wopr-folder-direct{
+ display:inline-flex;align-items:center;justify-content:center;
+ width:20px;height:20px;min-width:20px;padding:0;margin-left:4px;
+ border:1px solid #aeb8c4;border-radius:4px;background:#fff;
+ cursor:pointer;font-size:11px;line-height:1;vertical-align:middle;
+}
+.wopr-folder-direct:hover{background:#eef6ff;border-color:#4b98df}
+</style>"""
+    if "</head>" in html:
+        html = html.replace("</head>", style + "\n</head>", 1)
+    return html
+
+
 # Force explicitement UTF-8 pour toutes les pages HTML.
 # Certains navigateurs Windows peuvent sinon interpréter les accents en Windows-1252
 # lorsque l'en-tête HTTP ne précise pas le charset.
@@ -859,11 +951,12 @@ def force_utf8_html(response):
         # les inclusions dans chaque template.
         try:
             html = response.get_data(as_text=True)
+            html = _wopr_remove_topbar_simple_invoice(html)
+            html = _wopr_add_pdf_folder_buttons(html)
             css_tag = f'<link rel="stylesheet" href="/static/wopr-responsive.css?v={APP_VERSION}">'
             js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
             print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
             google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}" defer></script>'
-            document_folders_js_tag = f'<script src="/static/wopr-document-folders.js?v={APP_VERSION}" defer></script>'
 
             if "wopr-responsive.css" not in html and "</head>" in html:
                 html = html.replace("</head>", css_tag + "\n</head>", 1)
@@ -876,9 +969,6 @@ def force_utf8_html(response):
 
             if "wopr-google-sync.js" not in html and "</body>" in html:
                 html = html.replace("</body>", google_sync_js_tag + "\n</body>", 1)
-
-            if "wopr-document-folders.js" not in html and "</body>" in html:
-                html = html.replace("</body>", document_folders_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
