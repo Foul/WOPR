@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.229"
+APP_VERSION = "2.3.230"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4146,9 +4146,18 @@ def ledger_document_file(row):
     try:
         candidate = (FOULFIX_ROOT / rel).resolve()
         supplier_root = FOURNISSEURS_ROOT.resolve()
-        candidate.relative_to(supplier_root)
+        old_supplier_root = FACTURES_ROOT.resolve()
+
+        # V2.3.230 — pendant la migration, le chemin mémorisé en base peut
+        # encore pointer vers l'ancien emplacement sous Factures/.
+        # On autorise donc temporairement les DEUX racines en lecture.
+        try:
+            candidate.relative_to(supplier_root)
+        except Exception:
+            candidate.relative_to(old_supplier_root)
     except Exception:
         return None
+
     if candidate.is_file():
         return candidate
 
