@@ -156,31 +156,22 @@
     return null;
   }
 
-  function removeDuplicateSimpleInvoiceButton() {
-    const candidates = Array.from(document.querySelectorAll("a[href], button, input[type='button'], input[type='submit']"))
-      .filter(el => {
-        const values = [
-          el.getAttribute?.("href"),
-          el.getAttribute?.("formaction"),
-          el.getAttribute?.("onclick"),
-          el.form?.getAttribute?.("action")
-        ].join(" ");
-        const text = String(el.innerText || el.textContent || el.value || "").trim().toLowerCase();
-        return values.includes("/invoice/simple") && text.includes("facture simple");
-      });
+  function hideTopbarSimpleInvoiceButton() {
+    const candidates = Array.from(
+      document.querySelectorAll("header a[href], nav a[href], .topbar a[href], .navbar a[href], .header a[href]")
+    ).filter(el => {
+      const href = String(el.getAttribute("href") || "");
+      const text = String(el.innerText || el.textContent || "").trim().toLowerCase();
+      return href.includes("/invoice/simple") && text.includes("facture simple");
+    });
 
-    // Le menu est dans le haut du DOM : on garde le premier et on masque le doublon principal.
-    if (candidates.length > 1) {
-      candidates.slice(1).forEach(el => {
-        const wrapper = el.closest("form");
-        (wrapper || el).style.display = "none";
-      });
-    }
+    candidates.forEach(el => {
+      el.style.display = "none";
+    });
   }
 
   function scan() {
-    removeDuplicateSimpleInvoiceButton();
-
+    hideTopbarSimpleInvoiceButton();
     // Liens/boutons qui pointent directement vers un PDF.
     document.querySelectorAll("a[href], button, input[type='button'], input[type='submit'], form[action]").forEach(el => {
       if (el.dataset?.woprFolderHelper === "1") return;
