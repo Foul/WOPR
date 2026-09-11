@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.238"
+APP_VERSION = "2.3.239"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -8341,7 +8341,9 @@ def quote_pdf(quote_id):
     return send_file(
         bio,
         mimetype="application/pdf",
-        as_attachment=True,
+        # V2.3.239 : le devis vient d'être archivé dans private/documents/Devis.
+        # L'utilisateur le visualise sans créer une seconde copie dans Téléchargements.
+        as_attachment=False,
         download_name=quote_filename
     )
 
@@ -10944,9 +10946,10 @@ def intake_pdf(rid):
     return send_file(
         bio,
         mimetype="application/pdf",
-        # V2.3.226 : le bouton Imprimer ouvre le PDF dans le lecteur intégré
-        # du navigateur au lieu de forcer son téléchargement.
-        as_attachment=request.args.get("inline") != "1",
+        # V2.3.239 : le PDF est déjà archivé dans private/documents.
+        # On l'affiche dans le navigateur au lieu d'en créer une 2e copie
+        # dans Téléchargements.
+        as_attachment=False,
         download_name=suivi_filename
     )
 
@@ -11672,9 +11675,10 @@ def invoice_pdf(rid):
     return send_file(
         bio,
         mimetype="application/pdf",
-        # V2.3.226 : ?inline=1 est réservé à l'affichage/impression dans
-        # le lecteur PDF du navigateur. Le téléchargement classique reste inchangé.
-        as_attachment=request.args.get("inline") != "1",
+        # V2.3.239 : la copie officielle est déjà archivée dans
+        # private/documents/Factures. Affichage navigateur, sans doublon
+        # automatique dans Téléchargements.
+        as_attachment=False,
         download_name=invoice_filename
     )
 
