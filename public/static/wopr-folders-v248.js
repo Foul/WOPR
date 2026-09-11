@@ -36,27 +36,23 @@
   function makeButton(url, title) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = BTN_CLASS;
+    b.className = BTN_CLASS + " mini-btn";
     b.textContent = "📁 Dossier";
     b.title = title;
     b.setAttribute("aria-label", title);
     b.dataset.folderUrl = url;
     Object.assign(b.style, {
-      display:"block",
-      width:"100%",
+      display:"inline-flex",
+      alignItems:"center",
+      justifyContent:"center",
+      width:"auto",
       minWidth:"0",
       height:"auto",
       padding:"4px 7px",
-      margin:"4px 0 0 0",
-      border:"1px solid #c7d2df",
-      borderRadius:"6px",
-      background:"#fff",
+      margin:"2px 0 0 4px",
       cursor:"pointer",
-      fontSize:"11px",
-      lineHeight:"1.15",
-      verticalAlign:"middle",
-      boxSizing:"border-box",
-      whiteSpace:"nowrap"
+      whiteSpace:"nowrap",
+      boxSizing:"border-box"
     });
     b.addEventListener("click", ev => {
       ev.preventDefault();
@@ -64,6 +60,18 @@
       openFolder(url);
     });
     return b;
+  }
+
+  function bindStaticFolderButtons() {
+    document.querySelectorAll("[data-wopr-folder-url]").forEach(btn => {
+      if (btn.dataset.woprFolderBound === "1") return;
+      btn.dataset.woprFolderBound = "1";
+      btn.addEventListener("click", ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openFolder(btn.dataset.woprFolderUrl);
+      });
+    });
   }
 
   function rowRepairId(row) {
@@ -97,12 +105,7 @@
   }
 
   function scanFactures() {
-    if (location.pathname !== "/factures") return;
-    document.querySelectorAll("tbody tr, table tr").forEach(row => {
-      const rid = rowRepairId(row);
-      if (!rid) return;
-      addAtEnd(row, `/repair/${rid}/invoice-folder`, "Ouvrir le dossier de cette facture", `invoice-${rid}`);
-    });
+    // Géré directement dans le template depuis 2.3.252.
   }
 
   function scanSuivi() {
@@ -115,12 +118,7 @@
   }
 
   function scanDevis() {
-    if (location.pathname !== "/devis") return;
-    document.querySelectorAll("tbody tr, table tr").forEach(row => {
-      const qid = rowQuoteId(row);
-      if (!qid) return;
-      addAtEnd(row, `/devis/${qid}/folder`, "Ouvrir le dossier de ce devis", `quote-${qid}`);
-    });
+    // Géré directement dans le template depuis 2.3.252.
   }
 
   function scanLedger() {
@@ -152,6 +150,7 @@
   }
 
   function scanAll() {
+    bindStaticFolderButtons();
     scanFactures();
     scanSuivi();
     scanDevis();

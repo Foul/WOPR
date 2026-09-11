@@ -99,7 +99,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.251"
+APP_VERSION = "2.3.252"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -8582,14 +8582,17 @@ def achats_ventes_document_folder(entry_id):
     except Exception:
         path = None
 
-    if not path or not Path(path).is_file():
-        return "Justificatif introuvable", 404
+    if path and Path(path).is_file():
+        return _folder_open_response(Path(path).parent)
 
-    try:
-        _open_local_folder(Path(path).parent)
-        return ("", 204)
-    except Exception as exc:
-        return f"Impossible d'ouvrir le dossier : {exc}", 500
+    # Sans justificatif joint, ouvre tout de même le dossier Fournisseurs du mois.
+    document_date = str(row["entry_date"] or "")[:10]
+    folder = year_month_folder(
+        FOURNISSEURS_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
 
 
 @app.route("/achats-ventes/vente/<int:entry_id>/folder", methods=["GET", "POST"])

@@ -91,6 +91,11 @@
         {% else %}
         <span class="invoice-email-missing" title="Aucune adresse e-mail client">📧 —</span>
         {% endif %}
+        <button type="button"
+                class="mini-btn"
+                data-wopr-folder-url="{{ url_for('repair_invoice_folder', rid=r['id']) }}">
+          📁 Dossier
+        </button>
       </td>
     </tr>
   {% else %}

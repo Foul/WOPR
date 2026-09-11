@@ -2,27 +2,27 @@
 {% block title %}Devis - WOPR{% endblock %}
 {% block body %}
 
-<div class="quotes-head">
-  <div class="sheet-banner narrow quotes-banner">
-    <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
+<div class="banner">
+  <div>
     <div class="banner-title">Devis</div>
+    <div class="banner-sub">Derniers devis en premier</div>
   </div>
-  <a class="button primary big-action" href="{{ url_for('quote_new') }}">+ NOUVEAU DEVIS</a>
+  <a class="button primary" href="{{ url_for('quote_new') }}">➕ Nouveau devis</a>
 </div>
 
-<div class="quote-archive-summary">
-  <strong>{{ historical_document_count }}</strong> PDF trouvés dans WOPR/Devis
+<div class="sheet-note" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+  <strong>{{ historical_quote_count }}</strong> devis distincts
   <span>•</span>
-  <strong>{{ historical_quote_count }}</strong> numéros de devis distincts
+  <strong>{{ historical_document_count }}</strong> fichiers PDF archivés
   <span class="tiny-note">{{ devis_root }}</span>
 </div>
 
-<div class="sheet-wrapper">
-<table class="sheet-table quotes-table">
+<div class="table-scroll">
+<table class="invoice-list-table quotes-list-light">
   <thead>
     <tr>
-      <th>N° Devis</th>
       <th>Date</th>
+      <th>N° devis</th>
       <th>Client</th>
       <th>Contact</th>
       <th>Total TTC</th>
@@ -33,18 +33,28 @@
   <tbody>
   {% for q in quotes %}
     <tr>
+      <td class="invoice-list-date">
+        {{ q['quote_date'][8:10] }}/{{ q['quote_date'][5:7] }}/{{ q['quote_date'][0:4] }}
+      </td>
       <td><strong>{{ q['quote_no'] }}</strong></td>
-      <td>{{ q['quote_date'][8:10] }}/{{ q['quote_date'][5:7] }}/{{ q['quote_date'][0:4] }}</td>
       <td>
         <strong>{{ q['client_name'] }}</strong>
-        {% if q['client_address_street'] %}<div class="tiny-note">{{ q['client_address_street'] }} — {{ q['client_postal_code'] }} {{ q['client_city'] }}</div>{% endif %}
+        {% if q['client_address_street'] %}
+          <div class="tiny-note">{{ q['client_address_street'] }} — {{ q['client_postal_code'] }} {{ q['client_city'] }}</div>
+        {% endif %}
       </td>
       <td>{{ q['contact_name'] or '' }}</td>
-      <td class="quote-total">{{ '%.2f'|format(q['total'] or 0)|replace('.', ',') }} €</td>
-      <td><span class="quote-status quote-status-{{ q['status']|lower|replace('é','e')|replace(' ','-') }}">{{ q['status'] }}</span></td>
-      <td class="quote-list-actions">
+      <td class="invoice-list-total">{{ '%.2f'|format(q['total'] or 0)|replace('.', ',') }} €</td>
+      <td>
+        <span class="quote-status quote-status-{{ q['status']|lower|replace('é','e')|replace(' ','-') }}">{{ q['status'] }}</span>
+      </td>
+      <td class="invoice-list-actions quote-list-actions">
         {% if q['document_count'] > 0 %}
-          <a class="mini-btn quote-original-btn" target="_blank" href="{{ url_for('quote_original_real', quote_id=q['id'], doc_index=0) }}">Original{% if q['document_count'] > 1 %} ({{ q['document_count'] }}){% endif %}</a>
+          <a class="mini-btn quote-original-btn"
+             target="_blank"
+             href="{{ url_for('quote_original_real', quote_id=q['id'], doc_index=0) }}">
+            Original{% if q['document_count'] > 1 %} ({{ q['document_count'] }}){% endif %}
+          </a>
         {% endif %}
         <a class="mini-btn" href="{{ url_for('quote_edit', quote_id=q['id']) }}">Modifier</a>
         <a class="mini-btn primary" href="{{ url_for('quote_pdf', quote_id=q['id']) }}">PDF</a>
@@ -53,7 +63,15 @@
         {% else %}
           <span class="mini-btn disabled-btn" title="Aucune adresse e-mail client">📧 —</span>
         {% endif %}
-        <form method="post" action="{{ url_for('quote_delete', quote_id=q['id']) }}" onsubmit="return confirm('Supprimer définitivement le devis {{ q['quote_no'] }} ?');">
+        <button type="button"
+                class="mini-btn"
+                data-wopr-folder-url="{{ url_for('quote_folder_open', quote_id=q['id']) }}">
+          📁 Dossier
+        </button>
+        <form method="post"
+              action="{{ url_for('quote_delete', quote_id=q['id']) }}"
+              onsubmit="return confirm('Supprimer définitivement le devis {{ q['quote_no'] }} ?');"
+              style="display:inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
           <button class="mini-btn danger-btn" type="submit">Supprimer</button>
         </form>

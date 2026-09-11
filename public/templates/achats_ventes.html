@@ -253,15 +253,13 @@
                   <button type="submit" class="mini-btn danger-btn">Supprimer</button>
                 </form>
 
-                {# Même condition que le bouton "Ouvrir" de la colonne Justificatif :
-                   si Ouvrir existe, Dossier existe aussi. #}
-                {% if e['operation']=='Achat' and e['document_path'] %}
+                {% if e['operation']=='Achat' %}
                   <button type="button"
                           class="mini-btn ledger-folder-btn"
                           data-wopr-folder-url="{{ url_for('achats_ventes_document_folder', entry_id=e['id']) }}">
                     📁 Dossier
                   </button>
-                {% elif e['operation']!='Achat' and e['invoice_no'] %}
+                {% else %}
                   <button type="button"
                           class="mini-btn ledger-folder-btn"
                           data-wopr-folder-url="{{ url_for('achats_ventes_sale_invoice_folder', entry_id=e['id']) }}">
@@ -304,23 +302,6 @@
     btn.addEventListener('click', () => setEdit(btn.dataset.ledgerEdit, true));
   });
 
-  document.querySelectorAll('[data-wopr-folder-url]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        const response = await fetch(btn.dataset.woprFolderUrl, {
-          method: 'GET',
-          cache: 'no-store',
-          headers: {'X-Requested-With': 'XMLHttpRequest'}
-        });
-        if (!response.ok) {
-          const msg = await response.text();
-          alert(msg || `Impossible d'ouvrir le dossier (${response.status}).`);
-        }
-      } catch (error) {
-        alert(`Impossible d'ouvrir le dossier : ${error.message}`);
-      }
-    });
-  });
 
   document.querySelectorAll('[data-ledger-cancel]').forEach(btn => {
     btn.addEventListener('click', () => {
