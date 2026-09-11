@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.234"
+APP_VERSION = "2.3.235"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4267,6 +4267,62 @@ def ledger_document_file(row):
                         party_hits.append(p)
                 if len(party_hits) == 1:
                     return party_hits[0]
+    except Exception:
+        pass
+
+    # V2.3.235 — dernier filet de sécurité AVANT les anciens fallbacks :
+    # le classement manuel dans Fournisseurs/ fait foi. Si la date enregistrée
+    # dans Achats/Ventes ne correspond pas au mois réel du PDF, on cherche dans
+    # toute l'arborescence Fournisseurs au lieu de rester bloqué dans le mois SQL.
+    #
+    # Priorités sûres :
+    #   1. nom de fichier exact mémorisé ;
+    #   2. numéro de facture présent dans un seul fichier ;
+    #   3. si plusieurs fichiers portent le même numéro, fournisseur + numéro.
+    try:
+        all_supplier_files = [
+            p for p in FOURNISSEURS_ROOT.rglob("*")
+            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+        ]
+
+        def _global_basename(value):
+            return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
+
+        # 1) Nom exact, indépendamment de l'année/mois enregistré en base.
+        stored_global_names = []
+        for value in (rel, row["document_original_name"] or ""):
+            name = _global_basename(value)
+            if name and name not in stored_global_names:
+                stored_global_names.append(name)
+
+        for stored_name in stored_global_names:
+            exact_hits = [
+                p for p in all_supplier_files
+                if p.name.casefold() == stored_name.casefold()
+            ]
+            if len(exact_hits) == 1:
+                return exact_hits[0]
+
+        # 2) Numéro de facture unique dans toute l'arborescence.
+        invoice_key_global = _match_key(row["invoice_no"] or "")
+        if invoice_key_global and len(invoice_key_global) >= 4:
+            invoice_hits_global = [
+                p for p in all_supplier_files
+                if invoice_key_global in _match_key(p.stem)
+            ]
+            if len(invoice_hits_global) == 1:
+                return invoice_hits_global[0]
+
+            # 3) Plusieurs résultats : on affine avec le fournisseur.
+            if len(invoice_hits_global) > 1:
+                party_key_global = _match_key(row["party"] or "")
+                if party_key_global and len(party_key_global) >= 3:
+                    narrowed_global = [
+                        p for p in invoice_hits_global
+                        if party_key_global in _match_key(p.stem)
+                    ]
+                    if len(narrowed_global) == 1:
+                        return narrowed_global[0]
     except Exception:
         pass
 
