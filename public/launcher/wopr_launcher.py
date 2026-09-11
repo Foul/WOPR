@@ -61,37 +61,14 @@ def read_pid():
     except Exception: return None
 
 def process_exists(pid):
-    if not pid:
-        return False
+    if not pid: return False
     try:
         if IS_WINDOWS:
-            cp=subprocess.run(
-                ["tasklist","/FI",f"PID eq {pid}","/NH"],
-                capture_output=True,
-                text=True,
-                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-            )
+            cp=subprocess.run(["tasklist","/FI",f"PID eq {pid}","/NH"],capture_output=True,text=True,
+                              creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
             return str(pid) in cp.stdout
-
-        # Linux : un processus zombie possède encore un PID, mais il est déjà mort.
-        # os.kill(pid, 0) seul le considérait à tort comme encore actif.
-        stat_path=Path(f"/proc/{pid}/stat")
-        if stat_path.is_file():
-            try:
-                stat=stat_path.read_text(encoding="utf-8",errors="ignore")
-                # /proc/<pid>/stat : PID (comm) STATE ...
-                end_comm=stat.rfind(")")
-                if end_comm != -1:
-                    fields=stat[end_comm+2:].split()
-                    if fields and fields[0] == "Z":
-                        return False
-            except Exception:
-                pass
-
-        os.kill(pid,0)
-        return True
-    except Exception:
-        return False
+        os.kill(pid,0); return True
+    except Exception: return False
 
 def req_hash():
     if not REQ.exists(): return ""
@@ -162,6 +139,8 @@ def discover_app_pids():
         pids.add(pid)
 
     if IS_WINDOWS:
+        # Retrouve aussi WOPR si le fichier PID a disparu : uniquement Python/pythonw
+        # dont la ligne de commande contient exactement ce public\app.py.
         app=str(APP_PATH).replace("'", "''")
         ps=(
             "$app='"+app+"'; "
@@ -227,8 +206,11 @@ def create_shutdown_backup(status):
             continue
         lines=[x.strip() for x in cp.stdout.splitlines() if x.strip()]
         if not lines:
-            errors.append("WOPR n'a retourné aucun fichier de sauvegarde.")
+            errors.append("WOPR n'a retourné aucun résultat de sauvegarde.")
             continue
+        if lines[-1] == "UNCHANGED":
+            log("Sauvegarde de fermeture ignorée : base inchangée.")
+            return None
         backup=Path(lines[-1])
         if not backup.is_file():
             errors.append(f"Sauvegarde annoncée mais introuvable : {backup}")
@@ -238,6 +220,7 @@ def create_shutdown_backup(status):
 
     detail=" | ".join(x for x in errors if x)
     raise RuntimeError("Sauvegarde de fermeture impossible" + (f" : {detail}" if detail else "."))
+
 
 def stop_server(status):
     pids=discover_app_pids()
@@ -283,9 +266,12 @@ def stop_server(status):
         raise RuntimeError("Impossible d'arrêter complètement WOPR (PID : " + ", ".join(map(str,remaining)) + ").")
 
     PID_FILE.unlink(missing_ok=True)
-    log("Serveur arrêté PID="+",".join(map(str,pids)))
+    log("Serveur arrêté PID=" + ",".join(map(str,pids)))
     backup=create_shutdown_backup(status)
-    status(f"WOPR arrêté • sauvegarde {backup.name}")
+    if backup:
+        status(f"WOPR arrêté • sauvegarde {backup.name}")
+    else:
+        status("WOPR arrêté • base inchangée, sauvegarde inutile")
     return backup
 
 def db_desc():
@@ -294,229 +280,43 @@ def db_desc():
     return f"Base : {datetime.fromtimestamp(s.st_mtime):%d/%m/%Y %H:%M:%S}  •  {s.st_size/1048576:.2f} Mo"
 
 class Launcher(tk.Tk):
-    BG = "#070B10"
-    PANEL = "#0D141C"
-    PANEL_2 = "#101B25"
-    GREEN = "#39FF88"
-    CYAN = "#41DFFF"
-    AMBER = "#FFCA58"
-    RED = "#FF5F70"
-    TEXT = "#D9F7E8"
-    MUTED = "#6E8A7D"
-    BORDER = "#173629"
-
     def __init__(self):
         super().__init__()
-
-        self.title("WOPR // SYSTEM LAUNCHER")
-        self.geometry("640x390")
-        self.resizable(False, False)
-        self.configure(bg=self.BG)
-
-        mono = ("TkFixedFont", 10)
-        mono_bold = ("TkFixedFont", 10, "bold")
-
-        header = tk.Frame(self, bg=self.BG)
-        header.pack(fill="x", padx=28, pady=(22, 0))
-
-        tk.Label(
-            header,
-            text=">_ WOPR",
-            bg=self.BG,
-            fg=self.GREEN,
-            font=("TkFixedFont", 28, "bold"),
-        ).pack(anchor="w")
-
-        tk.Label(
-            header,
-            text="WORKFLOW D'ORGANISATION ET DE PILOTAGE DES RÉPARATIONS",
-            bg=self.BG,
-            fg=self.CYAN,
-            font=("TkFixedFont", 9, "bold"),
-        ).pack(anchor="w", pady=(2, 0))
-
-        tk.Label(
-            header,
-            text="[ 100% GRATUIT • OPEN SOURCE ]",
-            bg=self.BG,
-            fg=self.AMBER,
-            font=("TkFixedFont", 9, "bold"),
-        ).pack(anchor="w", pady=(5, 0))
-
-        console = tk.Frame(
-            self,
-            bg=self.PANEL,
-            highlightbackground=self.BORDER,
-            highlightthickness=1,
-        )
-        console.pack(fill="x", padx=28, pady=(20, 14))
-
-        tk.Label(
-            console,
-            text=" SYSTEM STATUS",
-            bg=self.PANEL,
-            fg=self.MUTED,
-            font=("TkFixedFont", 8, "bold"),
-        ).pack(anchor="w", padx=14, pady=(10, 2))
-
-        self.status = tk.StringVar(value="[~] Vérification du système…")
-        self.status_label = tk.Label(
-            console,
-            textvariable=self.status,
-            bg=self.PANEL,
-            fg=self.AMBER,
-            font=("TkFixedFont", 12, "bold"),
-        )
-        self.status_label.pack(anchor="w", padx=14, pady=(2, 4))
-
-        self.db = tk.StringVar(value=db_desc())
-        tk.Label(
-            console,
-            textvariable=self.db,
-            bg=self.PANEL,
-            fg=self.TEXT,
-            font=mono,
-        ).pack(anchor="w", padx=14, pady=(0, 3))
-
-        self.platform_text = tk.StringVar(
-            value=f"OS   : {platform.system()} {platform.release()}"
-        )
-        tk.Label(
-            console,
-            textvariable=self.platform_text,
-            bg=self.PANEL,
-            fg=self.MUTED,
-            font=mono,
-        ).pack(anchor="w", padx=14, pady=(0, 10))
-
-        buttons = tk.Frame(self, bg=self.BG)
-        buttons.pack(padx=28, pady=(0, 10), fill="x")
-
-        def make_button(parent, text, command, fg):
-            return tk.Button(
-                parent,
-                text=text,
-                command=command,
-                bg=self.PANEL_2,
-                fg=fg,
-                activebackground=self.BORDER,
-                activeforeground=fg,
-                disabledforeground="#405048",
-                relief="flat",
-                bd=0,
-                highlightthickness=1,
-                highlightbackground=self.BORDER,
-                cursor="hand2",
-                font=mono_bold,
-                padx=13,
-                pady=9,
-            )
-
-        self.openb = make_button(
-            buttons, "[▶] DÉMARRER WOPR", self.open_wopr, self.GREEN
-        )
-        self.openb.pack(side="left", expand=True, fill="x", padx=(0, 6))
-
-        self.stopb = make_button(
-            buttons, "[■] ARRÊTER WOPR", self.stop_wopr, self.RED
-        )
-        self.stopb.pack(side="left", expand=True, fill="x", padx=6)
-
-        self.refreshb = make_button(
-            buttons, "[↻] ACTUALISER", self.refresh, self.CYAN
-        )
-        self.refreshb.pack(side="left", expand=True, fill="x", padx=(6, 0))
-
-        footer = tk.Frame(self, bg=self.BG)
-        footer.pack(fill="x", padx=28, pady=(8, 0))
-
-        tk.Label(
-            footer,
-            text="root@wopr:",
-            bg=self.BG,
-            fg=self.GREEN,
-            font=("TkFixedFont", 8, "bold"),
-        ).pack(side="left")
-
-        tk.Label(
-            footer,
-            text=str(WOPR_DIR),
-            bg=self.BG,
-            fg=self.MUTED,
-            font=("TkFixedFont", 8),
-            wraplength=520,
-            justify="left",
-        ).pack(side="left", padx=(5, 0))
-
-        tk.Label(
-            self,
-            text="Foul-Fix // local-first repair management",
-            bg=self.BG,
-            fg="#30483D",
-            font=("TkFixedFont", 8),
-        ).pack(side="bottom", pady=(0, 12))
-
-        self.after(100, self.refresh)
-        self.after(3000, self.tick)
-
-    def set_status(self, t):
-        self.after(0, self.status.set, f"[~] {t}")
-
+        self.title("WOPR")
+        self.geometry("520x280"); self.resizable(False,False)
+        tk.Label(self,text="WOPR",font=("TkDefaultFont",24,"bold")).pack(pady=(22,2))
+        tk.Label(self,text="Workflow d’Organisation et de Pilotage des Réparations").pack()
+        self.status=tk.StringVar(value="Vérification…")
+        tk.Label(self,textvariable=self.status,font=("TkDefaultFont",11,"bold")).pack(pady=(22,4))
+        self.db=tk.StringVar(value=db_desc()); tk.Label(self,textvariable=self.db).pack(pady=(0,14))
+        fr=tk.Frame(self); fr.pack()
+        self.openb=tk.Button(fr,text="DÉMARRER WOPR",width=17,command=self.open_wopr); self.openb.grid(row=0,column=0,padx=5)
+        self.stopb=tk.Button(fr,text="ARRÊTER WOPR",width=17,command=self.stop_wopr); self.stopb.grid(row=0,column=1,padx=5)
+        tk.Button(fr,text="ACTUALISER",width=12,command=self.refresh).grid(row=0,column=2,padx=5)
+        tk.Label(self,text=str(WOPR_DIR),wraplength=480,fg="#666",font=("TkDefaultFont",8)).pack(pady=(18,0))
+        self.after(100,self.refresh); self.after(3000,self.tick)
+    def set_status(self,t): self.after(0,self.status.set,t)
     def refresh(self):
-        run = alive()
-
-        if run:
-            self.status.set("[●] WOPR ONLINE // 127.0.0.1:5000")
-            self.status_label.config(fg=self.GREEN)
-        else:
-            self.status.set("[○] WOPR OFFLINE // READY")
-            self.status_label.config(fg=self.RED)
-
+        run=alive()
+        self.status.set("● WOPR ACTIF" if run else "○ WOPR ARRÊTÉ")
         self.db.set(db_desc())
-        self.openb.config(
-            text="[↗] OUVRIR WOPR" if run else "[▶] DÉMARRER WOPR"
-        )
-        self.stopb.config(
-            state="normal" if run or process_exists(read_pid()) else "disabled"
-        )
-
+        self.openb.config(text="OUVRIR WOPR" if run else "DÉMARRER WOPR")
+        self.stopb.config(state="normal" if run or process_exists(read_pid()) else "disabled")
     def tick(self):
-        self.refresh()
-        self.after(3000, self.tick)
-
+        self.refresh(); self.after(3000,self.tick)
     def open_wopr(self):
-        if alive():
-            webbrowser.open(APP_URL)
-            return
-
-        self.status.set("[~] BOOT SEQUENCE INITIALISÉE…")
-        self.status_label.config(fg=self.AMBER)
-
+        if alive(): webbrowser.open(APP_URL); return
         def job():
-            try:
-                start_server(self.set_status)
-                webbrowser.open(APP_URL)
-            except Exception as e:
-                self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
-            finally:
-                self.after(0, self.refresh)
-
-        threading.Thread(target=job, daemon=True).start()
-
+            try: start_server(self.set_status); webbrowser.open(APP_URL)
+            except Exception as e: self.after(0,messagebox.showerror,"WOPR",str(e))
+            finally: self.after(0,self.refresh)
+        threading.Thread(target=job,daemon=True).start()
     def stop_wopr(self):
-        self.status.set("[~] SHUTDOWN SEQUENCE…")
-        self.status_label.config(fg=self.AMBER)
-
         def job():
-            try:
-                stop_server(self.set_status)
-            except Exception as e:
-                self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
-            finally:
-                self.after(0, self.refresh)
-
-        threading.Thread(target=job, daemon=True).start()
-
+            try: stop_server(self.set_status)
+            except Exception as e: self.after(0,messagebox.showerror,"WOPR",str(e))
+            finally: self.after(0,self.refresh)
+        threading.Thread(target=job,daemon=True).start()
 
 if __name__=="__main__":
     ensure_dirs()

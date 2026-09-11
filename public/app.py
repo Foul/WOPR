@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.242"
+APP_VERSION = "2.3.243"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1650,14 +1650,38 @@ def _extract_backup_to_sqlite(source, destination):
     return meta
 
 
-def backup_database(force=False, tag="auto"):
+def backup_database(force=False, tag="auto", only_if_changed=False):
     if not DB.exists():
         return None
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
-    # La sauvegarde quotidienne ne dépend plus du nom : on regarde la date réelle
-    # des sauvegardes WOPR déjà générées.
-    if not force:
+    # V2.3.243 — deux stratégies :
+    # - démarrage : au maximum une sauvegarde automatique par jour ;
+    # - fermeture : sauvegarder seulement si la base a réellement été modifiée
+    #   depuis la dernière sauvegarde WOPR.
+    if not force and only_if_changed:
+        latest_backup_mtime_ns = 0
+        for candidate in BACKUP_DIR.glob("foulfix_*"):
+            try:
+                if candidate.is_file():
+                    latest_backup_mtime_ns = max(
+                        latest_backup_mtime_ns,
+                        candidate.stat().st_mtime_ns
+                    )
+            except OSError:
+                pass
+
+        try:
+            db_mtime_ns = DB.stat().st_mtime_ns
+        except OSError:
+            db_mtime_ns = 0
+
+        if latest_backup_mtime_ns and db_mtime_ns <= latest_backup_mtime_ns:
+            return None
+
+    elif not force:
+        # La sauvegarde quotidienne ne dépend plus du nom : on regarde la date réelle
+        # des sauvegardes WOPR déjà générées.
         today = now().date()
         for candidate in BACKUP_DIR.glob("foulfix_*"):
             try:
@@ -13996,7 +14020,11 @@ if __name__ == "__main__":
     # donc le dernier état SQLite entièrement validé de la session.
     if "--backup-arret" in sys.argv:
         try:
-            path = backup_database(force=True, tag="arret")
+            path = backup_database(
+                force=False,
+                tag="arret",
+                only_if_changed=True
+            )
             if path:
                 verify_tmp = DB.parent / f".wopr_cli_verify_{secrets.token_hex(4)}.db"
                 try:
@@ -14004,8 +14032,11 @@ if __name__ == "__main__":
                 finally:
                     verify_tmp.unlink(missing_ok=True)
                 print(str(path))
-                raise SystemExit(0)
-            raise RuntimeError("Aucune base à sauvegarder.")
+            else:
+                # Le launcher sait interpréter ce marqueur : aucune nouvelle
+                # sauvegarde n'est nécessaire car la base n'a pas changé.
+                print("UNCHANGED")
+            raise SystemExit(0)
         except Exception as exc:
             print(f"ERREUR BACKUP ARRET: {exc}", file=sys.stderr)
             raise SystemExit(1)
