@@ -63,6 +63,7 @@ PRIVATE_SEEDS = PRIVATE_ROOT / "seeds"
 FOULFIX_ROOT = PRIVATE_ROOT / "documents"
 DEVIS_ROOT = FOULFIX_ROOT / "Devis"
 FACTURES_ROOT = FOULFIX_ROOT / "Factures"
+FOURNISSEURS_ROOT = FOULFIX_ROOT / "Fournisseurs"
 SUIVI_REPARATIONS_ROOT = FOULFIX_ROOT / "Suivi de réparation"
 
 MONTH_FOLDER_NAMES = {
@@ -97,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.228"
+APP_VERSION = "2.3.229"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -2300,7 +2301,7 @@ def init_db():
     ensure_column(con, "clients", "abby_synced_at", "TEXT")
     con.execute("CREATE INDEX IF NOT EXISTS idx_clients_proton_uid ON clients(proton_uid)")
     # V2.3.91 : pièce justificative liée aux achats / ventes.
-    # Le fichier reste physiquement dans Factures/AAAA/MM - Mois/Fournisseurs,
+    # Le fichier reste physiquement dans Fournisseurs/AAAA/MM - Mois,
     # seule sa référence relative est conservée en base.
     ensure_column(con, "ledger_entries", "document_path", "TEXT")
     ensure_column(con, "ledger_entries", "document_original_name", "TEXT")
@@ -3958,7 +3959,7 @@ def save_ledger_document(entry_id, storage):
         con.close()
         raise ValueError("Une pièce justificative est déjà liée à cette ligne.")
 
-    folder = year_month_folder(FACTURES_ROOT, row["entry_date"], supplier=True, create=True)
+    folder = year_month_folder(FOURNISSEURS_ROOT, row["entry_date"], supplier=False, create=True)
 
     # V2.3.95 — anti-doublon strict : avant même de fabriquer un nouveau nom,
     # on cherche si CE fichier existe déjà dans Fournisseurs, quel que soit son nom.
@@ -4044,7 +4045,7 @@ def save_ledger_document(entry_id, storage):
 
 def _supplier_document_candidates(entry_date):
     """Factures déjà classées par l'utilisateur dans le mois concerné, sans les modifier."""
-    folder = year_month_folder(FACTURES_ROOT, entry_date, supplier=True, create=False)
+    folder = year_month_folder(FOURNISSEURS_ROOT, entry_date, supplier=False, create=False)
     if not folder.is_dir():
         return []
     allowed = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
@@ -4095,7 +4096,7 @@ def _supplier_auto_match(row, candidates):
 
 def auto_link_supplier_documents(years=(2025, 2026)):
     """
-    Rattache les factures déjà présentes dans .../Fournisseurs aux achats existants.
+    Rattache les factures déjà présentes dans private/documents/Fournisseurs aux achats existants.
     Ne déplace, ne copie et ne renomme aucun fichier historique.
     """
     con = db()
@@ -4144,12 +4145,30 @@ def ledger_document_file(row):
         return None
     try:
         candidate = (FOULFIX_ROOT / rel).resolve()
-        supplier_root = FACTURES_ROOT.resolve()
+        supplier_root = FOURNISSEURS_ROOT.resolve()
         candidate.relative_to(supplier_root)
     except Exception:
         return None
     if candidate.is_file():
         return candidate
+
+    # V2.3.229 — migration d'arborescence :
+    # ancien : Factures/YYYY/MM - Mois/Fournisseurs/fichier.pdf
+    # nouveau : Fournisseurs/YYYY/MM - Mois/fichier.pdf
+    #
+    # On ne déplace rien ici : si le fichier a déjà été déplacé manuellement,
+    # on le retrouve dans le bon mois et repair_dead_supplier_document_links()
+    # mettra ensuite à jour le chemin mémorisé en base.
+    try:
+        d = datetime.strptime(str(row["entry_date"] or ""), "%Y-%m-%d")
+        new_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
+        old_name = Path(rel).name
+        if old_name:
+            moved = new_folder / old_name
+            if moved.is_file():
+                return moved
+    except Exception:
+        pass
 
     # Compatibilité avec les quelques liens créés par 2.3.91/2.3.92 au singulier.
     # Aucun dossier singulier n'est recréé : on tente seulement le chemin pluriel.
@@ -4157,7 +4176,12 @@ def ledger_document_file(row):
     if rel_plural != rel:
         try:
             alt = (FOULFIX_ROOT / rel_plural).resolve()
-            alt.relative_to(supplier_root)
+            # Ancien stockage sous Factures/... accepté uniquement en lecture de compatibilité.
+            allowed_old_root = FACTURES_ROOT.resolve()
+            try:
+                alt.relative_to(supplier_root)
+            except Exception:
+                alt.relative_to(allowed_old_root)
             if alt.is_file():
                 return alt
         except Exception:
@@ -4167,7 +4191,7 @@ def ledger_document_file(row):
     # peut pointer vers ce nom disparu alors que LE fichier original est toujours dans
     # Fournisseurs. On cherche d'abord le nom d'origine exact (sans rien copier/renommer).
     try:
-        folder = year_month_folder(FACTURES_ROOT, row["entry_date"], supplier=True, create=False)
+        folder = year_month_folder(FOURNISSEURS_ROOT, row["entry_date"], supplier=False, create=False)
     except Exception:
         folder = None
     if folder and folder.is_dir():
