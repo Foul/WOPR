@@ -99,7 +99,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.247"
+APP_VERSION = "2.3.248"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -957,6 +957,7 @@ def force_utf8_html(response):
             js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
             print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
             google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}" defer></script>'
+            folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}" defer></script>'
 
             if "wopr-responsive.css" not in html and "</head>" in html:
                 html = html.replace("</head>", css_tag + "\n</head>", 1)
@@ -969,6 +970,9 @@ def force_utf8_html(response):
 
             if "wopr-google-sync.js" not in html and "</body>" in html:
                 html = html.replace("</body>", google_sync_js_tag + "\n</body>", 1)
+
+            if "wopr-folders-v248.js" not in html and "</body>" in html:
+                html = html.replace("</body>", folders_v248_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
@@ -8562,6 +8566,31 @@ def quote_folder_open(quote_id):
         create=True
     )
     return _folder_open_response(folder)
+
+
+
+@app.route("/achats-ventes/<int:entry_id>/document/folder", methods=["GET", "POST"])
+def achats_ventes_document_folder(entry_id):
+    """Ouvre le dossier du justificatif réellement résolu pour une ligne Achat/Vente."""
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+
+    try:
+        path = ledger_document_file(row)
+    except Exception:
+        path = None
+
+    if not path or not Path(path).is_file():
+        return "Justificatif introuvable", 404
+
+    try:
+        _open_local_folder(Path(path).parent)
+        return ("", 204)
+    except Exception as exc:
+        return f"Impossible d'ouvrir le dossier : {exc}", 500
 
 
 @app.route("/achats-ventes/vente/<int:entry_id>/folder", methods=["GET", "POST"])
