@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.237"
+APP_VERSION = "2.3.238"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -10908,15 +10908,39 @@ def intake_pdf(rid):
     c.setFont(PDF_FONTS["regular"], 12)
     c.drawString(x0+2*mm, footer_y, pdf_t("thanks", lang))
 
-    c.save(); bio.seek(0)
+    c.save()
+    pdf_bytes = bio.getvalue()
 
-    # V2.3.46 — nom de fichier simple :
-    # Benoit_Riviere_01092026.pdf
+    # V2.3.238 — classement automatique du suivi selon la date réelle
+    # de prise en charge, pas selon le jour où l'utilisateur reclique sur PDF.
+    suivi_date = str(r["received_date"] or "")[:10]
+    try:
+        suivi_dt = datetime.strptime(suivi_date, "%Y-%m-%d")
+    except Exception:
+        suivi_dt = now()
+        suivi_date = suivi_dt.strftime("%Y-%m-%d")
+
     suivi_filename = (
         f"{safe_filename(r['client_name'])}_"
-        f"{now().strftime('%d%m%Y')}_"
+        f"{suivi_dt.strftime('%d%m%Y')}_"
         f"{pdf_language_suffix(lang)}.pdf"
     )
+
+    suivi_folder = year_month_folder(
+        SUIVI_REPARATIONS_ROOT,
+        suivi_date,
+        create=True
+    )
+    suivi_saved_path = suivi_folder / safe_document_name(suivi_filename)
+    try:
+        suivi_saved_path.write_bytes(pdf_bytes)
+    except Exception as exc:
+        app.logger.warning(
+            "Impossible d'enregistrer le suivi dans %s: %s",
+            suivi_saved_path, exc
+        )
+
+    bio.seek(0)
     return send_file(
         bio,
         mimetype="application/pdf",
@@ -11611,15 +11635,40 @@ def invoice_pdf(rid):
         fy -= 4.2*mm
 
     c.save()
-    bio.seek(0)
+    pdf_bytes = bio.getvalue()
 
-    # V2.3.46 — nom + numéro de facture :
-    # Benoit_Riviere_280820261100.pdf
+    # V2.3.238 — classement automatique de la facture selon sa date réelle.
+    # Les numéros historiques JJMMYYYYHHMM restent prioritaires pour retrouver
+    # la date de facture ; sinon on utilise finished_at puis received_date.
+    invoice_date_value = invoice_no_date(r["invoice_no"])
+    if not invoice_date_value:
+        invoice_date_value = str(r["finished_at"] or r["received_date"] or "")[:10]
+    try:
+        datetime.strptime(str(invoice_date_value or ""), "%Y-%m-%d")
+    except Exception:
+        invoice_date_value = now().strftime("%Y-%m-%d")
+
     invoice_filename = (
         f"{safe_filename(r['client_name'])}_"
         f"{safe_filename(r['invoice_no'])}_"
         f"{pdf_language_suffix(lang)}.pdf"
     )
+
+    invoice_folder = year_month_folder(
+        FACTURES_ROOT,
+        invoice_date_value,
+        create=True
+    )
+    invoice_saved_path = invoice_folder / safe_document_name(invoice_filename)
+    try:
+        invoice_saved_path.write_bytes(pdf_bytes)
+    except Exception as exc:
+        app.logger.warning(
+            "Impossible d'enregistrer la facture dans %s: %s",
+            invoice_saved_path, exc
+        )
+
+    bio.seek(0)
     return send_file(
         bio,
         mimetype="application/pdf",
