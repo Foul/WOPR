@@ -99,7 +99,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.248"
+APP_VERSION = "2.3.249"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -952,7 +952,6 @@ def force_utf8_html(response):
         try:
             html = response.get_data(as_text=True)
             html = _wopr_remove_topbar_simple_invoice(html)
-            html = _wopr_add_pdf_folder_buttons(html)
             css_tag = f'<link rel="stylesheet" href="/static/wopr-responsive.css?v={APP_VERSION}">'
             js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
             print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
