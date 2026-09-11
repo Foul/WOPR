@@ -4351,3 +4351,102 @@ body.theme-8bit .topbar-search button:active{
     height:27px!important;
   }
 }
+/* ===== WOPR 2.3.264 — couleurs d'actions prioritaires dans TOUS les thèmes =====
+   Les thèmes DARK / WOPR / 8-BIT redéfinissent .button et .mini-btn avec !important.
+   Ces règles sont volontairement plus spécifiques et placées à la toute fin du CSS. */
+
+/* BLEU — ouvrir / historique / PDF */
+body.theme-dark .page :is(a,button,select,input).wopr-action-open,
+body.theme-terminal .page :is(a,button,select,input).wopr-action-open,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-open{
+  background:#eef6ff !important;
+  background-color:#eef6ff !important;
+  background-image:none !important;
+  border-color:#9fc6ef !important;
+  color:#184f82 !important;
+  text-shadow:none !important;
+}
+
+/* VERT — message / envoyer / enregistrer */
+body.theme-dark .page :is(a,button,select,input).wopr-action-send,
+body.theme-dark .page :is(a,button,select,input).wopr-action-save,
+body.theme-terminal .page :is(a,button,select,input).wopr-action-send,
+body.theme-terminal .page :is(a,button,select,input).wopr-action-save,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-send,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-save{
+  background:#eefaf3 !important;
+  background-color:#eefaf3 !important;
+  background-image:none !important;
+  border-color:#9fd6b5 !important;
+  color:#23613b !important;
+  text-shadow:none !important;
+}
+
+/* AMBRE — modifier */
+body.theme-dark .page :is(a,button,select,input).wopr-action-edit,
+body.theme-terminal .page :is(a,button,select,input).wopr-action-edit,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-edit{
+  background:#fff7e8 !important;
+  background-color:#fff7e8 !important;
+  background-image:none !important;
+  border-color:#e6c98b !important;
+  color:#745116 !important;
+  text-shadow:none !important;
+}
+
+/* VIOLET — dossier / fusionner / facturer / action spéciale */
+body.theme-dark .page :is(a,button,select,input).wopr-action-folder,
+body.theme-dark .page :is(a,button,select,input).wopr-action-special,
+body.theme-dark .page :is(a,button,select,input)[data-wopr-folder-url],
+body.theme-terminal .page :is(a,button,select,input).wopr-action-folder,
+body.theme-terminal .page :is(a,button,select,input).wopr-action-special,
+body.theme-terminal .page :is(a,button,select,input)[data-wopr-folder-url],
+body.theme-8bit .page :is(a,button,select,input).wopr-action-folder,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-special,
+body.theme-8bit .page :is(a,button,select,input)[data-wopr-folder-url]{
+  background:#f5efff !important;
+  background-color:#f5efff !important;
+  background-image:none !important;
+  border-color:#c9b2ea !important;
+  color:#56358a !important;
+  text-shadow:none !important;
+}
+
+/* ROUGE — supprimer */
+body.theme-dark .page :is(a,button,select,input).wopr-action-delete,
+body.theme-terminal .page :is(a,button,select,input).wopr-action-delete,
+body.theme-8bit .page :is(a,button,select,input).wopr-action-delete{
+  background:#fff0f0 !important;
+  background-color:#fff0f0 !important;
+  background-image:none !important;
+  border-color:#e7aaaa !important;
+  color:#8a2f2f !important;
+  text-shadow:none !important;
+}
+
+/* CLIENTS : boutons colorés par position, même rendu quel que soit le thème. */
+body.theme-dark .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(1),
+body.theme-terminal .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(1),
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(1){
+  background:#eef6ff !important;background-image:none !important;border-color:#9fc6ef !important;color:#184f82 !important;text-shadow:none !important;
+}
+body.theme-dark .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(2),
+body.theme-terminal .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(2),
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(2){
+  background:#eefaf3 !important;background-image:none !important;border-color:#9fd6b5 !important;color:#23613b !important;text-shadow:none !important;
+}
+body.theme-dark .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(3),
+body.theme-terminal .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(3),
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(3){
+  background:#fff7e8 !important;background-image:none !important;border-color:#e6c98b !important;color:#745116 !important;text-shadow:none !important;
+}
+body.theme-dark .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(4),
+body.theme-terminal .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(4),
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(4){
+  background:#f5efff !important;background-image:none !important;border-color:#c9b2ea !important;color:#56358a !important;text-shadow:none !important;
+}
+body.theme-dark .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5),
+body.theme-terminal .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5),
+body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5){
+  background:#fff0f0 !important;background-image:none !important;border-color:#e7aaaa !important;color:#8a2f2f !important;text-shadow:none !important;
+}
