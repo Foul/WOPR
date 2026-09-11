@@ -98,7 +98,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.231"
+APP_VERSION = "2.3.233"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -4060,10 +4060,24 @@ def _supplier_auto_match(row, candidates):
     invoice_key = _match_key(row["invoice_no"] or "") if is_supplier_invoice_reference(row["invoice_no"], row["party"], row["remarks"]) else ""
     party_key = _match_key(row["party"] or "")
     date_txt = str(row["entry_date"] or "")[:10]
-    date_tokens = {
-        _match_key(date_txt),
-        _match_key(date_txt.replace("-", "")),
-    } - {""}
+    date_tokens = set()
+    if date_txt:
+        date_tokens.add(_match_key(date_txt))
+        date_tokens.add(_match_key(date_txt.replace("-", "")))
+        try:
+            d = datetime.strptime(date_txt, "%Y-%m-%d")
+            # Noms de fichiers rencontrés : 2026-09-08, 20260908,
+            # 08-09-2026, 08_09_2026, 08092026, etc.
+            date_tokens.update({
+                _match_key(d.strftime("%Y-%m-%d")),
+                _match_key(d.strftime("%Y%m%d")),
+                _match_key(d.strftime("%d-%m-%Y")),
+                _match_key(d.strftime("%d_%m_%Y")),
+                _match_key(d.strftime("%d%m%Y")),
+            })
+        except Exception:
+            pass
+    date_tokens.discard("")
 
     scored = []
     for path in candidates:
@@ -4139,27 +4153,40 @@ def auto_link_supplier_documents(years=(2025, 2026)):
 
 
 def ledger_document_file(row):
-    """Résout une pièce fournisseur déjà liée, avec récupération prudente des anciens liens."""
-    rel = str(row["document_path"] or "").strip() if row else ""
-    if not rel:
+    """Résout une pièce fournisseur, même si l'ancien chemin SQL est devenu invalide."""
+    if not row:
         return None
-    try:
-        candidate = (FOULFIX_ROOT / rel).resolve()
-        supplier_root = FOURNISSEURS_ROOT.resolve()
-        old_supplier_root = FACTURES_ROOT.resolve()
 
-        # V2.3.230 — pendant la migration, le chemin mémorisé en base peut
-        # encore pointer vers l'ancien emplacement sous Factures/.
-        # On autorise donc temporairement les DEUX racines en lecture.
+    rel = str(row["document_path"] or "").strip()
+
+    # V2.3.232 — IMPORTANT :
+    # un ancien document_path peut être vide, absolu, Windows, ou pointer vers
+    # l'ancienne arborescence. Cela ne doit JAMAIS empêcher la recherche dans
+    # private/documents/Fournisseurs/AAAA/MM - Mois/.
+    #
+    # On tente donc le chemin mémorisé seulement comme raccourci. S'il est mauvais,
+    # on continue au lieu de retourner None.
+    if rel:
         try:
-            candidate.relative_to(supplier_root)
-        except Exception:
-            candidate.relative_to(old_supplier_root)
-    except Exception:
-        return None
+            candidate = (FOULFIX_ROOT / rel).resolve()
+            supplier_root = FOURNISSEURS_ROOT.resolve()
+            old_supplier_root = FACTURES_ROOT.resolve()
 
-    if candidate.is_file():
-        return candidate
+            allowed = False
+            try:
+                candidate.relative_to(supplier_root)
+                allowed = True
+            except Exception:
+                try:
+                    candidate.relative_to(old_supplier_root)
+                    allowed = True
+                except Exception:
+                    pass
+
+            if allowed and candidate.is_file():
+                return candidate
+        except Exception:
+            pass
 
     # V2.3.231 — migration d'arborescence robuste :
     # ancien : Factures/YYYY/MM - Mois/Fournisseurs/fichier.pdf
@@ -4205,17 +4232,31 @@ def ledger_document_file(row):
 
             # 3) Fournisseur + date si c'est sans ambiguïté.
             party_key = _match_key(row["party"] or "")
-            date_key = _match_key(str(row["entry_date"] or "").replace("-", ""))
             party_hits = []
+
+            date_keys = set()
+            try:
+                d2 = datetime.strptime(str(row["entry_date"] or ""), "%Y-%m-%d")
+                date_keys.update({
+                    _match_key(d2.strftime("%Y%m%d")),
+                    _match_key(d2.strftime("%d%m%Y")),
+                })
+            except Exception:
+                pass
+            date_keys.discard("")
+
             if party_key and len(party_key) >= 3:
                 for p in month_files:
                     name_key = _match_key(p.stem)
-                    if party_key in name_key and (not date_key or date_key in name_key):
+                    if party_key in name_key and (not date_keys or any(k in name_key for k in date_keys)):
                         party_hits.append(p)
                 if len(party_hits) == 1:
                     return party_hits[0]
     except Exception:
         pass
+
+    # Racines utilisées plus bas par les fallbacks de compatibilité.
+    supplier_root = FOURNISSEURS_ROOT.resolve()
 
     # Compatibilité avec les quelques liens créés par 2.3.91/2.3.92 au singulier.
     # Aucun dossier singulier n'est recréé : on tente seulement le chemin pluriel.
