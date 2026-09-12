@@ -537,8 +537,8 @@ Des compteurs indiquent :
 
 L’édition se fait directement dans la ligne :
 
-- **Éditer** active les champs ;
-- **Valider** enregistre ;
+- **Modifier** active les champs ;
+- **Enregistrer** enregistre ;
 - **Annuler** abandonne les changements ;
 - **Supprimer** efface la ligne après confirmation.
 

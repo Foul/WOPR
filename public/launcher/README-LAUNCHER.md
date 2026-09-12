@@ -1,6 +1,6 @@
 # Lanceur WOPR unifié
 
-Version documentée : **2.3.285**.
+Version documentée : **2.3.286**.
 
 Le lanceur Python `wopr_launcher.py` est la source commune Linux/Windows.
 

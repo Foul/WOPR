@@ -139,7 +139,7 @@
 
           <td class="followup-last-name">
             <strong>{{ r['client_last_name'] or r['client_name'] or '' }}</strong>
-            {% if r['legacy_imported'] %}<span class="legacy-mini">ODS</span>{% endif %}
+            {% if r['legacy_imported'] %}<span class="legacy-mini">HIST</span>{% endif %}
             {% if r.get('_virtual_payment') %}
               <span class="payment-mode-badge" title="Encaissement réalisé sur ce mois">Encaissement</span>
             {% elif r['status']=='Terminé' %}
@@ -302,7 +302,7 @@
                     </select>
                   </div>
                   {% if not r['payment_mode'] and r['payment_method'] %}
-                    <small>Historique ODS : {{ r['payment_method'] }}</small>
+                    <small>Historique : {{ r['payment_method'] }}</small>
                   {% endif %}
 
                   <div class="payment-mix-fields" data-payment-mix hidden>

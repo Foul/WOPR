@@ -133,5 +133,5 @@
     <a class="button" href="{{ url_for('repair_detail', rid=r['id']) }}">Annuler</a>
   </div>
 </form>
-<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}?v={{ app_version }}"></script>
 {% endblock %}

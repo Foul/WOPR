@@ -1,5 +1,4 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, jsonify, Response, session, abort
-from html import escape as html_escape
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -859,82 +858,8 @@ def _wopr_remove_topbar_simple_invoice(html):
     return pattern.sub("", html, count=1)
 
 
-def _wopr_folder_button(folder_url):
-    safe = html_escape(folder_url, quote=True)
-    return (
-        f'<button type="button" class="wopr-folder-direct" '
-        f'title="Ouvrir le dossier du PDF" aria-label="Ouvrir le dossier du PDF" '
-        f'onclick="fetch(\'{safe}\',{{cache:\'no-store\'}});return false;">📁</button>'
-    )
 
 
-def _wopr_add_pdf_folder_buttons(html):
-    """Ajoute 📁 directement après les liens PDF réellement présents dans le HTML."""
-    if 'wopr-folder-direct' in html:
-        return html
-
-    # Factures liées à un suivi : /repair/<id>/invoice.pdf
-    invoice_link = re.compile(
-        r'(<a\b[^>]*\bhref=["\'](?:https?://[^"\']+)?/repair/(\d+)/invoice\.pdf(?:[?#][^"\']*)?["\'][^>]*>.*?</a>)',
-        re.IGNORECASE | re.DOTALL,
-    )
-    html = invoice_link.sub(
-        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/invoice-folder"),
-        html,
-    )
-
-    # PDF de suivi / prise en charge : /repair/<id>/intake.pdf
-    intake_link = re.compile(
-        r'(<a\b[^>]*\bhref=["\'](?:https?://[^"\']+)?/repair/(\d+)/intake\.pdf(?:[?#][^"\']*)?["\'][^>]*>.*?</a>)',
-        re.IGNORECASE | re.DOTALL,
-    )
-    html = intake_link.sub(
-        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/intake-folder"),
-        html,
-    )
-
-    # Factures ouvertes depuis Achats/Ventes.
-    ledger_link = re.compile(
-        r'(<a\b[^>]*\bhref=["\'](?:https?://[^"\']+)?/achats-ventes/vente/(\d+)/facture(?:[?#][^"\']*)?["\'][^>]*>.*?</a>)',
-        re.IGNORECASE | re.DOTALL,
-    )
-    html = ledger_link.sub(
-        lambda m: m.group(1) + _wopr_folder_button(f"/achats-ventes/vente/{m.group(2)}/folder"),
-        html,
-    )
-
-    # Certains boutons PDF utilisent formaction au lieu de href.
-    invoice_formaction = re.compile(
-        r'(<(?:button|input)\b[^>]*\bformaction=["\'](?:https?://[^"\']+)?/repair/(\d+)/invoice\.pdf(?:[?#][^"\']*)?["\'][^>]*>)',
-        re.IGNORECASE | re.DOTALL,
-    )
-    html = invoice_formaction.sub(
-        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/invoice-folder"),
-        html,
-    )
-
-    intake_formaction = re.compile(
-        r'(<(?:button|input)\b[^>]*\bformaction=["\'](?:https?://[^"\']+)?/repair/(\d+)/intake\.pdf(?:[?#][^"\']*)?["\'][^>]*>)',
-        re.IGNORECASE | re.DOTALL,
-    )
-    html = intake_formaction.sub(
-        lambda m: m.group(1) + _wopr_folder_button(f"/repair/{m.group(2)}/intake-folder"),
-        html,
-    )
-
-    # Style compact : n'élargit pas les boutons existants.
-    style = """<style id="wopr-folder-direct-style">
-.wopr-folder-direct{
- display:inline-flex;align-items:center;justify-content:center;
- width:20px;height:20px;min-width:20px;padding:0;margin-left:4px;
- border:1px solid #aeb8c4;border-radius:4px;background:#fff;
- cursor:pointer;font-size:11px;line-height:1;vertical-align:middle;
-}
-.wopr-folder-direct:hover{background:#eef6ff;border-color:#4b98df}
-</style>"""
-    if "</head>" in html:
-        html = html.replace("</head>", style + "\n</head>", 1)
-    return html
 
 
 # Force explicitement UTF-8 pour toutes les pages HTML.
@@ -4637,8 +4562,6 @@ def normalize_phone(value):
     return digits
 
 
-def google_is_configured():
-    return GOOGLE_LIBS_OK and GOOGLE_CLIENT_SECRET.exists() and GOOGLE_TOKEN.exists()
 
 
 def google_credentials():
@@ -4926,28 +4849,6 @@ def sync_client_to_google(client_id):
         return False, msg
 
 
-def sync_client_to_google_async(client_id):
-    """Lance la synchronisation Google sans bloquer la requête web."""
-    try:
-        client_id = int(client_id)
-    except (TypeError, ValueError):
-        return False
-
-    def _worker():
-        try:
-            sync_client_to_google(client_id)
-        except Exception as exc:
-            try:
-                set_google_sync_state(client_id, "Erreur", error=str(exc))
-            except Exception:
-                pass
-
-    threading.Thread(
-        target=_worker,
-        name=f"wopr-google-sync-{client_id}",
-        daemon=True,
-    ).start()
-    return True
 
 
 
@@ -5435,12 +5336,27 @@ def _local_client_richness(local, repairs_count=0, quotes_count=0):
     return (repairs_count * 1000) + (quotes_count * 100) + filled
 
 
-def _identity_key(first_name="", last_name="", legacy_name=""):
-    first = _contact_name_normalize(first_name)
-    last = _contact_name_normalize(last_name)
-    if first or last:
-        return f"{first}|{last}"
-    return _contact_name_normalize(legacy_name)
+def _client_activity_counts(con):
+    """Retourne les compteurs réparations/devis par client en 2 requêtes groupées."""
+    stats = {}
+
+    for row in con.execute(
+        "SELECT client_id, COUNT(*) AS n FROM repairs "
+        "WHERE client_id IS NOT NULL GROUP BY client_id"
+    ).fetchall():
+        stats.setdefault(int(row["client_id"]), {"repairs": 0, "quotes": 0})
+        stats[int(row["client_id"])]["repairs"] = int(row["n"] or 0)
+
+    for row in con.execute(
+        "SELECT client_id, COUNT(*) AS n FROM quotes "
+        "WHERE client_id IS NOT NULL GROUP BY client_id"
+    ).fetchall():
+        stats.setdefault(int(row["client_id"]), {"repairs": 0, "quotes": 0})
+        stats[int(row["client_id"])]["quotes"] = int(row["n"] or 0)
+
+    return stats
+
+
 
 
 def _field_conflict(values, normalizer=lambda x: str(x or "").strip().casefold()):
@@ -5464,6 +5380,7 @@ def find_safe_local_duplicate_groups(con):
 
     visited = set()
     safe_groups = []
+    activity_stats = _client_activity_counts(con)
 
     for sig, ids in signature_to_ids.items():
         ids = set(ids)
@@ -5484,15 +5401,13 @@ def find_safe_local_duplicate_groups(con):
         if _field_conflict([x.get("phone") for x in members], normalize_phone):
             continue
 
-        stats = {}
-        for m in members:
-            repairs_count = con.execute(
-                "SELECT COUNT(*) FROM repairs WHERE client_id=?", (m["id"],)
-            ).fetchone()[0]
-            quotes_count = con.execute(
-                "SELECT COUNT(*) FROM quotes WHERE client_id=?", (m["id"],)
-            ).fetchone()[0]
-            stats[m["id"]] = (repairs_count, quotes_count)
+        stats = {
+            m["id"]: (
+                activity_stats.get(m["id"], {}).get("repairs", 0),
+                activity_stats.get(m["id"], {}).get("quotes", 0),
+            )
+            for m in members
+        }
 
         ordered = sorted(
             members,
@@ -5614,17 +5529,7 @@ def analyze_google_csv_contacts(contacts):
     con = db()
     local_rows = [dict(x) for x in con.execute("SELECT * FROM clients ORDER BY id").fetchall()]
 
-    local_stats = {}
-    for local in local_rows:
-        cid = local["id"]
-        local_stats[cid] = {
-            "repairs": con.execute(
-                "SELECT COUNT(*) FROM repairs WHERE client_id=?", (cid,)
-            ).fetchone()[0],
-            "quotes": con.execute(
-                "SELECT COUNT(*) FROM quotes WHERE client_id=?", (cid,)
-            ).fetchone()[0],
-        }
+    local_stats = _client_activity_counts(con)
 
     con.close()
 
@@ -6476,11 +6381,16 @@ def security_page():
         key=lambda p: p.stat().st_mtime,
         reverse=True
     ) if BACKUP_DIR.exists() else []
+    latest_backup_at = (
+        datetime.fromtimestamp(backups[0].stat().st_mtime).strftime("%d/%m/%Y à %H:%M")
+        if backups else None
+    )
     smtp_settings = read_smtp_settings()
     business = cfg()
     return render_template(
         "security.html",
         backups=backups[:10],
+        latest_backup_at=latest_backup_at,
         session_hours=ADMIN_SESSION_HOURS,
         smtp_settings=smtp_settings,
         smtp_token_configured=bool(smtp_settings.get("token")),
@@ -7688,13 +7598,33 @@ def quotes_page():
         )
 
     historical_document_count = len(list(DEVIS_ROOT.rglob("*.pdf"))) if DEVIS_ROOT.exists() else 0
-    historical_quote_count = sum(1 for q in quotes if q["document_count"] > 0)
+    archived_quotes = [q for q in quotes if q["document_count"] > 0]
+    historical_quote_count = len(archived_quotes)
+
+    today = now().date()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    year_start = today.replace(month=1, day=1)
+
+    quote_period_counts = {"week": 0, "month": 0, "year": 0}
+    for quote in archived_quotes:
+        try:
+            quote_day = datetime.strptime(str(quote.get("quote_date") or "")[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if week_start <= quote_day <= today:
+            quote_period_counts["week"] += 1
+        if month_start <= quote_day <= today:
+            quote_period_counts["month"] += 1
+        if year_start <= quote_day <= today:
+            quote_period_counts["year"] += 1
 
     return render_template(
         "quotes.html",
         quotes=quotes,
         historical_document_count=historical_document_count,
         historical_quote_count=historical_quote_count,
+        quote_period_counts=quote_period_counts,
         devis_root=str(DEVIS_ROOT),
     )
 
@@ -10728,21 +10658,6 @@ def qr_png(rid):
     bio.seek(0)
     return send_file(bio, mimetype="image/png")
 
-def pdf_header(c, title, subtitle=None):
-    conf = cfg()
-    w, h = A4
-    c.setFont(PDF_FONTS["bold"], 18)
-    c.drawString(18*mm, h-20*mm, conf["business_name"])
-    c.setFont(PDF_FONTS["regular"], 9)
-    c.drawRightString(w-18*mm, h-17*mm, conf["website"])
-    c.drawRightString(w-18*mm, h-22*mm, conf["email"] + " - " + conf["phone"])
-    c.line(18*mm, h-26*mm, w-18*mm, h-26*mm)
-    c.setFont(PDF_FONTS["bold"], 16)
-    c.drawString(18*mm, h-36*mm, title)
-    if subtitle:
-        c.setFont(PDF_FONTS["regular"], 10)
-        c.drawString(18*mm, h-42*mm, subtitle)
-    return w,h
 
 def draw_wrapped(c, text, x, y, max_chars=95, line_h=5*mm, font=None, size=9):
     font = font or PDF_FONTS["regular"]
@@ -11583,7 +11498,56 @@ def invoices_page():
         key=lambda x: (str(x["invoice_date"] or ""), str(x["invoice_no"] or ""), int(x["id"] or 0)),
         reverse=True
     )
-    return render_template("invoices.html", invoices=invoices, q=q, unpaid_only=unpaid_only)
+
+    # Statistiques globales de la page Factures.
+    # Elles sont calculées sur toutes les factures distinctes, indépendamment
+    # de la recherche courante ou du filtre "impayées".
+    today = now().date()
+    week_start = today - timedelta(days=today.weekday())
+    invoice_stats = {
+        "total": len(grouped),
+        "week": 0,
+        "month": 0,
+        "year": 0,
+        "pdf": 0,
+    }
+
+    for group in grouped.values():
+        inv_date = invoice_no_date(group["invoice_no"])
+        if not inv_date:
+            date_candidates = sorted({
+                str(x.get("finished_at") or x.get("received_date") or "")[:10]
+                for x in group["rows"]
+                if x.get("finished_at") or x.get("received_date")
+            })
+            inv_date = date_candidates[0] if date_candidates else ""
+
+        try:
+            d = datetime.strptime(inv_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+
+        if week_start <= d <= today:
+            invoice_stats["week"] += 1
+        if d.year == today.year and d.month == today.month:
+            invoice_stats["month"] += 1
+        if d.year == today.year:
+            invoice_stats["year"] += 1
+
+    if FACTURES_ROOT.exists():
+        invoice_stats["pdf"] = sum(
+            1
+            for pdf in FACTURES_ROOT.rglob("*.pdf")
+            if "fournisseurs" not in {part.casefold() for part in pdf.parts}
+        )
+
+    return render_template(
+        "invoices.html",
+        invoices=invoices,
+        q=q,
+        unpaid_only=unpaid_only,
+        invoice_stats=invoice_stats,
+    )
 
 
 @app.route("/repair/<int:rid>/invoice.pdf")
@@ -13307,31 +13271,25 @@ def client_merge(client_id):
                  id
     """, (client_id,)).fetchall()]
 
+    activity_stats = _client_activity_counts(con)
+
     candidates = []
     for row in rows:
         sigs = _contact_name_signature(
             row.get("first_name"), row.get("last_name"), row.get("name"), ""
         )
         exact_name = bool(source_sigs & sigs)
-        repairs_count = con.execute(
-            "SELECT COUNT(*) FROM repairs WHERE client_id=?", (row["id"],)
-        ).fetchone()[0]
-        quotes_count = con.execute(
-            "SELECT COUNT(*) FROM quotes WHERE client_id=?", (row["id"],)
-        ).fetchone()[0]
+        row_stats = activity_stats.get(row["id"], {})
         candidates.append({
             "client": row,
             "exact_name": exact_name,
-            "repairs_count": int(repairs_count or 0),
-            "quotes_count": int(quotes_count or 0),
+            "repairs_count": int(row_stats.get("repairs", 0)),
+            "quotes_count": int(row_stats.get("quotes", 0)),
         })
 
-    source_repairs = con.execute(
-        "SELECT COUNT(*) FROM repairs WHERE client_id=?", (client_id,)
-    ).fetchone()[0]
-    source_quotes = con.execute(
-        "SELECT COUNT(*) FROM quotes WHERE client_id=?", (client_id,)
-    ).fetchone()[0]
+    source_stats = activity_stats.get(client_id, {})
+    source_repairs = int(source_stats.get("repairs", 0))
+    source_quotes = int(source_stats.get("quotes", 0))
     con.close()
 
     # Les correspondances de nom exact passent en premier.

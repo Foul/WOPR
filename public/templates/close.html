@@ -140,7 +140,7 @@
     {% if r['simple_invoice'] %}
       <strong>Facture simple :</strong> aucune fiche n'est créée dans le Suivi.
     {% elif r['legacy_imported'] %}
-      <strong>Facture historique ODS :</strong>
+      <strong>Facture historique :</strong>
       {% if not invoice_was_reconstructed %}
         les lignes ci-dessous sont une <strong>reconstruction depuis le Suivi</strong> et peuvent être incomplètes.
         {% if original_invoice_pdf %}

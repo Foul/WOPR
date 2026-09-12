@@ -1,5 +1,17 @@
 # Changelog de la documentation
 
+## 2.3.286 - 12 septembre 2026 - nettoyage, harmonisation et optimisations
+- Nettoyage du projet : suppression de code mort, d’assets devenus inutiles et de fichiers parasites.
+- Harmonisation des actions d’édition dans l’interface, notamment sur Antivirus avec **Modifier / Enregistrer / Annuler**.
+- Correction de l’affichage du bouton **Annuler** sur Antivirus : il n’apparaît plus hors du mode édition.
+- Ajout de statistiques synthétiques sur les pages **Factures** et **Devis** : total distinct, semaine, mois, année et PDF archivés.
+- Affichage de la **dernière sauvegarde réelle** dans la page Sécurité.
+- Harmonisation du cache-busting des fichiers CSS/JS afin d’éviter l’affichage d’anciennes versions après mise à jour.
+- Optimisation des requêtes SQLite utilisées pour les compteurs clients, devis et réparations.
+- Conservation des migrations historiques utiles tout en retirant les anciennes fonctions réellement inutilisées.
+- Documentation et maintenance alignées sur **2.3.286**.
+- Renforcement des contrôles de publication : cohérence de version, Python, whitespace, documentation, liens et assets.
+
 ## 2.3.285 - 11 septembre 2026 - release visuelle et documentaire
 - Uniformisation de Suivi, Factures, Devis, Clients et Achats / Ventes.
 - Palette d’actions cohérente sur tous les thèmes.

@@ -145,5 +145,5 @@ clientSelect.addEventListener('change',updateClientFields);
 updateClientFields();
 </script>
 
-<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}?v={{ app_version }}"></script>
 {% endblock %}

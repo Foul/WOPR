@@ -3,7 +3,7 @@
 {% block body %}
 
 <style>
-/* Clients 2.3.259 — actions normales compactes, directement dans le template. */
+/* Clients — actions normales compactes, directement dans le template. */
 .contacts-table .contact-cell-actions{
   vertical-align: middle;
   text-align: center;
@@ -344,5 +344,5 @@
   }
 })();
 </script>
-<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}?v={{ app_version }}"></script>
 {% endblock %}

@@ -1084,7 +1084,8 @@ code{background:#eef3f8;padding:2px 5px;border-radius:4px}
 .av-row.editing .av-normal-actions{display:none}
 .av-row.editing .av-edit-actions{display:grid}
 .av-edit input{width:100%;min-width:0;padding:6px;font-size:12px}
-.av-normal-actions,.av-edit-actions{display:grid;gap:4px}
+.av-normal-actions{display:grid;gap:4px}
+.av-edit-actions{gap:4px}
 .av-normal-actions form{margin:0}
 .av-normal-actions .mini-btn,.av-edit-actions .mini-btn{width:100%;font-size:11px}
 

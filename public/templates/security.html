@@ -49,7 +49,10 @@
       WOPR crée une sauvegarde quotidienne et une nouvelle sauvegarde lorsque tu l'arrêtes avec le bouton/script d'arrêt.
       Les nouvelles sauvegardes sont compressées en <strong>GZIP</strong>. Les <strong>30 dernières sauvegardes générées par WOPR</strong> sont conservées dans <code>private/data/backups/</code>.
     </p>
-    <div class="backup-auto-status">✓ Sauvegarde quotidienne + sauvegarde à l'arrêt actives</div>
+    <div class="backup-auto-status">
+      ✓ Sauvegarde quotidienne + sauvegarde à l'arrêt actives
+      {% if latest_backup_at %}<br><small>Dernière sauvegarde réelle : {{ latest_backup_at }}</small>{% endif %}
+    </div>
     <form method="post" style="margin-top:12px;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="backup">

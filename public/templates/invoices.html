@@ -10,6 +10,18 @@
   <a class="button primary" href="{{ url_for('simple_invoice_new') }}">➕ Facture simple</a>
 </div>
 
+<div class="sheet-note" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+  <strong>{{ invoice_stats.total }}</strong> factures distinctes
+  <span>•</span>
+  <strong>{{ invoice_stats.week }}</strong> cette semaine
+  <span>•</span>
+  <strong>{{ invoice_stats.month }}</strong> ce mois
+  <span>•</span>
+  <strong>{{ invoice_stats.year }}</strong> cette année
+  <span>•</span>
+  <strong>{{ invoice_stats.pdf }}</strong> PDF archivés
+</div>
+
 {% if unpaid_only %}
 <div class="sheet-note" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
   <strong>💳 Affichage : factures impayées uniquement</strong>
@@ -55,7 +67,7 @@
           {{ r['invoice_no'] }}
         </a>
         {% if r['historical'] %}
-          <span class="legacy-mini">ODS</span>
+          <span class="legacy-mini">HIST</span>
         {% endif %}
         {% if r['simple_invoice'] %}
           <span class="simple-invoice-mini">SIMPLE</span>
