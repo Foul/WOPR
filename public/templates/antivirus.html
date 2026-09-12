@@ -105,15 +105,15 @@
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         </form>
         <div class="av-normal-actions">
-          <button class="mini-btn wopr-action-edit" type="button" data-av-edit="{{ e['id'] }}">✏️ Éditer</button>
+          <button class="mini-btn pixel-btn wopr-action-edit" type="button" data-av-edit="{{ e['id'] }}">✏️ Éditer</button>
           <form method="post" action="{{ url_for('antivirus_delete', entry_id=e['id']) }}" onsubmit="return confirm('Supprimer cette ligne antivirus ?');">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button class="mini-btn danger-btn wopr-action-delete" type="submit">Supprimer</button>
+            <button class="mini-btn pixel-btn danger-btn wopr-action-delete" type="submit">Supprimer</button>
           </form>
         </div>
         <div class="av-edit-actions">
-          <button class="mini-btn primary wopr-action-save" type="submit" form="av-form-{{ e['id'] }}">✓ Valider</button>
-          <button class="mini-btn wopr-action-neutral" type="button" data-av-cancel="{{ e['id'] }}">Annuler</button>
+          <button class="mini-btn pixel-btn primary wopr-action-save" type="submit" form="av-form-{{ e['id'] }}">✓ Valider</button>
+          <button class="mini-btn pixel-btn wopr-action-neutral" type="button" data-av-cancel="{{ e['id'] }}">Annuler</button>
         </div>
       </td>
     </tr>

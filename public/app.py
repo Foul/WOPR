@@ -952,27 +952,13 @@ def force_utf8_html(response):
         try:
             html = response.get_data(as_text=True)
             html = _wopr_remove_topbar_simple_invoice(html)
-            css_tag = f'<link rel="stylesheet" href="/static/wopr-responsive.css?v={APP_VERSION}">'
-            js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}" defer></script>'
-            print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}" defer></script>'
-            google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}" defer></script>'
-            folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}" defer></script>'
-            actions_8bit_runtime_js_tag = f'<script src="/static/wopr-8bit-actions-runtime.js?v={APP_VERSION}" defer></script>'
-            uniform_css_tag = f'<link rel="stylesheet" href="/static/wopr-uniform-lists.css?v={APP_VERSION}">'
-            action_colors_css_tag = f'<link rel="stylesheet" href="/static/wopr-action-colors.css?v={APP_VERSION}">'
-            release_8bit_css_tag = f'<link rel="stylesheet" href="/static/wopr-8bit-release.css?v={APP_VERSION}">'
-            hotfix_8bit_css_tag = f'<link rel="stylesheet" href="/static/wopr-8bit-hotfix.css?v={APP_VERSION}">'
 
-            if "wopr-responsive.css" not in html and "</head>" in html:
-                html = html.replace("</head>", css_tag + "\n</head>", 1)
-            if "wopr-uniform-lists.css" not in html and "</head>" in html:
-                html = html.replace("</head>", uniform_css_tag + "\n</head>", 1)
-            if "wopr-action-colors.css" not in html and "</head>" in html:
-                html = html.replace("</head>", action_colors_css_tag + "\n</head>", 1)
-            if "wopr-8bit-release.css" not in html and "</head>" in html:
-                html = html.replace("</head>", release_8bit_css_tag + "\n</head>", 1)
-            if "wopr-8bit-hotfix.css" not in html and "</head>" in html:
-                html = html.replace("</head>", hotfix_8bit_css_tag + "\n</head>", 1)
+            js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}"></script>'
+            print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}"></script>'
+            google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}"></script>'
+            folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}"></script>'
+            actions_8bit_runtime_js_tag = f'<script src="/static/wopr-8bit-actions-runtime.js?v={APP_VERSION}"></script>'
+
 
 
             if "wopr-responsive.js" not in html and "</body>" in html:
