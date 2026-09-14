@@ -6,7 +6,6 @@
   <div class="banner-title">Prise en charge / Suivi de réparation</div>
 </div>
 
-<div class="client-mode-notice">🔒 Mode Client actif — aucune donnée des autres clients n'est visible.</div>
 <form method="post" class="sheet-form">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="client_id" id="existing-client-id" value="">
@@ -20,7 +19,7 @@
              autocomplete="off"
              placeholder="Commence à taper un nom ou une entreprise…">
       <select id="existing-client-results" size="4" style="display:none; margin-top:.45rem;"></select>
-      <small id="existing-client-help">Ex. « mor » trouve Moreau ; « trans » trouve une entreprise commençant par Trans.</small>
+      <small id="existing-client-help">Tape au moins 2 caractères : nom, entreprise, téléphone ou courriel.</small>
     </label>
   </div>
 
@@ -71,12 +70,11 @@
 <script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}?v={{ app_version }}"></script>
 <script>
 (() => {
-  const clients = {{ clients|tojson }};
   const search = document.getElementById('existing-client-search');
   const results = document.getElementById('existing-client-results');
   const hiddenId = document.getElementById('existing-client-id');
   const help = document.getElementById('existing-client-help');
-
+  const searchUrl = {{ url_for('repair_client_search')|tojson }};
   const fields = {
     first_name: document.getElementById('client-first-name'),
     last_name: document.getElementById('client-last-name'),
@@ -87,90 +85,89 @@
     phone: document.getElementById('client-phone'),
     email: document.getElementById('client-email')
   };
-
-  const normalize = value => String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
-
+  let foundClients = [];
+  let searchTimer = null;
+  let requestSerial = 0;
   const clientLabel = c => {
     const first = String(c.first_name || '').trim();
     const last = String(c.last_name || c.name || '').trim();
     const person = [first, last].filter(Boolean).join(' ');
     const company = String(c.company || '').trim();
-    if (person && company) return `${person} — ${company}`;
+    const normalized = value => String(value || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLocaleLowerCase('fr-FR');
+
+    if (person && company && normalized(person) !== normalized(company)) {
+      return `${person} — ${company}`;
+    }
     return person || company || String(c.name || '').trim();
   };
-
-  const searchableWords = c => {
-    const values = [
-      c.first_name, c.last_name, c.name, c.company
-    ].map(normalize).join(' ');
-    return values.split(/[\s'’\-_.]+/).filter(Boolean);
+  const clearSelection = () => { hiddenId.value = ''; };
+  const hideResults = () => {
+    results.innerHTML = '';
+    results.style.display = 'none';
+    foundClients = [];
   };
-
-  const matches = (client, query) => {
-    const qWords = normalize(query).split(/\s+/).filter(Boolean);
-    if (!qWords.length) return false;
-    const words = searchableWords(client);
-    return qWords.every(q => words.some(word => word.startsWith(q)));
-  };
-
-  const clearSelection = () => {
-    hiddenId.value = '';
-  };
-
   const fillClient = client => {
     hiddenId.value = String(client.id);
-    Object.entries(fields).forEach(([key, el]) => {
-      if (el) el.value = client[key] || '';
-    });
+    Object.entries(fields).forEach(([key, el]) => { if (el) el.value = client[key] || ''; });
     search.value = clientLabel(client);
-    results.style.display = 'none';
+    hideResults();
     help.textContent = '✓ Client existant sélectionné.';
   };
-
-  search.addEventListener('input', () => {
-    clearSelection();
-    const q = search.value.trim();
-    results.innerHTML = '';
-
-    if (!q) {
-      results.style.display = 'none';
-      help.textContent = 'Tape le début d’un nom ou d’une entreprise.';
-      return;
-    }
-
-    const found = clients.filter(c => matches(c, q)).slice(0, 12);
-
-    if (!found.length) {
-      results.style.display = 'none';
+  const renderResults = clients => {
+    hideResults();
+    foundClients = clients;
+    if (!clients.length) {
       help.textContent = 'Aucun client correspondant — tu peux saisir un nouveau client ci-dessous.';
       return;
     }
-
-    found.forEach(c => {
+    clients.forEach(c => {
       const option = document.createElement('option');
       option.value = String(c.id);
       option.textContent = clientLabel(c);
       results.appendChild(option);
     });
-
-    results.size = Math.min(Math.max(found.length, 2), 6);
+    results.size = Math.min(Math.max(clients.length, 2), 6);
     results.style.display = '';
-    help.textContent = `${found.length} client(s) correspondant(s).`;
+    help.textContent = `${clients.length} client(s) correspondant(s).`;
+  };
+  const runSearch = async query => {
+    const serial = ++requestSerial;
+    help.textContent = 'Recherche…';
+    try {
+      const response = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}`, {
+        headers: {'Accept': 'application/json'}, credentials: 'same-origin'
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const clients = await response.json();
+      if (serial !== requestSerial) return;
+      renderResults(Array.isArray(clients) ? clients : []);
+    } catch (error) {
+      if (serial !== requestSerial) return;
+      hideResults();
+      help.textContent = 'Recherche client indisponible — tu peux saisir les coordonnées manuellement.';
+    }
+  };
+  search.addEventListener('input', () => {
+    clearSelection();
+    window.clearTimeout(searchTimer);
+    const q = search.value.trim();
+    if (q.length < 2) {
+      ++requestSerial;
+      hideResults();
+      help.textContent = q ? 'Tape au moins 2 caractères.' : 'Tape le début d’un nom, d’une entreprise, d’un téléphone ou d’un courriel.';
+      return;
+    }
+    searchTimer = window.setTimeout(() => runSearch(q), 180);
   });
-
-  results.addEventListener('change', () => {
-    const client = clients.find(c => String(c.id) === results.value);
+  const useSelectedClient = () => {
+    const client = foundClients.find(c => String(c.id) === results.value);
     if (client) fillClient(client);
-  });
-
-  results.addEventListener('dblclick', () => {
-    const client = clients.find(c => String(c.id) === results.value);
-    if (client) fillClient(client);
-  });
+  };
+  results.addEventListener('change', useSelectedClient);
+  results.addEventListener('dblclick', useSelectedClient);
 })();
 </script>
 {% endblock %}

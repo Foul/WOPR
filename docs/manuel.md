@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
 **Version documentée : 2.3.286**
-**Documentation mise à jour : 11 septembre 2026**
+**Documentation mise à jour : 14 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -103,6 +103,8 @@ Le lanceur permet d’arrêter proprement WOPR.
 
 Une sauvegarde d’arrêt n’est créée que si la base a changé depuis la sauvegarde précédente. Cela évite de générer inutilement des copies identiques.
 
+Au démarrage, WOPR privilégie la base SQLite contenant les données clients et réparations les plus complètes plutôt que de se fier uniquement au nom du fichier. Cette protection évite de sélectionner par erreur une base vide ou incomplète.
+
 ---
 
 ## 4. Interface générale et thèmes
@@ -150,7 +152,7 @@ Les actions utilisent une logique commune :
 
 ### 4.3 Thème 8-BIT
 
-La version 2.3.285 finalise le thème 8-BIT.
+Le thème 8-BIT conserve le rendu pixel-art finalisé lors de la série 2.3.285, avec les ajustements de cohérence apportés en 2.3.286.
 
 Les boutons d’action adoptent un rendu pixel-art cohérent, y compris les boutons créés dynamiquement par JavaScript comme certains boutons **Facture** et **Dossier**.
 
@@ -185,13 +187,15 @@ Les cartes du tableau de bord sont cliquables lorsqu’un accès détaillé exis
 
 ### 6.1 Recherche du client
 
-Lors de la création d’une réparation, il est possible de rechercher un client existant en saisissant le début de son prénom, de son nom ou du nom de son entreprise.
+Lors de la création d’une réparation, il est possible de rechercher un client existant par prénom, nom, société, téléphone ou e-mail.
 
-WOPR n’affiche que les correspondances utiles.
+La recherche est effectuée côté serveur et ne charge pas tout le carnet clients dans la page. Elle est volontairement permissive : quelques caractères au milieu d’un nom ou d’une société peuvent suffire.
 
 Lorsqu’une fiche est choisie, ses coordonnées sont automatiquement reprises.
 
-WOPR conserve également ses mécanismes historiques de rapprochement par e-mail ou téléphone lorsqu’aucune sélection explicite n’a été effectuée.
+Une modification réelle des coordonnées marque le client « À synchroniser » pour Google Contacts. En revanche, ouvrir ou réutiliser une fiche sans changement ne modifie pas son état de synchronisation.
+
+WOPR ne déclenche pas de synchronisation Google automatique depuis cette saisie.
 
 ### 6.2 Adresse et ville
 
@@ -293,9 +297,15 @@ La facture peut contenir plusieurs lignes de prestation et de marchandise.
 
 Une facture existante peut être modifiée sans recréer le dossier.
 
+Lorsqu’une facture est créée depuis un suivi, WOPR préremplit la désignation à partir des informations techniques disponibles, sans imposer de prix.
+
 La date de facture peut être corrigée indépendamment du numéro de facture.
 
-Les remarques de réparation restent rattachées au Suivi et ne sont pas supprimées par l’éditeur de facture.
+Les remarques et le travail effectué restent rattachés au Suivi et ne sont pas supprimés par l’éditeur de facture.
+
+Par défaut, une facturation normale est remise en **Facture + Suivi Papier**. Le mode e-mail reste un choix manuel.
+
+La date comptable n’est renseignée automatiquement que lorsque **Paiement reçu** est explicitement coché.
 
 ### 8.2 Liste Factures
 
@@ -329,6 +339,8 @@ Les PDF sont ouverts dans le lecteur du navigateur au lieu d’être télécharg
 ### 8.5 Facture simple
 
 La Facture simple permet de créer une facture sans dossier de réparation complet.
+
+Elle utilise la même recherche client que la prise en charge : recherche permissive, sélection d’une fiche existante et remplissage automatique des coordonnées.
 
 Elle accepte les lignes de prestation et de marchandise et bénéficie également de l’aide code postal / ville.
 
@@ -369,6 +381,7 @@ La page **Clients** centralise les fiches et coordonnées.
 
 Fonctions disponibles :
 
+- création directe d’un client, sans créer de suivi ni de facture ;
 - recherche ;
 - historique ;
 - SMS / message ;
@@ -394,6 +407,8 @@ Un vrai client ayant un historique doit normalement être **archivé**.
 
 La suppression définitive est réservée aux fiches de test ou créées par erreur et demande une confirmation explicite.
 
+Lorsqu’un client est relié à Abby, WOPR tente d’abord de supprimer le contact ou l’organisation correspondant chez Abby. Si Abby refuse la suppression ou devient indisponible, la suppression locale est annulée afin d’éviter un décalage silencieux entre les deux systèmes.
+
 ### 10.3 Historique
 
 La fiche d’historique permet notamment de retrouver :
@@ -412,6 +427,8 @@ La fiche d’historique permet notamment de retrouver :
 La synchronisation Google est volontairement prudente.
 
 Les opérations **WOPR vers Google** et **Google vers WOPR** sont distinctes.
+
+La création ou la modification locale d’un client ne déclenche pas d’écriture Google automatique. Une vraie modification place simplement la fiche dans l’état **À synchroniser**.
 
 La suppression Google est explicite.
 
@@ -507,7 +524,8 @@ Selon la configuration et les possibilités du compte, WOPR peut notamment :
 
 - mémoriser la configuration ;
 - tester la connexion ;
-- synchroniser des clients ;
+- synchroniser et relier des clients ;
+- supprimer chez Abby un client supprimé dans WOPR lorsqu’un lien Abby existe ;
 - consulter les erreurs ;
 - importer certaines factures fournisseurs électroniques ;
 - détecter les doublons.
@@ -537,8 +555,8 @@ Des compteurs indiquent :
 
 L’édition se fait directement dans la ligne :
 
-- **Modifier** active les champs ;
-- **Enregistrer** enregistre ;
+- **Éditer** active les champs ;
+- **Valider** enregistre ;
 - **Annuler** abandonne les changements ;
 - **Supprimer** efface la ligne après confirmation.
 
@@ -579,6 +597,8 @@ Selon la configuration, l’envoi peut utiliser :
 - KDE Connect pour le SMS ;
 - un texte préparé à copier dans un autre service.
 
+Tous les envois SMTP construits par WOPR (suivi, facture, facture simple via la facture, devis) utilisent la même signature e-mail locale lorsqu’elle est activée. L’image de signature et ses paramètres sont conservés dans `private/` et sont intégrés au message en image inline.
+
 WOPR reste utilisable même si ces intégrations ne sont pas configurées.
 
 ---
@@ -608,6 +628,8 @@ Sa consultation utilise une action protégée.
 ### 17.4 SMTP
 
 Les réglages SMTP et jetons restent locaux.
+
+La signature e-mail commune est également stockée dans `private/` afin de ne pas intégrer l’identité ou les visuels de l’entreprise dans le code public.
 
 ### 17.5 Logo facture
 
@@ -827,28 +849,28 @@ Conserver une sauvegarde sécurisée de cette clé en dehors du dépôt public.
 
 ---
 
-## 25. Nouveautés principales de la release 2.3.285
+## 25. Nouveautés principales de la release 2.3.286
 
-Cette release consolide une longue série d’améliorations.
+La version 2.3.286 consolide surtout le workflow quotidien et les intégrations.
 
 Parmi les évolutions visibles :
 
-- interface allégée et uniformisée ;
-- Clients plus compacts ;
-- Factures, Devis et Achats / Ventes harmonisés ;
-- palette d’actions cohérente ;
-- thème 8-BIT finalisé ;
-- boutons Facture et Dossier correctement pris en charge ;
-- actions Antivirus harmonisées ;
-- tableaux et badges 8-BIT ;
-- responsive 2K/4K ;
-- affichage inline des PDF ;
-- classement automatique des documents ;
-- résolution plus robuste des factures fournisseurs ;
-- récupération plus sûre des factures clients historiques ;
-- sauvegardes intelligentes ;
-- synchronisation Google Contacts plus lisible et moins destructive ;
-- aide code postal / ville étendue.
+- workflow prise en charge → suivi → facturation → restitution fiabilisé ;
+- recherche client privée, côté serveur et plus permissive ;
+- absence de faux changements de statut Google lors d’une simple réutilisation de fiche ;
+- création directe d’un client depuis la page Clients ;
+- aide code postal → ville disponible également dans la fiche client ;
+- Facture simple alignée sur la recherche client principale et remplissage automatique des coordonnées ;
+- désignation de facture préremplie depuis le suivi ;
+- conservation des informations techniques lors de la facturation ;
+- remise papier par défaut : **Facture + Suivi Papier** ;
+- date comptable proposée seulement lorsque le paiement est réellement déclaré reçu ;
+- signature e-mail commune et image inline pour tous les envois SMTP de WOPR ;
+- suppression client propagée chez Abby lorsque la fiche est reliée ;
+- sélection plus sûre de la bonne base SQLite par analyse de son contenu ;
+- titres PDF historiques nettoyés ;
+- suppression du mode client automatique lors d’une nouvelle prise en charge ;
+- corrections de cohérence visuelle, notamment autour de Facture simple et du thème 8-BIT.
 
 ---
 

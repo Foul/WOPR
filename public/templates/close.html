@@ -25,8 +25,8 @@
     </label>
     <label class="parts-send-via">Envoi / remise du dossier
       <input name="parts_sent_via"
-             value="{{ r['sent_via'] or 'Suivi + photos par mail' }}"
-             placeholder="Suivi + photos par mail">
+             value="{{ r['sent_via'] or 'Suivi Papier' }}"
+             placeholder="Suivi Papier">
     </label>
   </div>
   {% endif %}
@@ -74,8 +74,8 @@
     </label>
 
     <label>Date d'encaissement
-      <input type="date" name="accounting_date" value="{{ accounting_date_value }}">
-      <small>Utilisée pour le mois de CA. Par défaut : date de restitution, sinon aujourd'hui.</small>
+      <input id="accounting-date" type="date" name="accounting_date" value="{{ accounting_date_value }}">
+      <small>Utilisée pour le mois de CA. Remplie automatiquement quand « Paiement reçu » est coché.</small>
     </label>
 
     <div class="invoice-payment-grid">
@@ -110,7 +110,7 @@
 
     <label>Remise / Envoi de la facture
       <input name="sent_via" list="sent-via-close-choices"
-             value="{{ r['sent_via'] or '' }}" placeholder="Choisir ou saisir...">
+             value="{{ r['sent_via'] or 'Facture + Suivi Papier' }}" placeholder="Choisir ou saisir...">
       <datalist id="sent-via-close-choices">
         <option value="Facture + Suivi Papier"><option value="Facture par Mail"><option value="Facture Papier">
       </datalist>
@@ -118,7 +118,7 @@
     </label>
 
     <label class="checkboxline">
-      <input type="checkbox" name="paid"
+      <input id="paid-checkbox" type="checkbox" name="paid"
              {% if r['paid'] %}checked{% endif %}
              {% if r['legacy_imported'] %}disabled{% endif %}>
       Paiement reçu
@@ -140,7 +140,7 @@
     {% if r['simple_invoice'] %}
       <strong>Facture simple :</strong> aucune fiche n'est créée dans le Suivi.
     {% elif r['legacy_imported'] %}
-      <strong>Facture historique :</strong>
+      <strong>Facture historique ODS :</strong>
       {% if not invoice_was_reconstructed %}
         les lignes ci-dessous sont une <strong>reconstruction depuis le Suivi</strong> et peuvent être incomplètes.
         {% if original_invoice_pdf %}
@@ -227,6 +227,24 @@ function refreshNoInvoiceParts(){
   if(!active&&!document.querySelector('.invoice-line'))addLine('service');
 }
 if(noInvoiceParts)noInvoiceParts.addEventListener('change',refreshNoInvoiceParts);
+
+const paidCheckbox=document.getElementById('paid-checkbox');
+const accountingDate=document.getElementById('accounting-date');
+function localToday(){
+  const d=new Date();
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,'0');
+  const day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+if(paidCheckbox&&accountingDate&&!paidCheckbox.disabled){
+  paidCheckbox.addEventListener('change',()=>{
+    if(paidCheckbox.checked&&!accountingDate.value){
+      accountingDate.value=localToday();
+    }
+  });
+}
+
 refreshNoInvoiceParts(); updateTotals();
 </script>
 {% endblock %}

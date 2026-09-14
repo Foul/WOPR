@@ -1,16 +1,19 @@
 # Changelog de la documentation
 
-## 2.3.286 - 12 septembre 2026 - nettoyage, harmonisation et optimisations
-- Nettoyage du projet : suppression de code mort, d’assets devenus inutiles et de fichiers parasites.
-- Harmonisation des actions d’édition dans l’interface, notamment sur Antivirus avec **Modifier / Enregistrer / Annuler**.
-- Correction de l’affichage du bouton **Annuler** sur Antivirus : il n’apparaît plus hors du mode édition.
-- Ajout de statistiques synthétiques sur les pages **Factures** et **Devis** : total distinct, semaine, mois, année et PDF archivés.
-- Affichage de la **dernière sauvegarde réelle** dans la page Sécurité.
-- Harmonisation du cache-busting des fichiers CSS/JS afin d’éviter l’affichage d’anciennes versions après mise à jour.
-- Optimisation des requêtes SQLite utilisées pour les compteurs clients, devis et réparations.
-- Conservation des migrations historiques utiles tout en retirant les anciennes fonctions réellement inutilisées.
-- Documentation et maintenance alignées sur **2.3.286**.
-- Renforcement des contrôles de publication : cohérence de version, Python, whitespace, documentation, liens et assets.
+## 2.3.286 - 14 septembre 2026 - workflow clients, facturation, e-mail et Abby
+- Recherche client côté serveur, permissive et sans exposition du carnet complet dans la page.
+- Suppression du Mode Client automatique à la création d’une réparation.
+- Mise à jour d’un client sans faux statut Google « À synchroniser ».
+- Création directe d’un client depuis Clients, avec autocomplétion locale code postal → ville.
+- Facture liée à un suivi : désignation préremplie, informations techniques conservées et remise papier par défaut.
+- Date comptable renseignée uniquement lorsque le paiement est déclaré reçu.
+- Facture simple alignée sur la recherche client principale et remplissage automatique des coordonnées.
+- Signature e-mail commune, stockée dans `private/`, intégrée à tous les envois SMTP de WOPR.
+- Suppression d’un client relié à Abby propagée côté Abby avant suppression ou archivage local.
+- Sélection de la base SQLite renforcée par analyse de son contenu réel.
+- Nettoyage des titres PDF et de certains anciens libellés publics.
+- Ajustements visuels du bouton Facture simple, notamment pour le thème 8-BIT.
+- Documentation, README, manuel HTML/PDF, maintenance et notes de release alignés sur **2.3.286**.
 
 ## 2.3.285 - 11 septembre 2026 - release visuelle et documentaire
 - Uniformisation de Suivi, Factures, Devis, Clients et Achats / Ventes.

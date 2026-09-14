@@ -20,18 +20,19 @@ WOPR est une application locale de gestion d’atelier pour suivre réparations,
 - **Windows : supporté** - binaire officiel `WOPR.exe`.
 - **macOS : non supporté** - aucun binaire officiel, aucun test de compatibilité et aucun support garanti.
 
-## Release 2.3.285
-- vues Suivi, Factures, Devis, Clients et Achats / Ventes harmonisées ;
-- palette d’actions cohérente sur tous les thèmes ;
-- thème **8-BIT** finalisé avec boutons pixel-art, tableaux et badges harmonisés ;
-- actions Antivirus intégrées au système visuel ;
-- responsive 2K/4K amélioré ;
-- boutons Dossier généralisés ;
-- classement automatique des PDF ;
-- résolution renforcée des factures fournisseurs et historiques ;
-- sauvegardes intelligentes ;
-- synchronisation Google Contacts plus sûre ;
-- autocomplétion locale des villes étendue.
+## Release 2.3.286
+- workflow **prise en charge → suivi → facturation → restitution** fiabilisé ;
+- recherche client privée et permissive, sans exposer tout le carnet dans la page ;
+- création directe d’un client depuis **Clients**, avec aide code postal → ville ;
+- synchronisation Google plus prudente : pas de faux « À synchroniser » et aucune écriture automatique ;
+- **Facture simple** alignée sur la recherche client principale et remplissage automatique des coordonnées ;
+- désignation de facture préremplie depuis le suivi, sans écraser les informations techniques ;
+- remise papier par défaut : **Facture + Suivi Papier** ;
+- signature e-mail commune intégrée à tous les envois SMTP de WOPR ;
+- suppression d’un client relié à Abby propagée côté Abby avant suppression/archivage local ;
+- sélection de la base SQLite renforcée par analyse du contenu réel ;
+- titres PDF et affichage des anciennes factures nettoyés ;
+- corrections d’ergonomie et de cohérence des thèmes, dont **8-BIT**.
 
 ## Documentation
 - [Manuel Markdown](docs/manuel.md)

@@ -29,7 +29,16 @@ PID_FILE=DATA_DIR/"wopr.pid"
 LOG=DATA_DIR/"wopr-launcher.log"
 SERVER_OUT=DATA_DIR/"wopr-server.log"
 SERVER_ERR=DATA_DIR/"wopr-server-error.log"
-DB_FILE=DATA_DIR/"foulfix.db"
+def _find_existing_db():
+    candidates = [
+        p for p in DATA_DIR.glob("*.db")
+        if p.is_file() and not p.name.startswith(".")
+    ]
+    if not candidates:
+        return DATA_DIR/"wopr.db"
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+DB_FILE=_find_existing_db()
 BACKUP_DIR=DATA_DIR/"backups"
 VENV_DIR=PRIVATE_DIR/(".venv-win" if IS_WINDOWS else ".venv")
 PY=VENV_DIR/("Scripts/python.exe" if IS_WINDOWS else "bin/python")
@@ -471,7 +480,7 @@ class Launcher(tk.Tk):
 
         tk.Label(
             self,
-            text="Foul-Fix // local-first repair management",
+            text="WOPR // local-first repair management",
             bg=self.BG,
             fg="#30483D",
             font=("TkFixedFont", 8),

@@ -18,6 +18,7 @@ import gzip
 import ssl
 import re
 import unicodedata
+import html
 import time
 import threading
 import os
@@ -56,16 +57,16 @@ PRIVATE_ROOT = WOPR_ROOT / "private"
 PUBLIC_ASSETS = BASE / "assets"
 PRIVATE_ASSETS = PRIVATE_ROOT / "assets"
 PRIVATE_SEEDS = PRIVATE_ROOT / "seeds"
+EMAIL_SIGNATURE_FILE = PRIVATE_ROOT / "email_signature.json"
 
-# V2.3.161 - WOPR est autonome : tous les documents gérés par l'application
-# voyagent avec le dossier WOPR. FOULFIX_ROOT est conservé comme nom interne
-# pour compatibilité avec les chemins relatifs déjà stockés en base (Factures/..., Devis/...).
-FOULFIX_ROOT = PRIVATE_ROOT / "documents"
-DEVIS_ROOT = FOULFIX_ROOT / "Devis"
-FACTURES_ROOT = FOULFIX_ROOT / "Factures"
-FOURNISSEURS_ROOT = FOULFIX_ROOT / "Fournisseurs"
-COMMANDES_ROOT = FOULFIX_ROOT / "Commandes"
-SUIVI_REPARATIONS_ROOT = FOULFIX_ROOT / "Suivi de réparation"
+# WOPR est autonome : tous les documents gérés par l'application
+# voyagent avec le dossier WOPR dans private/documents.
+DOCUMENTS_ROOT = PRIVATE_ROOT / "documents"
+DEVIS_ROOT = DOCUMENTS_ROOT / "Devis"
+FACTURES_ROOT = DOCUMENTS_ROOT / "Factures"
+FOURNISSEURS_ROOT = DOCUMENTS_ROOT / "Fournisseurs"
+COMMANDES_ROOT = DOCUMENTS_ROOT / "Commandes"
+SUIVI_REPARATIONS_ROOT = DOCUMENTS_ROOT / "Suivi de réparation"
 
 MONTH_FOLDER_NAMES = {
     1: "01 - Janvier",
@@ -81,7 +82,83 @@ MONTH_FOLDER_NAMES = {
     11: "11 - Novembre",
     12: "12 - Décembre",
 }
-DB = PRIVATE_ROOT / "data" / "foulfix.db"
+def _database_score(path):
+    """Évalue une base WOPR par son contenu réel, jamais par son nom."""
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+        try:
+            tables = {
+                row[0]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "clients" not in tables or "repairs" not in tables:
+                return (-1, -1, -1, -1, -1)
+
+            client_cols = {
+                row[1] for row in con.execute("PRAGMA table_info(clients)").fetchall()
+            }
+            clients = int(con.execute("SELECT COUNT(*) FROM clients").fetchone()[0] or 0)
+            repairs = int(con.execute("SELECT COUNT(*) FROM repairs").fetchone()[0] or 0)
+
+            # Une vraie base de travail contient bien plus que les seuls noms.
+            fields = [
+                field for field in (
+                    "first_name", "last_name", "company", "phone", "email",
+                    "address", "address_street", "postal_code", "city", "notes"
+                )
+                if field in client_cols
+            ]
+            filled = 0
+            for field in fields:
+                filled += int(con.execute(
+                    f"SELECT COUNT(*) FROM clients "
+                    f"WHERE TRIM(COALESCE({field},''))<>''"
+                ).fetchone()[0] or 0)
+
+            synced = 0
+            if "google_sync_status" in client_cols:
+                synced = int(con.execute(
+                    "SELECT COUNT(*) FROM clients "
+                    "WHERE google_sync_status='Synchronisé'"
+                ).fetchone()[0] or 0)
+
+            # Priorité : richesse des fiches > clients > réparations > synchro > taille.
+            return (filled, clients, repairs, synced, int(path.stat().st_size))
+        finally:
+            con.close()
+    except Exception:
+        return (-1, -1, -1, -1, -1)
+
+
+def _database_path():
+    """Sélectionne la base WOPR la plus complète sans déplacer ni supprimer de fichier."""
+    data_dir = PRIVATE_ROOT / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    preferred = data_dir / "wopr.db"
+
+    candidates = [
+        p for p in data_dir.glob("*.db")
+        if p.is_file() and not p.name.startswith(".")
+    ]
+    if not candidates:
+        return preferred
+
+    scored = sorted(
+        ((_database_score(p), p) for p in candidates),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    best_score, best = scored[0]
+
+    if best_score[0] >= 0:
+        return best
+    return preferred
+
+
+DB = _database_path()
 SIGNATURES = PRIVATE_ROOT / "signatures"
 CONFIG_PATH = PRIVATE_ROOT / "config.json"
 
@@ -107,19 +184,23 @@ ADMIN_PIN_FILE = PRIVATE_ROOT / "data" / "admin_pin.json"
 APP_SECRET_FILE = PRIVATE_ROOT / "data" / "app_secret.key"
 
 # Clé maîtresse des secrets : volontairement hors du dossier WOPR.
-# Pour une installation existante, l'ancien emplacement Foul-Fix reste reconnu
-# afin de ne pas casser le déchiffrement des secrets déjà enregistrés.
 def _secret_key_path():
     if os.name == "nt":
         root = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
     else:
         root = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
     current = root / "WOPR" / "master.key"
-    legacy = root / "Foul-Fix" / "master.key"
     if current.exists():
         return current
-    if legacy.exists():
-        return legacy
+
+    # Compatibilité avec une installation plus ancienne sans conserver
+    # d'ancien nom de marque dans le code public.
+    legacy = [
+        p for p in root.glob("*/master.key")
+        if p.is_file() and p.parent.name.casefold() != "wopr"
+    ]
+    if len(legacy) == 1:
+        return legacy[0]
     return current
 
 MASTER_SECRET_FILE = _secret_key_path()
@@ -817,7 +898,7 @@ app = Flask(__name__)
 # sans passer par un lanceur Linux/Windows.
 for _directory in (
     PRIVATE_ROOT, DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR,
-    PRIVATE_ASSETS, PRIVATE_SEEDS, FOULFIX_ROOT, DEVIS_ROOT, FACTURES_ROOT,
+    PRIVATE_ASSETS, PRIVATE_SEEDS, DOCUMENTS_ROOT, DEVIS_ROOT, FACTURES_ROOT,
     FOURNISSEURS_ROOT, COMMANDES_ROOT, SUIVI_REPARATIONS_ROOT,
 ):
     _directory.mkdir(parents=True, exist_ok=True)
@@ -1086,6 +1167,98 @@ def write_smtp_settings(settings):
         pass
 
 
+
+def read_email_signature_settings():
+    """Signature e-mail locale optionnelle, stockée uniquement dans private/."""
+    defaults = {
+        "enabled": False,
+        "link": "",
+        "image": "assets/email_signature.png",
+        "width": 140,
+        "height": 62,
+        "alt": "",
+    }
+    try:
+        if EMAIL_SIGNATURE_FILE.exists():
+            loaded = json.loads(EMAIL_SIGNATURE_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                defaults.update(loaded)
+    except Exception:
+        pass
+    return defaults
+
+
+def set_email_content(msg, body):
+    """Ajoute le corps texte + HTML et, si configurée, la signature e-mail inline."""
+    plain_body = str(body or "").rstrip()
+    signature = read_email_signature_settings()
+
+    enabled = bool(signature.get("enabled"))
+    link = str(signature.get("link") or "").strip()
+    image_rel = str(signature.get("image") or "assets/email_signature.png").strip()
+    image_path = PRIVATE_ROOT / image_rel
+
+    try:
+        width = max(1, min(1000, int(signature.get("width") or 140)))
+    except Exception:
+        width = 140
+    try:
+        height = max(1, min(1000, int(signature.get("height") or 62)))
+    except Exception:
+        height = 62
+
+    alt = str(signature.get("alt") or business_identity().get("name") or "").strip()
+    has_image = enabled and image_path.is_file()
+
+    # Fallback texte : le message reste lisible même si le HTML est ignoré.
+    plain = plain_body
+    if enabled and link:
+        plain += f"\n\n-- \n{link}"
+    msg.set_content(plain)
+
+    if not has_image:
+        return
+
+    escaped_body = html.escape(plain_body).replace("\n", "<br>\n")
+    escaped_link = html.escape(link, quote=True)
+    escaped_alt = html.escape(alt, quote=True)
+
+    image_html = (
+        f'<img src="cid:wopr-email-signature" '
+        f'width="{width}" height="{height}" alt="{escaped_alt}" '
+        f'style="display:block;border:0;max-width:100%;height:auto;">'
+    )
+    if link:
+        image_html = (
+            f'<a href="{escaped_link}" target="_blank" '
+            f'style="display:inline-block;text-decoration:none;border:0;">'
+            f'{image_html}</a>'
+        )
+
+    html_body = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+        'line-height:1.5;color:#111;">'
+        f'{escaped_body}'
+        '<br><br>-- <br>'
+        f'{image_html}'
+        '</div>'
+    )
+
+    msg.add_alternative(html_body, subtype="html")
+    html_part = msg.get_payload()[-1]
+    try:
+        html_part.add_related(
+            image_path.read_bytes(),
+            maintype="image",
+            subtype="png",
+            cid="<wopr-email-signature>",
+            filename=image_path.name,
+            disposition="inline",
+        )
+    except Exception:
+        pass
+
+
 def smtp_send_message(msg):
     settings = read_smtp_settings()
     if not settings.get("enabled"):
@@ -1351,6 +1524,35 @@ def abby_unique(index, key):
     values = [x for x in index.get(key, []) if x]
     values = list(dict.fromkeys(values))
     return values[0] if len(values) == 1 else ""
+
+
+def delete_client_from_abby(client_row):
+    """Supprime le client Abby lié avant toute suppression/archivage WOPR.
+
+    Retourne True si aucun lien Abby n'existe, si la ressource était déjà absente
+    (404) ou si la suppression distante a réussi. Toute autre erreur est propagée
+    pour empêcher WOPR de perdre le lien local vers un client encore présent chez Abby.
+    """
+    abby_id = str(client_row["abby_id"] or "").strip()
+    abby_type = str(client_row["abby_type"] or "").strip().lower()
+    if not abby_id:
+        return True
+
+    if abby_type == "organization":
+        path = f"/organization/{urllib.parse.quote(abby_id, safe='')}"
+    elif abby_type == "contact":
+        path = f"/contact/{urllib.parse.quote(abby_id, safe='')}"
+    else:
+        raise RuntimeError("Type de client Abby inconnu : suppression annulée.")
+
+    try:
+        abby_request("DELETE", path)
+        return True
+    except RuntimeError as exc:
+        # Une ressource déjà supprimée chez Abby équivaut à un succès.
+        if "Abby HTTP 404" in str(exc):
+            return True
+        raise
 
 
 def sync_clients_to_abby():
@@ -1682,7 +1884,7 @@ def backup_database(force=False, tag="auto", only_if_changed=False):
     #   depuis la dernière sauvegarde WOPR.
     if not force and only_if_changed:
         latest_backup_mtime_ns = 0
-        for candidate in BACKUP_DIR.glob("foulfix_*"):
+        for candidate in BACKUP_DIR.glob("*.db*"):
             try:
                 if candidate.is_file():
                     latest_backup_mtime_ns = max(
@@ -1704,7 +1906,7 @@ def backup_database(force=False, tag="auto", only_if_changed=False):
         # La sauvegarde quotidienne ne dépend plus du nom : on regarde la date réelle
         # des sauvegardes WOPR déjà générées.
         today = now().date()
-        for candidate in BACKUP_DIR.glob("foulfix_*"):
+        for candidate in BACKUP_DIR.glob("*.db*"):
             try:
                 if candidate.is_file() and datetime.fromtimestamp(candidate.stat().st_mtime).date() == today:
                     return None
@@ -1712,7 +1914,7 @@ def backup_database(force=False, tag="auto", only_if_changed=False):
                 pass
 
     safe_tag = re.sub(r"[^A-Za-z0-9_-]+", "_", tag)[:30] or "backup"
-    dest = BACKUP_DIR / f"foulfix_{_backup_stamp()}_{safe_tag}.db.gz"
+    dest = BACKUP_DIR / f"wopr_{_backup_stamp()}_{safe_tag}.db.gz"
     temp_db = BACKUP_DIR / f".wopr_backup_{secrets.token_hex(5)}.db"
 
     try:
@@ -1740,7 +1942,7 @@ def backup_database(force=False, tag="auto", only_if_changed=False):
     # Rétention uniquement sur les sauvegardes générées par WOPR. Un fichier
     # renommé/importé manuellement n'est pas supprimé juste à cause de sa présence.
     managed_pattern = re.compile(
-        r"^foulfix_(?:\d{8}_\d{6}|\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s)_[A-Za-z0-9_-]+\.db(?:\.gz)?$"
+        r"^[A-Za-z0-9_-]+_(?:\d{8}_\d{6}|\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s)_[A-Za-z0-9_-]+\.db(?:\.gz)?$"
     )
     backups = []
     for candidate in BACKUP_DIR.iterdir():
@@ -1807,9 +2009,9 @@ def restore_database_backup(backup_name):
         raise ValueError("Sauvegarde introuvable.")
 
     stamp = now().strftime("%Y%m%d_%H%M%S")
-    restore_tmp = DB.parent / f".foulfix_restore_{stamp}_{secrets.token_hex(3)}.db"
-    rollback_tmp = DB.parent / f".foulfix_rollback_{stamp}_{secrets.token_hex(3)}.db"
-    safety_tmp = DB.parent / f".foulfix_safety_{stamp}_{secrets.token_hex(3)}.db"
+    restore_tmp = DB.parent / f".wopr_restore_{stamp}_{secrets.token_hex(3)}.db"
+    rollback_tmp = DB.parent / f".wopr_rollback_{stamp}_{secrets.token_hex(3)}.db"
+    safety_tmp = DB.parent / f".wopr_safety_{stamp}_{secrets.token_hex(3)}.db"
 
     # Reconnaissance par signature binaire + contenu SQLite. Le fichier peut donc
     # être renommé librement, avec ou sans extension.
@@ -4148,7 +4350,7 @@ def save_ledger_document(entry_id, storage):
             )
         dest.write_bytes(raw)
 
-    rel = str(dest.relative_to(FOULFIX_ROOT))
+    rel = str(dest.relative_to(DOCUMENTS_ROOT))
     con.execute("""
         UPDATE ledger_entries
         SET document_path=?, document_original_name=?, updated_at=?
@@ -4256,7 +4458,7 @@ def auto_link_supplier_documents(years=None):
                 missing += 1
             continue
         try:
-            rel = str(match.relative_to(FOULFIX_ROOT))
+            rel = str(match.relative_to(DOCUMENTS_ROOT))
         except Exception:
             missing += 1
             continue
@@ -4361,7 +4563,7 @@ def ledger_document_file(row):
     # pointait encore vers FR61SZP5ABEI).
     if rel:
         try:
-            candidate = (FOULFIX_ROOT / rel).resolve()
+            candidate = (DOCUMENTS_ROOT / rel).resolve()
             allowed = False
             for root in (FOURNISSEURS_ROOT.resolve(), FACTURES_ROOT.resolve()):
                 try:
@@ -4418,7 +4620,7 @@ def repair_dead_supplier_document_links():
     for row in rows:
         rel = str(row["document_path"] or "").strip()
         try:
-            direct = (FOULFIX_ROOT / rel).resolve()
+            direct = (DOCUMENTS_ROOT / rel).resolve()
             if direct.is_file():
                 continue
         except Exception:
@@ -4427,7 +4629,7 @@ def repair_dead_supplier_document_links():
         if not found:
             continue
         try:
-            new_rel = str(found.relative_to(FOULFIX_ROOT))
+            new_rel = str(found.relative_to(DOCUMENTS_ROOT))
         except Exception:
             continue
         if new_rel == rel:
@@ -4473,8 +4675,8 @@ def find_document_recursive(root, filename=None, document_no=None):
 def quote_document_candidates(quote_no):
     """
     PDF historiques réellement présents avant génération WOPR.
-    Les PDF produits par l'application portent le suffixe `.foulfix.pdf`
-    et ne sont jamais comptés comme des Originaux.
+    Les PDF produits par l'application portent un suffixe technique avant
+    `.pdf` et ne sont jamais comptés comme des Originaux.
     """
     if not DEVIS_ROOT.exists():
         return []
@@ -4484,7 +4686,10 @@ def quote_document_candidates(quote_no):
     return sorted(
         p for p in DEVIS_ROOT.rglob("*.pdf")
         if needle in p.name.casefold()
-        and not p.name.casefold().endswith(".foulfix.pdf")
+        and not re.search(
+            rf"{re.escape(needle)}\.[^.]+\.pdf$",
+            p.name.casefold(),
+        )
     )
 
 
@@ -6247,7 +6452,7 @@ def security_gate():
     # même si l'atelier est authentifié, aucune donnée sensible de l'application
     # n'est accessible pendant une prise en charge devant le client.
     if session.get("client_mode"):
-        allowed = {"static", "sign", "admin_lock", "repair_new"}
+        allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search"}
         current_rid = session.get("client_mode_rid")
 
         if endpoint in {"repair_detail", "qr_png", "intake_pdf"}:
@@ -6551,9 +6756,9 @@ def cleanup_exact_supplier_document_duplicates():
                 # Le document manuel existait normalement avant la copie créée par l'API.
                 same_files.sort(key=lambda x: (x.stat().st_mtime, " - " in x.stem, len(x.name), x.name.casefold()))
                 canonical = same_files[0]
-                canonical_rel = str(canonical.relative_to(FOULFIX_ROOT))
+                canonical_rel = str(canonical.relative_to(DOCUMENTS_ROOT))
                 for duplicate in same_files[1:]:
-                    duplicate_rel = str(duplicate.relative_to(FOULFIX_ROOT))
+                    duplicate_rel = str(duplicate.relative_to(DOCUMENTS_ROOT))
                     con.execute(
                         "UPDATE ledger_entries SET document_path=?, updated_at=? WHERE document_path=?",
                         (canonical_rel, now().isoformat(timespec="seconds"), duplicate_rel),
@@ -6718,7 +6923,7 @@ def import_supplier_xml_to_ledger(storage):
             UPDATE ledger_entries
             SET document_path=?, document_original_name=?, updated_at=?
             WHERE id=?
-        """, (str(dest.relative_to(FOULFIX_ROOT)), filename, now().isoformat(timespec="seconds"), entry_id))
+        """, (str(dest.relative_to(DOCUMENTS_ROOT)), filename, now().isoformat(timespec="seconds"), entry_id))
         con.commit()
         con.close()
     except Exception:
@@ -7948,7 +8153,7 @@ def quote_email(quote_id):
     msg["Subject"] = subject
     msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     msg["To"] = recipient
-    msg.set_content(body)
+    set_email_content(msg, body)
 
     attachment_name = (
         f"{safe_filename(q['client_name'])}_"
@@ -8083,6 +8288,7 @@ def quote_pdf(quote_id):
     conf = cfg()
     bio = io.BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
+    c.setTitle(f"Devis {q['quote_no']} - {q['client_name']}")
     W, H = A4
 
     BLUE = colors.HexColor("#3399FF")
@@ -8461,7 +8667,7 @@ def quote_pdf(quote_id):
 
     # Sauvegarde automatique dans WOPR/private/documents/Devis/AAAA/MM - Mois
     quote_folder = year_month_folder(DEVIS_ROOT, q["quote_date"], create=True)
-    quote_filename = safe_document_name(f"{q['client_name']}_{q['quote_no']}.foulfix.pdf")
+    quote_filename = safe_document_name(f"{q['client_name']}_{q['quote_no']}.wopr.pdf")
     quote_saved_path = quote_folder / quote_filename
     try:
         quote_saved_path.write_bytes(pdf_bytes)
@@ -8945,7 +9151,7 @@ def achats_ventes_document_view(entry_id):
         return "Pièce justificative introuvable", 404
     # Si le résolveur a retrouvé l'original sous un autre nom, on corrige le lien pour de bon.
     try:
-        resolved_rel = str(path.relative_to(FOULFIX_ROOT))
+        resolved_rel = str(path.relative_to(DOCUMENTS_ROOT))
         if resolved_rel != str(row["document_path"] or ""):
             con_fix = db()
             con_fix.execute(
@@ -9228,28 +9434,57 @@ def total_reset_year(year):
     return redirect(url_for("total_page"))
 
 
-@app.route("/repair/new", methods=["GET", "POST"])
-def repair_new():
-    # Nouvelle réparation = écran potentiellement visible par le client.
-    # On active automatiquement le mode confidentiel.
-    if request.method == "GET":
-        session["client_mode"] = True
-        session.pop("client_mode_rid", None)
+@app.get("/repair/client-search")
+def repair_client_search():
+    """Recherche limitée de clients pour le formulaire de prise en charge."""
+    query = request.args.get("q", "").strip()
+    normalized = normalize_global_search(query)
+    if len(normalized) < 2:
+        return jsonify([])
 
-    def active_clients_for_form():
-        con_clients = db()
-        rows = con_clients.execute("""
+    words = [word for word in normalized.split() if len(word) >= 2]
+    if not words:
+        return jsonify([])
+
+    searchable = ("first_name", "last_name", "name", "company", "phone", "email")
+    clauses = []
+    params = []
+    for word in words:
+        clauses.append("(" + " OR ".join(
+            f"WOPR_NORM(COALESCE({field},'')) LIKE ?" for field in searchable
+        ) + ")")
+        params.extend([f"%{word}%"] * len(searchable))
+
+    con = db()
+    try:
+        rows = con.execute(
+            f"""
             SELECT id, name, first_name, last_name, company,
                    address_street, postal_code, city, phone, email
             FROM clients
             WHERE COALESCE(archived,0)=0
+              AND {' AND '.join(clauses)}
             ORDER BY
                 COALESCE(first_name,'') COLLATE NOCASE,
                 COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
                 id
-        """).fetchall()
-        con_clients.close()
-        return [dict(row) for row in rows]
+            LIMIT 12
+            """,
+            params,
+        ).fetchall()
+    finally:
+        con.close()
+
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route("/repair/new", methods=["GET", "POST"])
+def repair_new():
+    # Une nouvelle prise en charge reste un écran Atelier normal.
+    # Nettoie un éventuel ancien Mode Client resté en session.
+    if request.method == "GET":
+        session.pop("client_mode", None)
+        session.pop("client_mode_rid", None)
 
     if request.method == "POST":
         selected_client_id_raw = request.form.get("client_id", "").strip()
@@ -9258,14 +9493,12 @@ def repair_new():
         last_name = request.form.get("last_name","").strip()
         company = request.form.get("company","").strip()
         contact_name = compose_client_name(last_name, first_name).strip()
-        name = contact_name or company
 
-        if not name:
+        if not (contact_name or company):
             flash("Renseigne au moins un nom/prénom ou le nom de l’entreprise.")
             return render_template(
                 "repair_form.html",
-                today=now().strftime("%Y-%m-%d"),
-                clients=active_clients_for_form()
+                today=now().strftime("%Y-%m-%d")
             )
 
         address_street = request.form.get("address_street","").strip()
@@ -9309,24 +9542,55 @@ def repair_new():
             flash("Le client sélectionné est introuvable ou archivé.")
             return render_template(
                 "repair_form.html",
-                today=request.form.get("received_date") or now().strftime("%Y-%m-%d"),
-                clients=active_clients_for_form()
+                today=request.form.get("received_date") or now().strftime("%Y-%m-%d")
             )
 
         if client:
-            con.execute("""
-                UPDATE clients
-                SET name=?, last_name=?, first_name=?, company=?,
-                    address=?, address_street=?, postal_code=?, city=?,
-                    phone=?, email=?, updated_at=?
-                WHERE id=?
-            """, (
-                name, last_name, first_name, company,
-                address, address_street, postal_code, city,
-                phone, email, created, client["id"]
-            ))
+            # Pour un client existant, une société seule ne doit pas recopier
+            # automatiquement sa raison sociale dans le champ historique `name`.
+            # On conserve la valeur existante tant qu'aucun nom/prénom de contact
+            # n'est renseigné.
+            name = contact_name if contact_name else str(client["name"] or "").strip()
+
+            # Seuls les champs réellement visibles dans le formulaire déterminent
+            # si la fiche client a changé. Le champ interne `address` est dérivé de
+            # adresse/CP/ville et ne doit jamais provoquer à lui seul un faux
+            # « À synchroniser ».
+            visible_contact_fields = {
+                "last_name": last_name,
+                "first_name": first_name,
+                "company": company,
+                "address_street": address_street,
+                "postal_code": postal_code,
+                "city": city,
+                "phone": phone,
+                "email": email,
+            }
+            contact_changed = any(
+                str(client[field] or "").strip() != str(value or "").strip()
+                for field, value in visible_contact_fields.items()
+            )
+
+            if contact_changed:
+                con.execute("""
+                    UPDATE clients
+                    SET name=?, last_name=?, first_name=?, company=?,
+                        address=?, address_street=?, postal_code=?, city=?,
+                        phone=?, email=?,
+                        google_sync_status='À synchroniser',
+                        google_sync_error='',
+                        updated_at=?
+                    WHERE id=?
+                """, (
+                    name, last_name, first_name, company,
+                    address, address_street, postal_code, city, phone, email,
+                    created, client["id"]
+                ))
             client_id = int(client["id"])
         else:
+            # Nouveau client : on garde la compatibilité historique en utilisant
+            # la raison sociale comme `name` lorsqu'il n'y a pas de personne.
+            name = contact_name or company
             cur = con.execute("""
                 INSERT INTO clients(
                     name,last_name,first_name,company,
@@ -9377,15 +9641,14 @@ def repair_new():
         con.commit()
         con.close()
 
-        session["client_mode"] = True
-        session["client_mode_rid"] = int(rid)
+        session.pop("client_mode", None)
+        session.pop("client_mode_rid", None)
         # V2.3.215 : aucune écriture Google automatique.
         return redirect(url_for("repair_detail", rid=rid))
 
     return render_template(
         "repair_form.html",
-        today=now().strftime("%Y-%m-%d"),
-        clients=active_clients_for_form()
+        today=now().strftime("%Y-%m-%d")
     )
 
 
@@ -9982,7 +10245,7 @@ def repair_edit(rid):
         else:
             returned_at = None
 
-        # V2.3.212 — chez Foul-Fix, matériel restitué = règlement encaissé.
+        # V2.3.212 — dans WOPR, matériel restitué = règlement encaissé.
         # Si la date de restitution change sur un dossier déjà payé, la date
         # d'encaissement suit automatiquement, sauf si elle a été modifiée
         # explicitement dans le formulaire.
@@ -10377,7 +10640,7 @@ def repair_close(rid):
 
             finished = r["finished_at"] or now().isoformat(timespec="seconds")
             close_status = "Laissé pour pièces"
-            parts_sent_via = (request.form.get("parts_sent_via") or "Suivi + photos par mail").strip()
+            parts_sent_via = (request.form.get("parts_sent_via") or "Suivi Papier").strip()
 
             con.execute("""
                 UPDATE repairs SET
@@ -10559,6 +10822,12 @@ def repair_close(rid):
             close_status = "Restitué" if r["status"] == "Restitué" else "Terminé"
             close_returned_at = r["returned_at"] if close_status == "Restitué" else None
 
+        close_sent_via = (
+            request.form.get("sent_via")
+            or r["sent_via"]
+            or "Facture + Suivi Papier"
+        ).strip()
+
         con.execute("""
             UPDATE repairs SET
                 service_amount=?, goods_amount=?, payment_method=?, payment_mode=?, payment_detail=?,
@@ -10575,8 +10844,8 @@ def repair_close(rid):
             service_total, goods_total,
             close_payment_method, close_payment_mode, close_payment_detail,
             paid_flag,
-            request.form.get("sent_via",""),
-            "",
+            close_sent_via,
+            r["work_done"] or "",
             request.form.get("tests_validation",""),
             (r["remarks"] or ""),
             finished, inv, close_status, close_returned_at, service_desc, goods_desc,
@@ -10692,6 +10961,28 @@ def repair_close(rid):
 
         lines = legacy
 
+    # Nouvelle facture issue d'un suivi : reprend la désignation déjà saisie
+    # sans automatiser le prix.
+    if not lines and not r["invoice_no"] and not r["simple_invoice"]:
+        draft_description = next((
+            str(value or "").strip()
+            for value in (
+                r["service_description"],
+                r["work_done"],
+                r["tests_validation"],
+                r["diagnosis"],
+                r["problem"],
+            )
+            if str(value or "").strip()
+        ), "")
+        if draft_description:
+            lines = [{
+                "line_type": "service",
+                "quantity": 1,
+                "description": draft_description,
+                "unit_price": 0,
+            }]
+
     con.close()
     return render_template(
         "close.html",
@@ -10701,7 +10992,10 @@ def repair_close(rid):
         original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
         payment_split=payment_split_values(r["payment_detail"], r["payment_method"]),
         invoice_date_value=((r["finished_at"] or now().date().isoformat())[:10]),
-        accounting_date_value=((r["accounting_date"] or r["returned_at"] or now().date().isoformat())[:10])
+        accounting_date_value=(
+            (r["accounting_date"] or r["returned_at"] or now().date().isoformat())[:10]
+            if r["paid"] else ""
+        )
     )
 
 @app.route("/sign/<token>", methods=["GET", "POST"])
@@ -10873,6 +11167,10 @@ def intake_pdf(rid):
 
     bio = io.BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
+    c.setTitle(
+        f"Suivi {r['dossier_no']} - {r['client_name']}"
+        if r["dossier_no"] else f"Suivi - {r['client_name']}"
+    )
     W, H = A4
     BLUE = colors.HexColor("#3399FF")
     BLACK = colors.black
@@ -11667,6 +11965,49 @@ def invoices_page():
 
 
 
+
+def send_pdf_with_title(path, title, download_name=None):
+    """Affiche un PDF avec un titre navigateur propre sans modifier l'original."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+
+        reader = PdfReader(str(path))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+
+        metadata = {}
+        try:
+            if reader.metadata:
+                metadata = {
+                    str(k): str(v)
+                    for k, v in reader.metadata.items()
+                    if k and v is not None
+                }
+        except Exception:
+            metadata = {}
+        metadata["/Title"] = str(title or "").strip()
+        writer.add_metadata(metadata)
+
+        bio = io.BytesIO()
+        writer.write(bio)
+        bio.seek(0)
+        return send_file(
+            bio,
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=download_name or Path(path).name,
+        )
+    except Exception as exc:
+        app.logger.warning("Impossible de corriger le titre PDF de %s: %s", path, exc)
+        return send_file(
+            path,
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=download_name or Path(path).name,
+        )
+
+
 @app.route("/repair/<int:rid>/invoice.pdf")
 def invoice_pdf(rid):
     lang = pdf_lang()
@@ -11704,16 +12045,16 @@ def invoice_pdf(rid):
                 f"{safe_filename(r['client_name'])}_"
                 f"{safe_filename(r['invoice_no'])}_FR.pdf"
             )
-            return send_file(
+            return send_pdf_with_title(
                 original_pdf,
-                mimetype="application/pdf",
-                as_attachment=False,
-                download_name=legacy_filename
+                f"Facture {r['invoice_no']} - {r['client_name']}",
+                download_name=legacy_filename,
             )
 
     conf = cfg()
     bio = io.BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
+    c.setTitle(f"Facture {r['invoice_no']} - {r['client_name']}")
     W, H = A4
 
     BLUE = colors.HexColor("#3399FF")
@@ -12152,7 +12493,7 @@ def followup_email(rid):
     msg["Subject"] = subject
     msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     msg["To"] = recipient
-    msg.set_content(body)
+    set_email_content(msg, body)
 
     followup_filename = (
         f"{safe_filename(r['client_name'])}_"
@@ -12328,7 +12669,7 @@ def invoice_email(rid):
     msg["Subject"] = subject
     msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     msg["To"] = recipient
-    msg.set_content(body)
+    set_email_content(msg, body)
     msg.add_attachment(
         pdf_data,
         maintype="application",
@@ -12387,10 +12728,15 @@ def import_google_csv_contacts():
             raw = f.read().decode("utf-8-sig", errors="replace")
             contacts = parse_google_contacts_csv(raw)
 
-            if request.form.get("only_foulfix") == "on":
+            if request.form.get("only_business_label") == "on":
+                business_label = str(
+                    cfg().get("google_contact_group")
+                    or cfg().get("business_name")
+                    or "WOPR"
+                ).strip().casefold()
                 contacts = [
                     c for c in contacts
-                    if "foul-fix" in str(c.get("labels") or "").casefold()
+                    if business_label in str(c.get("labels") or "").casefold()
                 ]
         except Exception as e:
             flash(f"Impossible de lire le CSV Google : {e}")
@@ -12415,7 +12761,7 @@ def import_google_csv_contacts():
             (
                 f"{summary['total_source']} source; {summary['safe']} sûrs; "
                 f"{summary['will_fill']} à compléter; "
-                f"filtre_label={'oui' if request.form.get('only_foulfix') == 'on' else 'non'}"
+                f"filtre_label={'oui' if request.form.get('only_business_label') == 'on' else 'non'}"
             ),
             request.remote_addr
         )
@@ -13155,7 +13501,11 @@ def achats_ventes_sale_invoice_view(entry_id):
     canonical_invoice_no = canonical_client_invoice_no(invoice_no)
     pdf = find_client_invoice_pdf(canonical_invoice_no, row["party"] or "")
     if pdf and pdf.exists():
-        return send_file(pdf, mimetype="application/pdf", as_attachment=False, download_name=pdf.name)
+        return send_pdf_with_title(
+            pdf,
+            f"Facture {canonical_invoice_no} - {row['party'] or ''}",
+            download_name=pdf.name,
+        )
 
     # Fallback : s'il n'existe aucun PDF historique classé, on retombe sur la facture WOPR.
     con = db()
@@ -13543,8 +13893,8 @@ def documents_audit():
                 "repair_date": row["repair_date"] or "",
                 "client_name": client_name,
                 "files": [
-                    str(pdf.relative_to(FOULFIX_ROOT))
-                    if FOULFIX_ROOT in pdf.parents else str(pdf)
+                    str(pdf.relative_to(DOCUMENTS_ROOT))
+                    if DOCUMENTS_ROOT in pdf.parents else str(pdf)
                     for _, pdf, _ in best
                 ],
             })
@@ -13633,8 +13983,8 @@ def documents_audit():
                     "repair_date": row["repair_date"] or "",
                     "client_name": client_name,
                     "files": [
-                        str(pdf.relative_to(FOULFIX_ROOT))
-                        if FOULFIX_ROOT in pdf.parents else str(pdf)
+                        str(pdf.relative_to(DOCUMENTS_ROOT))
+                        if DOCUMENTS_ROOT in pdf.parents else str(pdf)
                     ],
                 })
             elif is_legacy_paper_invoice:
@@ -13690,7 +14040,7 @@ def documents_audit():
         if resolved in matched_invoice_paths:
             continue
         try:
-            display = str(p.relative_to(FOULFIX_ROOT))
+            display = str(p.relative_to(DOCUMENTS_ROOT))
         except Exception:
             display = str(p)
 
@@ -13743,16 +14093,16 @@ def documents_audit():
 
     unregistered_quote_files = []
     for p in quote_files:
-        # Les PDF .foulfix.pdf sont des sorties générées par WOPR :
+        # Les PDF à double suffixe sont des sorties générées par WOPR :
         # ils ne sont pas censés exister dans quote_documents.
-        if p.name.casefold().endswith(".foulfix.pdf"):
+        if re.search(r"\.[A-Za-z0-9_-]+\.pdf$", p.name, flags=re.I):
             continue
 
         if p.name.casefold() in quote_db_filenames:
             continue
 
         try:
-            display = str(p.relative_to(FOULFIX_ROOT))
+            display = str(p.relative_to(DOCUMENTS_ROOT))
         except Exception:
             display = str(p)
 
@@ -13767,7 +14117,7 @@ def documents_audit():
     order_file_paths = []
     for p in order_files:
         try:
-            order_file_paths.append(str(p.relative_to(FOULFIX_ROOT)))
+            order_file_paths.append(str(p.relative_to(DOCUMENTS_ROOT)))
         except Exception:
             order_file_paths.append(str(p))
 
@@ -13841,7 +14191,7 @@ def supplier_documents_audit():
         if len(members) < 2:
             continue
         try:
-            display_path = str(Path(resolved).relative_to(FOULFIX_ROOT))
+            display_path = str(Path(resolved).relative_to(DOCUMENTS_ROOT))
         except Exception:
             display_path = str(resolved)
         duplicate_file_groups.append({
@@ -13863,7 +14213,7 @@ def supplier_documents_audit():
             if str(resolved) in linked_real_paths:
                 continue
             try:
-                orphan_files.append(str(path.relative_to(FOULFIX_ROOT)))
+                orphan_files.append(str(path.relative_to(DOCUMENTS_ROOT)))
             except Exception:
                 orphan_files.append(str(path))
 
@@ -14108,6 +14458,88 @@ def client_merge(client_id):
     )
 
 
+
+@app.route("/contacts/new", methods=["GET", "POST"])
+def client_new():
+    if request.method == "POST":
+        last_name = request.form.get("last_name", "").strip()
+        first_name = request.form.get("first_name", "").strip()
+        company = request.form.get("company", "").strip()
+        name = compose_client_name(last_name, first_name).strip() or company
+
+        address_street = request.form.get("address_street", "").strip()
+        postal_code = request.form.get("postal_code", "").strip()
+        city = request.form.get("city", "").strip()
+        phone = request.form.get("phone", "").strip()
+        email = request.form.get("email", "").strip()
+        notes = request.form.get("notes", "").strip()
+
+        form_client = {
+            "name": name,
+            "last_name": last_name,
+            "first_name": first_name,
+            "company": company,
+            "address_street": address_street,
+            "postal_code": postal_code,
+            "city": city,
+            "phone": phone,
+            "email": email,
+            "notes": notes,
+        }
+
+        if not name:
+            flash("Saisis au moins un prénom/nom ou une société.")
+            return render_template("client_edit.html", client=form_client, is_new=True)
+
+        address = "\n".join(
+            x for x in [address_street, (postal_code + " " + city).strip()] if x
+        )
+        stamp = now().isoformat(timespec="seconds")
+
+        con = db()
+        cur = con.execute("""
+            INSERT INTO clients(
+                name,last_name,first_name,company,
+                address,address_street,postal_code,city,
+                phone,email,notes,
+                created_at,updated_at,
+                google_sync_status,google_sync_error,
+                archived
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+        """, (
+            name,last_name,first_name,company,
+            address,address_street,postal_code,city,
+            phone,email,notes,
+            stamp,stamp,
+            "À synchroniser",""
+        ))
+        client_id = int(cur.lastrowid)
+        con.commit()
+        con.close()
+
+        audit_event(
+            "CLIENT_CREATE",
+            f"client_id={client_id}",
+            request.remote_addr
+        )
+        flash("Client créé. Google n'a pas été modifié automatiquement.")
+        return redirect(url_for("contacts_page") + f"#client-{client_id}")
+
+    empty_client = {
+        "name": "",
+        "last_name": "",
+        "first_name": "",
+        "company": "",
+        "address_street": "",
+        "postal_code": "",
+        "city": "",
+        "phone": "",
+        "email": "",
+        "notes": "",
+    }
+    return render_template("client_edit.html", client=empty_client, is_new=True)
+
+
 @app.route("/contacts/<int:client_id>/edit", methods=["GET", "POST"])
 def client_edit(client_id):
     con = db()
@@ -14170,7 +14602,7 @@ def client_edit(client_id):
         return redirect(target + f"#client-{client_id}")
 
     con.close()
-    return render_template("client_edit.html", client=client)
+    return render_template("client_edit.html", client=client, is_new=False)
 
 
 @app.route("/contacts/<int:client_id>/delete", methods=["GET", "POST"])
@@ -14223,6 +14655,30 @@ def client_delete(client_id):
             return redirect(url_for("contacts_page"))
 
         backup_database(force=True, tag="avant_archivage_suppression_client")
+
+        # Abby suit WOPR : si la fiche est reliée, la suppression distante doit
+        # réussir AVANT toute suppression ou archivage local. On évite ainsi
+        # les clients fantômes chez Abby et les liens impossibles à récupérer.
+        if str(client["abby_id"] or "").strip():
+            try:
+                delete_client_from_abby(client)
+                audit_event(
+                    "ABBY_CLIENT_DELETE",
+                    f"client_id={client_id}; abby_type={client['abby_type']}; abby_id={client['abby_id']}",
+                    request.remote_addr
+                )
+            except Exception as exc:
+                con.close()
+                audit_event(
+                    "ABBY_CLIENT_DELETE_ERROR",
+                    f"client_id={client_id}; {type(exc).__name__}",
+                    request.remote_addr
+                )
+                flash(
+                    "Suppression annulée : le client n'a pas pu être supprimé chez Abby. "
+                    f"{exc}"
+                )
+                return redirect(url_for("client_delete", client_id=client_id))
 
         # Suppression TOTALE volontaire : réservée aux fiches de test / erreurs.
         # Cette action efface le client ET tout l'historique WOPR associé.
@@ -14317,7 +14773,8 @@ def client_delete(client_id):
             )
             flash(
                 f"Client « {client['name']} » supprimé définitivement avec tout son historique."
-                f"{google_warning}"
+                + (" Client supprimé chez Abby." if str(client["abby_id"] or "").strip() else "")
+                + f"{google_warning}"
             )
             return redirect(url_for("contacts_page"))
 
@@ -14356,17 +14813,27 @@ def client_delete(client_id):
                         google_sync_status='Archivé',
                         google_sync_error='',
                         google_synced_at=?,
+                        abby_id=NULL,
+                        abby_type=NULL,
+                        abby_sync_status='Supprimé',
+                        abby_sync_error='',
+                        abby_synced_at=?,
                         updated_at=?
                     WHERE id=?
-                """, (stamp, stamp, stamp, client_id))
+                """, (stamp, stamp, stamp, stamp, client_id))
             else:
                 con.execute("""
                     UPDATE clients
                     SET archived=1, archived_at=?,
                         google_sync_status='Archivé',
+                        abby_id=NULL,
+                        abby_type=NULL,
+                        abby_sync_status='Supprimé',
+                        abby_sync_error='',
+                        abby_synced_at=?,
                         updated_at=?
                     WHERE id=?
-                """, (stamp, stamp, client_id))
+                """, (stamp, stamp, stamp, client_id))
 
             con.commit()
             con.close()
@@ -14378,7 +14845,8 @@ def client_delete(client_id):
             flash(
                 f"Client « {client['name']} » archivé. "
                 f"Ses {repairs_count} suivi(s), {invoices_count} facture(s) et {quotes_count} devis sont conservés."
-                f"{google_warning} Pour voir les archives : /contacts?archived=1"
+                + (" Client supprimé chez Abby." if str(client["abby_id"] or "").strip() else "")
+                + f"{google_warning} Pour voir les archives : /contacts?archived=1"
             )
             return redirect(url_for("contacts_page"))
 
@@ -14403,7 +14871,8 @@ def client_delete(client_id):
         con.commit()
         con.close()
         audit_event("CLIENT_DELETE", f"client_id={client_id}; no_history=1", request.remote_addr)
-        flash(f"Client « {client['name']} » supprimé.{google_warning}")
+        abby_note = " Client supprimé chez Abby." if str(client["abby_id"] or "").strip() else ""
+        flash(f"Client « {client['name']} » supprimé.{abby_note}{google_warning}")
         return redirect(url_for("contacts_page"))
 
     con.close()
@@ -14804,7 +15273,7 @@ def export_google_contacts():
     for c in clients:
         rows.append([c["name"],"Home",c["email"] or "","Mobile",c["phone"] or "","Home",
                      c["address_street"] or "",c["city"] or "",c["postal_code"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
-    return csv_response("FoulFix_Contacts_Google.csv", rows)
+    return csv_response("WOPR_Contacts_Google.csv", rows)
 
 
 @app.route("/contacts/export/proton.csv")
@@ -14814,7 +15283,7 @@ def export_proton_contacts():
     for c in clients:
         rows.append([c["name"],c["email"] or "",c["phone"] or "",c["address_street"] or "",
                      c["postal_code"] or "",c["city"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
-    return csv_response("FoulFix_Contacts_Proton.csv", rows)
+    return csv_response("WOPR_Contacts_Proton.csv", rows)
 
 
 @app.route("/contacts/export/all.vcf")
@@ -14835,7 +15304,7 @@ def export_vcard_contacts():
         cards.append("\r\n".join(lines))
     data="\r\n".join(cards)+"\r\n"
     return Response(data, mimetype="text/vcard; charset=utf-8",
-                    headers={"Content-Disposition": 'attachment; filename="FoulFix_Contacts.vcf"'})
+                    headers={"Content-Disposition": 'attachment; filename="WOPR_Contacts.vcf"'})
 
 @app.route("/export/suivi.csv")
 def export_suivi():

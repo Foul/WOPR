@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Modifier {{ client['name'] }} - WOPR{% endblock %}
+{% block title %}{{ "Nouveau client" if is_new else "Modifier " ~ client['name'] }} - WOPR{% endblock %}
 {% block body %}
 
 <div class="sheet-banner narrow">
   <div class="banner-top">WOPR</div>
-  <div class="banner-title">Modifier le client</div>
+  <div class="banner-title">{{ "Nouveau client" if is_new else "Modifier le client" }}</div>
 </div>
 
 <form method="post" class="sheet-form client-form">
@@ -36,11 +36,18 @@
       </label>
 
       <label>Code postal
-        <input name="postal_code" value="{{ client['postal_code'] or '' }}">
+        <input id="client-postal-code"
+               name="postal_code"
+               value="{{ client['postal_code'] or '' }}"
+               inputmode="numeric"
+               maxlength="5"
+               data-postal-autocomplete
+               data-city-target="client-city"
+               data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}">
       </label>
 
       <label>Ville
-        <input name="city" value="{{ client['city'] or '' }}">
+        <input id="client-city" name="city" value="{{ client['city'] or '' }}">
       </label>
 
       <label>Téléphone
@@ -63,11 +70,15 @@
   </section>
 
   <div class="sheet-note">
-    Si Google Contacts est connecté, les modifications seront synchronisées automatiquement dans le contact associé.
+    {% if is_new %}
+      Le client sera créé dans WOPR et marqué « À synchroniser ». Google Contacts ne sera pas modifié automatiquement.
+    {% else %}
+      Toute modification marque la fiche « À synchroniser ». Google Contacts ne sera pas modifié automatiquement.
+    {% endif %}
   </div>
 
   <div class="footer-actions">
-    <button class="primary big-action" type="submit">ENREGISTRER</button>
+    <button class="primary big-action" type="submit">{{ "CRÉER LE CLIENT" if is_new else "ENREGISTRER" }}</button>
     <a class="button" href="{{ url_for('contacts_page') }}">Annuler</a>
   </div>
 </form>
@@ -94,4 +105,5 @@
 })();
 </script>
 
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 {% endblock %}

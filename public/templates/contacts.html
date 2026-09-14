@@ -3,7 +3,7 @@
 {% block body %}
 
 <style>
-/* Clients — actions normales compactes, directement dans le template. */
+/* Clients 2.3.259 — actions normales compactes, directement dans le template. */
 .contacts-table .contact-cell-actions{
   vertical-align: middle;
   text-align: center;
@@ -127,6 +127,7 @@
   {% endif %}
 
   {% if not show_archived %}
+    <a class="button primary" href="{{ url_for('client_new') }}">＋ NOUVEAU CLIENT</a>
     <a class="button primary" href="{{ url_for('import_google_csv_contacts') }}">Importer Google CSV</a>
     {% if safe_duplicate_groups %}
       <form method="post" action="{{ url_for('contacts_merge_safe_duplicates') }}" class="inline-form"
@@ -344,5 +345,5 @@
   }
 })();
 </script>
-<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}?v={{ app_version }}"></script>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 {% endblock %}

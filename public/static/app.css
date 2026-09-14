@@ -17,6 +17,55 @@ body{margin:0;background:var(--bg);color:var(--text)}
   text-decoration:none;padding:9px 13px;border-radius:8px;cursor:pointer;font-weight:600
 }
 .primary,.navbtn{background:var(--blue-dark)!important;color:#fff!important;border-color:var(--blue-dark)!important}
+
+.invoice-shortcut-btn{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  min-height:54px;
+  padding:0 20px;
+  border:2px solid #1d8741!important;
+  border-radius:14px;
+  background:linear-gradient(180deg,#35cf66 0%, #1fa64b 100%)!important;
+  color:#fff!important;
+  font-size:1.02rem;
+  font-weight:800;
+  line-height:1;
+  box-shadow:0 8px 18px rgba(31,166,75,.24);
+}
+.invoice-shortcut-btn:hover{
+  filter:brightness(1.03);
+  transform:translateY(-1px);
+}
+.invoice-shortcut-btn .invoice-shortcut-icon{
+  font-size:1.25rem;
+  line-height:1;
+}
+body.theme-8bit .invoice-shortcut-btn{
+  min-height:50px;
+  padding:0 18px;
+  border:3px solid #111!important;
+  border-radius:0;
+  background:#27b34f!important;
+  color:#fff!important;
+  box-shadow:4px 4px 0 #111;
+  font-family:'Press Start 2P','VT323',monospace;
+  font-size:.95rem;
+  letter-spacing:.02em;
+  text-transform:uppercase;
+}
+body.theme-8bit .invoice-shortcut-btn:hover{
+  transform:translate(-1px,-1px);
+  box-shadow:5px 5px 0 #111;
+  filter:none;
+}
+body.theme-8bit .invoice-shortcut-btn:active{
+  transform:translate(2px,2px);
+  box-shadow:2px 2px 0 #111;
+}
+body.theme-8bit .invoice-shortcut-btn .invoice-shortcut-icon{
+  font-size:1rem;
+}
 .page{max-width:1500px;margin:18px auto;padding:0 16px}
 .flash{background:#e8fff0;border:1px solid #8ed3a1;padding:10px 12px;border-radius:8px;margin-bottom:14px}
 .sheet-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:12px}
@@ -1084,8 +1133,7 @@ code{background:#eef3f8;padding:2px 5px;border-radius:4px}
 .av-row.editing .av-normal-actions{display:none}
 .av-row.editing .av-edit-actions{display:grid}
 .av-edit input{width:100%;min-width:0;padding:6px;font-size:12px}
-.av-normal-actions{display:grid;gap:4px}
-.av-edit-actions{gap:4px}
+.av-normal-actions,.av-edit-actions{display:grid;gap:4px}
 .av-normal-actions form{margin:0}
 .av-normal-actions .mini-btn,.av-edit-actions .mini-btn{width:100%;font-size:11px}
 
@@ -4927,4 +4975,74 @@ body.theme-8bit .simple-invoice-mini{
   font-weight:800 !important;
   line-height:1 !important;
   padding:2px 5px !important;
+}
+
+
+/* V2.3.286 - Correctif final bouton Facture simple (thème standard + vrai rendu 8 bits) */
+.page .invoice-shortcut-btn.button,
+.page a.invoice-shortcut-btn.button{
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:10px !important;
+  min-height:54px !important;
+  padding:0 20px !important;
+  border:2px solid #1d8741 !important;
+  border-radius:14px !important;
+  background:linear-gradient(180deg,#35cf66 0%, #1fa64b 100%) !important;
+  color:#fff !important;
+  text-decoration:none !important;
+  font-size:1.02rem !important;
+  font-weight:800 !important;
+  line-height:1 !important;
+  box-shadow:0 8px 18px rgba(31,166,75,.24) !important;
+}
+.page .invoice-shortcut-btn.button:hover,
+.page a.invoice-shortcut-btn.button:hover{
+  filter:brightness(1.03) !important;
+  transform:translateY(-1px) !important;
+}
+.page .invoice-shortcut-btn .invoice-shortcut-icon{
+  font-size:1.25rem !important;
+  line-height:1 !important;
+  color:inherit !important;
+}
+
+body.theme-8bit .page .invoice-shortcut-btn.button,
+body.theme-8bit .page a.invoice-shortcut-btn.button{
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:12px !important;
+  min-height:52px !important;
+  padding:0 18px !important;
+  border:3px solid #111 !important;
+  border-radius:0 !important;
+  background:#27b34f !important;
+  color:#fff !important;
+  box-shadow:4px 4px 0 #111 !important;
+  text-shadow:2px 2px 0 rgba(0,0,0,.35) !important;
+  font-family:"Press Start 2P","VT323",monospace !important;
+  font-size:.92rem !important;
+  font-weight:400 !important;
+  line-height:1 !important;
+  letter-spacing:.02em !important;
+  text-transform:uppercase !important;
+  transform:none !important;
+  clip-path:none !important;
+}
+body.theme-8bit .page .invoice-shortcut-btn.button:hover,
+body.theme-8bit .page a.invoice-shortcut-btn.button:hover{
+  transform:translate(-1px,-1px) !important;
+  box-shadow:5px 5px 0 #111 !important;
+  filter:none !important;
+}
+body.theme-8bit .page .invoice-shortcut-btn.button:active,
+body.theme-8bit .page a.invoice-shortcut-btn.button:active{
+  transform:translate(2px,2px) !important;
+  box-shadow:2px 2px 0 #111 !important;
+}
+body.theme-8bit .page .invoice-shortcut-btn .invoice-shortcut-icon{
+  font-size:1rem !important;
+  color:#fff !important;
+  text-shadow:2px 2px 0 rgba(0,0,0,.35) !important;
 }

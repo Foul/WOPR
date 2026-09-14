@@ -13,27 +13,25 @@
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
 
   <div class="section-title">Client</div>
+  <input type="hidden" name="client_id" id="simple-client-id" value="">
   <div class="simple-client-choice">
-    <label>Client existant
-      <select name="client_id" id="simple-client-id">
-        <option value="">— Nouveau / Client de passage —</option>
-        {% for c in clients %}
-          <option value="{{ c['id'] }}">{% if c['first_name'] or c['last_name'] %}{{ c['first_name'] or '' }} {{ c['last_name'] or '' }}{% if c['company'] %} — {{ c['company'] }}{% endif %}{% else %}{{ c['company'] or c['name'] }}{% endif %}</option>
-        {% endfor %}
-      </select>
+    <label>Rechercher un client existant
+      <input id="simple-client-search"
+             type="search"
+             autocomplete="off"
+             placeholder="Nom, société, téléphone ou e-mail…">
+      <select id="simple-client-results" size="4" style="display:none; margin-top:.45rem;"></select>
+      <small id="simple-client-help">Tape au moins 2 caractères. Aucun client choisi + champs vides = <strong>Client de passage</strong>.</small>
     </label>
-    <div class="simple-client-hint">
-      Aucun client choisi + champs vides = <strong>Client de passage</strong>.
-    </div>
   </div>
 
   <div class="grid two simple-new-client" id="simple-new-client">
-    <label>Prénom<input name="first_name"></label>
-    <label>Nom<input name="last_name"></label>
-    <label>Entreprise / Société<input name="company"></label>
-    <label>Téléphone<input name="phone"></label>
-    <label>E-mail<input type="email" name="email"></label>
-    <label>Adresse<input name="address_street"></label>
+    <label>Prénom<input id="simple-first-name" name="first_name"></label>
+    <label>Nom<input id="simple-last-name" name="last_name"></label>
+    <label>Entreprise / Société<input id="simple-company" name="company"></label>
+    <label>Téléphone<input id="simple-phone" name="phone"></label>
+    <label>E-mail<input id="simple-email" type="email" name="email"></label>
+    <label>Adresse<input id="simple-address" name="address_street"></label>
     <label>Code postal
       <input id="simple-postal-code"
              name="postal_code"
@@ -134,16 +132,98 @@ document.getElementById('add-service').onclick=()=>addLine('service');
 document.getElementById('add-goods').onclick=()=>addLine('goods');
 addLine('service');
 
-const clientSelect=document.getElementById('simple-client-id');
-const newClient=document.getElementById('simple-new-client');
-function updateClientFields(){
-  const disabled=!!clientSelect.value;
-  newClient.classList.toggle('simple-client-disabled',disabled);
-  newClient.querySelectorAll('input').forEach(x=>x.disabled=disabled);
+const clientSearch=document.getElementById('simple-client-search');
+const clientResults=document.getElementById('simple-client-results');
+const clientId=document.getElementById('simple-client-id');
+const clientHelp=document.getElementById('simple-client-help');
+const clientSearchUrl={{ url_for('repair_client_search')|tojson }};
+const clientFields={
+  first_name:document.getElementById('simple-first-name'),
+  last_name:document.getElementById('simple-last-name'),
+  company:document.getElementById('simple-company'),
+  address_street:document.getElementById('simple-address'),
+  postal_code:document.getElementById('simple-postal-code'),
+  city:document.getElementById('simple-city'),
+  phone:document.getElementById('simple-phone'),
+  email:document.getElementById('simple-email')
+};
+let foundClients=[];
+let clientSearchTimer=null;
+let clientRequestSerial=0;
+function clientLabel(c){
+  const first=String(c.first_name||'').trim();
+  const last=String(c.last_name||c.name||'').trim();
+  const person=[first,last].filter(Boolean).join(' ');
+  const company=String(c.company||'').trim();
+  const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toLocaleLowerCase('fr-FR');
+  if(person&&company&&norm(person)!==norm(company)) return `${person} — ${company}`;
+  return person||company||String(c.name||'').trim();
 }
-clientSelect.addEventListener('change',updateClientFields);
-updateClientFields();
+function hideClientResults(){
+  clientResults.innerHTML='';
+  clientResults.style.display='none';
+  foundClients=[];
+}
+function fillClient(c){
+  clientId.value=String(c.id);
+  Object.entries(clientFields).forEach(([key,el])=>{if(el) el.value=c[key]||'';});
+  clientSearch.value=clientLabel(c);
+  hideClientResults();
+  clientHelp.textContent='✓ Client existant sélectionné — coordonnées chargées.';
+}
+function renderClients(clients){
+  hideClientResults();
+  foundClients=clients;
+  if(!clients.length){
+    clientHelp.textContent='Aucun client correspondant — tu peux saisir un nouveau client ci-dessous.';
+    return;
+  }
+  clients.forEach(c=>{
+    const option=document.createElement('option');
+    option.value=String(c.id);
+    option.textContent=clientLabel(c);
+    clientResults.appendChild(option);
+  });
+  clientResults.size=Math.min(Math.max(clients.length,2),6);
+  clientResults.style.display='';
+  clientHelp.textContent=`${clients.length} client(s) correspondant(s).`;
+}
+async function runClientSearch(query){
+  const serial=++clientRequestSerial;
+  clientHelp.textContent='Recherche…';
+  try{
+    const response=await fetch(`${clientSearchUrl}?q=${encodeURIComponent(query)}`,{
+      headers:{'Accept':'application/json'},credentials:'same-origin'
+    });
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    const clients=await response.json();
+    if(serial!==clientRequestSerial) return;
+    renderClients(Array.isArray(clients)?clients:[]);
+  }catch(error){
+    if(serial!==clientRequestSerial) return;
+    hideClientResults();
+    clientHelp.textContent='Recherche client indisponible — tu peux saisir les coordonnées manuellement.';
+  }
+}
+clientSearch.addEventListener('input',()=>{
+  clientId.value='';
+  window.clearTimeout(clientSearchTimer);
+  const q=clientSearch.value.trim();
+  if(q.length<2){
+    ++clientRequestSerial;
+    hideClientResults();
+    clientHelp.textContent=q?'Tape au moins 2 caractères.':'Tape au moins 2 caractères. Aucun client choisi + champs vides = Client de passage.';
+    return;
+  }
+  clientSearchTimer=window.setTimeout(()=>runClientSearch(q),180);
+});
+function useSelectedClient(){
+  const client=foundClients.find(c=>String(c.id)===clientResults.value);
+  if(client) fillClient(client);
+}
+clientResults.addEventListener('change',useSelectedClient);
+clientResults.addEventListener('dblclick',useSelectedClient);
 </script>
 
-<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}?v={{ app_version }}"></script>
+<script src="{{ url_for('static', filename='js/postal-autocomplete.js') }}"></script>
 {% endblock %}
