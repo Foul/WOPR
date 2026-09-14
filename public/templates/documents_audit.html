@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Contrôle documents - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">Contrôle des documents</div>
+</div>
+
+<div class="audit-readonly-notice">
+  🔒 Lecture seule : ce contrôle ne crée, ne renomme, ne déplace et ne supprime aucun fichier.
+</div>
+
+<h2>🧾 Factures</h2>
+<div class="audit-stats">
+  <div><strong>{{ invoice_count }}</strong><span>factures distinctes</span></div>
+  <div><strong>{{ invoice_pdf_count }}</strong><span>PDF archivés</span></div>
+  <div class="{% if missing_invoices %}audit-bad{% endif %}">
+    <strong>{{ missing_invoices|length }}</strong><span>sans PDF identifié</span>
+  </div>
+<div>
+    <strong>{{ paper_only_invoices|length }}</strong><span>factures papier historiques</span>
+  </div>
+  <div>
+    <strong>{{ unmatched_invoice_files|length }}</strong><span>PDF réellement suspects</span>
+  </div>
+<div>
+    <strong>{{ ignored_invoice_supporting_docs|length }}</strong><span>justificatifs ignorés</span>
+  </div>
+</div>
+
+<p class="muted">
+  Le contrôle masque les correspondances reconnues comme correctes et n'affiche que les éléments
+  réellement suspects ou incomplets. Les anciennes factures papier sont classées séparément et ne sont
+  pas considérées comme des anomalies.
+</p>
+
+{% if missing_invoices %}
+<h3>Factures sans PDF identifié</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Date</th><th>Facture</th><th>Client</th></tr></thead>
+    <tbody>
+    {% for row in missing_invoices %}
+      <tr>
+        <td>{{ row.repair_date or '—' }}</td>
+        <td><code>{{ row.invoice_no }}</code></td>
+        <td>{{ row.client_name or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if paper_only_invoices %}
+<h3>Factures papier historiques sans PDF</h3>
+<p class="muted">
+  Ces anciennes entrées indiquent explicitement une facture papier. L'absence de PDF
+  n'est donc pas considérée comme une anomalie.
+</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Date</th><th>Facture</th><th>Client</th><th>Statut</th></tr></thead>
+    <tbody>
+    {% for row in paper_only_invoices %}
+      <tr>
+        <td>{{ row.repair_date or '—' }}</td>
+        <td><code>{{ row.invoice_no }}</code></td>
+        <td>{{ row.client_name or '—' }}</td>
+        <td>{{ row.reason }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if unmatched_invoice_files %}
+<h3>PDF Factures réellement suspects</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Fichier</th></tr></thead>
+    <tbody>
+    {% for path in unmatched_invoice_files %}
+      <tr><td><code>{{ path }}</code></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if ignored_invoice_supporting_docs %}
+<h3>Justificatifs de paiement ignorés</h3>
+<p class="muted">
+  Ces fichiers sont rangés dans Factures mais ressemblent clairement à des preuves
+  de virement ou de paiement, pas à des factures. Ils ne sont donc pas signalés comme anomalie.
+</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Fichier</th></tr></thead>
+    <tbody>
+    {% for path in ignored_invoice_supporting_docs %}
+      <tr><td><code>{{ path }}</code></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<h2>📄 Devis</h2>
+<div class="audit-stats">
+  <div><strong>{{ quote_document_count }}</strong><span>documents enregistrés</span></div>
+  <div><strong>{{ quote_pdf_count }}</strong><span>PDF présents</span></div>
+  <div class="{% if missing_quote_documents %}audit-bad{% endif %}">
+    <strong>{{ missing_quote_documents|length }}</strong><span>liens sans fichier</span>
+  </div>
+  <div class="{% if duplicate_quote_links %}audit-bad{% endif %}">
+    <strong>{{ duplicate_quote_links|length }}</strong><span>liens dupliqués</span>
+  </div>
+  <div>
+    <strong>{{ unregistered_quote_files|length }}</strong><span>PDF non enregistrés</span>
+  </div>
+</div>
+
+{% if missing_quote_documents %}
+<h3>Liens Devis sans fichier</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Date</th><th>Devis</th><th>Client</th><th>Fichier</th></tr></thead>
+    <tbody>
+    {% for row in missing_quote_documents %}
+      <tr>
+        <td>{{ row.quote_date }}</td>
+        <td><code>{{ row.quote_no }}</code></td>
+        <td>{{ row.client_name }}</td>
+        <td><code>{{ row.filename }}</code></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if duplicate_quote_links %}
+<h3>Fichiers Devis liés plusieurs fois</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Fichier</th><th>Occurrences</th></tr></thead>
+    <tbody>
+    {% for group in duplicate_quote_links %}
+      <tr><td><code>{{ group.filename }}</code></td><td>{{ group.count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if unregistered_quote_files %}
+<h3>PDF Devis non enregistrés</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Fichier</th></tr></thead>
+    <tbody>
+    {% for path in unregistered_quote_files %}
+      <tr><td><code>{{ path }}</code></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+
+<h2>📦 Commandes</h2>
+<div class="audit-stats">
+  <div><strong>{{ order_pdf_count }}</strong><span>PDF archivés</span></div>
+</div>
+
+{% if order_file_paths %}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Fichier</th></tr></thead>
+    <tbody>
+    {% for path in order_file_paths %}
+      <tr><td><code>{{ path }}</code></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">Aucune commande PDF archivée pour le moment.</p>
+{% endif %}
+
+{% if not missing_invoices and not unmatched_invoice_files
+      and not missing_quote_documents and not duplicate_quote_links and not unregistered_quote_files %}
+<div class="audit-ok">✅ Aucun cas à vérifier détecté dans Factures ou Devis.</div>
+{% endif %}
+
+<p><a class="button" href="{{ url_for('security_page') }}">← Sécurité</a></p>
+{% endblock %}

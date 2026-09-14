@@ -10,14 +10,33 @@
   <a class="button primary" href="{{ url_for('simple_invoice_new') }}">➕ Facture simple</a>
 </div>
 
+<div class="ledger-year-switch">
+  {% if year == current_year %}
+    <span class="ledger-year-current">{{ current_year }}</span>
+    {% if archive_years %}
+    <details class="ledger-archive">
+      <summary>Archives</summary>
+      {% for archive_year in archive_years %}
+      <a href="{{ url_for('invoices_page', year=archive_year) }}">{{ archive_year }}</a>
+      {% endfor %}
+    </details>
+    {% endif %}
+  {% else %}
+    <a class="button primary" href="{{ url_for('invoices_page', year=current_year) }}">← Retour {{ current_year }}</a>
+    <span class="ledger-year-archive">Archive {{ year }}</span>
+  {% endif %}
+</div>
+
 <div class="sheet-note" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-  <strong>{{ invoice_stats.total }}</strong> factures distinctes
+  <strong>{{ invoice_stats.total }}</strong> factures distinctes{% if year != current_year %} en {{ year }}{% endif %}
+  {% if year == current_year %}
   <span>•</span>
   <strong>{{ invoice_stats.week }}</strong> cette semaine
   <span>•</span>
   <strong>{{ invoice_stats.month }}</strong> ce mois
   <span>•</span>
   <strong>{{ invoice_stats.year }}</strong> cette année
+  {% endif %}
   <span>•</span>
   <strong>{{ invoice_stats.pdf }}</strong> PDF archivés
 </div>
@@ -25,11 +44,12 @@
 {% if unpaid_only %}
 <div class="sheet-note" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
   <strong>💳 Affichage : factures impayées uniquement</strong>
-  <a class="mini-btn" href="{{ url_for('invoices_page') }}">Voir toutes les factures</a>
+  <a class="mini-btn" href="{{ url_for('invoices_page', year=year) }}">Voir toutes les factures</a>
 </div>
 {% endif %}
 
 <form method="get" action="{{ url_for('invoices_page') }}" class="invoice-search-bar">
+  <input type="hidden" name="year" value="{{ year }}">
   <input type="search"
          name="q"
          value="{{ q or '' }}"
@@ -37,7 +57,7 @@
          autocomplete="off">
   <button class="button primary" type="submit">RECHERCHER</button>
   {% if q %}
-    <a class="button" href="{{ url_for('invoices_page') }}">Effacer</a>
+    <a class="button" href="{{ url_for('invoices_page', year=year) }}">Effacer</a>
   {% endif %}
 </form>
 

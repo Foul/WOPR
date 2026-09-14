@@ -77,6 +77,18 @@
       </ul>
     {% endif %}
   </section>
+  <section class="security-card">
+    <h2>🔎 Contrôle des documents</h2>
+    <p>
+      Vérifie en lecture seule la cohérence entre la base WOPR et les PDF archivés
+      dans <strong>Factures</strong>, <strong>Devis</strong> et <strong>Commandes</strong>.
+    </p>
+    <p class="muted">
+      Aucun fichier ni aucune donnée ne sont modifiés : les anciens noms atypiques
+      sont simplement signalés comme cas à vérifier.
+    </p>
+    <a class="button" href="{{ url_for('documents_audit') }}">Contrôler les documents</a>
+  </section>
   <section class="security-card smtp-card">
     <h2>📧 Envoi des factures — Proton SMTP</h2>
     <p>Le jeton SMTP reste uniquement sur ce PC dans <code>data/smtp_settings.json</code> et n'est jamais affiché après enregistrement.</p>

@@ -64,6 +64,7 @@ FOULFIX_ROOT = PRIVATE_ROOT / "documents"
 DEVIS_ROOT = FOULFIX_ROOT / "Devis"
 FACTURES_ROOT = FOULFIX_ROOT / "Factures"
 FOURNISSEURS_ROOT = FOULFIX_ROOT / "Fournisseurs"
+COMMANDES_ROOT = FOULFIX_ROOT / "Commandes"
 SUIVI_REPARATIONS_ROOT = FOULFIX_ROOT / "Suivi de réparation"
 
 MONTH_FOLDER_NAMES = {
@@ -817,7 +818,7 @@ app = Flask(__name__)
 for _directory in (
     PRIVATE_ROOT, DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR,
     PRIVATE_ASSETS, PRIVATE_SEEDS, FOULFIX_ROOT, DEVIS_ROOT, FACTURES_ROOT,
-    SUIVI_REPARATIONS_ROOT,
+    FOURNISSEURS_ROOT, COMMANDES_ROOT, SUIVI_REPARATIONS_ROOT,
 ):
     _directory.mkdir(parents=True, exist_ok=True)
 
@@ -2356,8 +2357,12 @@ def init_db():
 
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entry_date ON ledger_entries(entry_date)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_operation ON ledger_entries(operation)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_invoice_no ON ledger_entries(invoice_no)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_antivirus_expiration ON antivirus_entries(expiration_date)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_quotes_date ON quotes(quote_date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_quotes_client_id ON quotes(client_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repairs_client_id ON repairs(client_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repairs_invoice_no ON repairs(invoice_no)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_quote_lines_quote ON quote_lines(quote_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_quote_documents_quote ON quote_documents(quote_id)")
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_legacy_source ON repairs(legacy_source_year, legacy_source_row) WHERE legacy_source_year IS NOT NULL")
@@ -3414,7 +3419,7 @@ def canonical_client_invoice_no(value):
     return raw
 
 
-def find_client_invoice_pdf(invoice_no, client_name):
+def find_client_invoice_pdf(invoice_no, client_name, invoice_files=None):
     """
     Retrouve le PDF client réellement classé dans Factures.
 
@@ -3436,8 +3441,14 @@ def find_client_invoice_pdf(invoice_no, client_name):
     if not invoice_key:
         return None
 
+    # Si l'appelant a déjà scanné Factures (ex. audit documents), on
+    # réutilise directement cette liste au lieu de refaire un rglob complet.
+    pdf_files = invoice_files
+    if pdf_files is None:
+        pdf_files = FACTURES_ROOT.rglob("*.pdf")
+
     candidates = []
-    for p in FACTURES_ROOT.rglob("*.pdf"):
+    for p in pdf_files:
         if "fournisseurs" in {part.casefold() for part in p.parts}:
             continue
         stem_key = _match_key(p.stem)
@@ -3906,12 +3917,30 @@ def make_dossier_no():
     """
     base = now().strftime("%d%m%Y%H%M")
     con = db()
-    candidate = base
+    try:
+        rows = con.execute(
+            """
+            SELECT dossier_no
+            FROM repairs
+            WHERE dossier_no=? OR dossier_no LIKE ?
+            """,
+            (base, f"{base}-%"),
+        ).fetchall()
+    finally:
+        con.close()
+
+    used = {
+        str(row["dossier_no"] or "").strip()
+        for row in rows
+        if str(row["dossier_no"] or "").strip()
+    }
+    if base not in used:
+        return base
+
     idx = 2
-    while con.execute("SELECT 1 FROM repairs WHERE dossier_no=?", (candidate,)).fetchone():
-        candidate = f"{base}-{idx}"
+    while f"{base}-{idx}" in used:
         idx += 1
-    return candidate
+    return f"{base}-{idx}"
 
 def parse_money_input(value):
     text = str(value or "").strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
@@ -4195,11 +4224,16 @@ def _supplier_auto_match(row, candidates):
     return None, "missing"
 
 
-def auto_link_supplier_documents(years=(2025, 2026)):
+def auto_link_supplier_documents(years=None):
     """
     Rattache les factures déjà présentes dans private/documents/Fournisseurs aux achats existants.
     Ne déplace, ne copie et ne renomme aucun fichier historique.
+
+    Par défaut, traite toutes les années depuis 2025 jusqu'à l'année courante.
     """
+    if years is None:
+        years = tuple(range(2025, now().year + 1))
+
     con = db()
     placeholders = ",".join("?" for _ in years)
     rows = con.execute(f"""
@@ -4467,13 +4501,26 @@ def make_quote_no(con=None):
         return prefix + base_dt.strftime(fmt)
 
     # Très rare : deux devis dans la même minute.
-    # On conserve strictement le format demandé et prend la minute libre suivante.
-    for offset in range(0, 120):
-        candidate = prefix + (base_dt + timedelta(minutes=offset)).strftime(fmt)
-        if not con.execute("SELECT 1 FROM quotes WHERE quote_no=?", (candidate,)).fetchone():
+    # On conserve strictement le comportement existant : première minute libre
+    # parmi les 120 suivantes, mais avec une seule requête SQL.
+    candidates = [
+        prefix + (base_dt + timedelta(minutes=offset)).strftime(fmt)
+        for offset in range(120)
+    ]
+    placeholders = ",".join("?" for _ in candidates)
+    used = {
+        str(row["quote_no"] or "").strip()
+        for row in con.execute(
+            f"SELECT quote_no FROM quotes WHERE quote_no IN ({placeholders})",
+            candidates,
+        ).fetchall()
+    }
+
+    for candidate in candidates:
+        if candidate not in used:
             return candidate
 
-    return prefix + base_dt.strftime(fmt)
+    return candidates[0]
 
 
 def parse_quote_lines(form):
@@ -4520,21 +4567,29 @@ def make_invoice_no():
 
     con = db()
     try:
-        if not con.execute(
-            "SELECT 1 FROM repairs WHERE invoice_no=? LIMIT 1",
-            (base,)
-        ).fetchone():
-            return base
-
-        suffix = 2
-        while con.execute(
-            "SELECT 1 FROM repairs WHERE invoice_no=? LIMIT 1",
-            (f"{base}-{suffix}",)
-        ).fetchone():
-            suffix += 1
-        return f"{base}-{suffix}"
+        rows = con.execute(
+            """
+            SELECT invoice_no
+            FROM repairs
+            WHERE invoice_no=? OR invoice_no LIKE ?
+            """,
+            (base, f"{base}-%"),
+        ).fetchall()
     finally:
         con.close()
+
+    used = {
+        str(row["invoice_no"] or "").strip()
+        for row in rows
+        if str(row["invoice_no"] or "").strip()
+    }
+    if base not in used:
+        return base
+
+    suffix = 2
+    while f"{base}-{suffix}" in used:
+        suffix += 1
+    return f"{base}-{suffix}"
 
 def local_ip():
     try:
@@ -7578,8 +7633,7 @@ def quotes_page():
         ORDER BY q.quote_date DESC, q.id DESC
     """).fetchall()
 
-    quotes = []
-    all_real_docs = set()
+    all_quotes = []
     for row in rows:
         item = dict(row)
         item["client_email"] = quote_client_email(con, row)
@@ -7587,8 +7641,7 @@ def quotes_page():
         item["real_documents"] = [str(p) for p in candidates]
         item["document_count"] = len(candidates)
         item["first_document_path"] = str(candidates[0]) if candidates else ""
-        all_real_docs.update(str(p) for p in candidates)
-        quotes.append(item)
+        all_quotes.append(item)
 
     con.close()
 
@@ -7597,9 +7650,30 @@ def quotes_page():
             f"Archive devis importée : {seed_result.get('quotes_added',0)} devis ajoutés."
         )
 
-    historical_document_count = len(list(DEVIS_ROOT.rglob("*.pdf"))) if DEVIS_ROOT.exists() else 0
+    current_year = now().year
+    available_years = sorted(
+        {current_year} | {
+            int(str(q.get("quote_date") or "")[:4])
+            for q in all_quotes
+            if str(q.get("quote_date") or "")[:4].isdigit()
+        },
+        reverse=True,
+    )
+    try:
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
+    archive_years = [y for y in available_years if y != current_year]
+
+    quotes = [
+        q for q in all_quotes
+        if str(q.get("quote_date") or "").startswith(f"{year:04d}-")
+    ]
     archived_quotes = [q for q in quotes if q["document_count"] > 0]
     historical_quote_count = len(archived_quotes)
+    historical_document_count = sum(q["document_count"] for q in archived_quotes)
 
     today = now().date()
     week_start = today - timedelta(days=today.weekday())
@@ -7607,17 +7681,18 @@ def quotes_page():
     year_start = today.replace(month=1, day=1)
 
     quote_period_counts = {"week": 0, "month": 0, "year": 0}
-    for quote in archived_quotes:
-        try:
-            quote_day = datetime.strptime(str(quote.get("quote_date") or "")[:10], "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            continue
-        if week_start <= quote_day <= today:
-            quote_period_counts["week"] += 1
-        if month_start <= quote_day <= today:
-            quote_period_counts["month"] += 1
-        if year_start <= quote_day <= today:
-            quote_period_counts["year"] += 1
+    if year == current_year:
+        for quote in archived_quotes:
+            try:
+                quote_day = datetime.strptime(str(quote.get("quote_date") or "")[:10], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if week_start <= quote_day <= today:
+                quote_period_counts["week"] += 1
+            if month_start <= quote_day <= today:
+                quote_period_counts["month"] += 1
+            if year_start <= quote_day <= today:
+                quote_period_counts["year"] += 1
 
     return render_template(
         "quotes.html",
@@ -7626,6 +7701,9 @@ def quotes_page():
         historical_quote_count=historical_quote_count,
         quote_period_counts=quote_period_counts,
         devis_root=str(DEVIS_ROOT),
+        year=year,
+        current_year=current_year,
+        archive_years=archive_years,
     )
 
 
@@ -8567,13 +8645,31 @@ def achats_ventes_page():
     if inserted_now:
         flash(f"Historique Achats/Ventes chargé : {inserted_now} ligne(s) ajoutée(s).")
 
-    # 2026 = vue principale. 2025 reste accessible uniquement comme archive.
+    # L'année principale suit automatiquement l'année civile courante.
+    # Les années déjà présentes dans le registre restent accessibles comme archives.
+    current_year = datetime.now().year
+    con_years = db()
+    stored_year_rows = con_years.execute("""
+        SELECT DISTINCT substr(entry_date,1,4) AS y
+        FROM ledger_entries
+        WHERE entry_date GLOB '[0-9][0-9][0-9][0-9]-*'
+        ORDER BY y DESC
+    """).fetchall()
+    con_years.close()
+
+    available_years = sorted(
+        {current_year} | {int(r["y"]) for r in stored_year_rows if str(r["y"] or "").isdigit()},
+        reverse=True,
+    )
+
     try:
-        year = int(request.args.get("year", 2026))
-    except Exception:
-        year = 2026
-    if year not in (2025, 2026):
-        year = 2026
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
+
+    archive_years = [y for y in available_years if y != current_year]
 
     # V2.3.98 — recherche manuelle uniquement : aucun rattachement automatique.
     search_q = str(request.args.get("q", "") or "").strip()
@@ -8737,6 +8833,8 @@ def achats_ventes_page():
     return render_template(
         "achats_ventes.html",
         year=year,
+        current_year=current_year,
+        archive_years=archive_years,
         months=months,
         purchases_total=purchases_total,
         sales_total=sales_total,
@@ -11480,6 +11578,38 @@ def invoices_page():
             "simple_invoice": int(representative.get("simple_invoice") or 0),
         }
 
+        invoice["is_paid"] = is_paid
+        invoices.append(invoice)
+
+    invoices.sort(
+        key=lambda x: (str(x["invoice_date"] or ""), str(x["invoice_no"] or ""), int(x["id"] or 0)),
+        reverse=True
+    )
+
+    current_year = now().year
+    available_years = sorted(
+        {current_year} | {
+            int(str(inv.get("invoice_date") or "")[:4])
+            for inv in invoices
+            if str(inv.get("invoice_date") or "")[:4].isdigit()
+        },
+        reverse=True,
+    )
+    try:
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
+    archive_years = [y for y in available_years if y != current_year]
+
+    year_invoices = [
+        inv for inv in invoices
+        if str(inv.get("invoice_date") or "").startswith(f"{year:04d}-")
+    ]
+
+    filtered_invoices = []
+    for invoice in year_invoices:
         if q:
             haystack = " ".join([
                 str(invoice["invoice_no"]), str(invoice["client_name"]),
@@ -11488,66 +11618,53 @@ def invoices_page():
             ]).casefold()
             if q.casefold() not in haystack:
                 continue
-
-        if unpaid_only and is_paid:
+        if unpaid_only and invoice.get("is_paid"):
             continue
+        filtered_invoices.append(invoice)
 
-        invoices.append(invoice)
-
-    invoices.sort(
-        key=lambda x: (str(x["invoice_date"] or ""), str(x["invoice_no"] or ""), int(x["id"] or 0)),
-        reverse=True
-    )
-
-    # Statistiques globales de la page Factures.
-    # Elles sont calculées sur toutes les factures distinctes, indépendamment
-    # de la recherche courante ou du filtre "impayées".
     today = now().date()
     week_start = today - timedelta(days=today.weekday())
     invoice_stats = {
-        "total": len(grouped),
+        "total": len(year_invoices),
         "week": 0,
         "month": 0,
-        "year": 0,
+        "year": len(year_invoices),
         "pdf": 0,
     }
 
-    for group in grouped.values():
-        inv_date = invoice_no_date(group["invoice_no"])
-        if not inv_date:
-            date_candidates = sorted({
-                str(x.get("finished_at") or x.get("received_date") or "")[:10]
-                for x in group["rows"]
-                if x.get("finished_at") or x.get("received_date")
-            })
-            inv_date = date_candidates[0] if date_candidates else ""
+    if year == current_year:
+        for invoice in year_invoices:
+            try:
+                d = datetime.strptime(str(invoice.get("invoice_date") or "")[:10], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if week_start <= d <= today:
+                invoice_stats["week"] += 1
+            if d.year == today.year and d.month == today.month:
+                invoice_stats["month"] += 1
 
-        try:
-            d = datetime.strptime(inv_date, "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            continue
-
-        if week_start <= d <= today:
-            invoice_stats["week"] += 1
-        if d.year == today.year and d.month == today.month:
-            invoice_stats["month"] += 1
-        if d.year == today.year:
-            invoice_stats["year"] += 1
-
+    # Compte les PDF de factures correspondant à l'année affichée à partir du
+    # numéro de facture quand il contient une date JJMMYYYYHHMM.
     if FACTURES_ROOT.exists():
+        year_token = str(year)
         invoice_stats["pdf"] = sum(
             1
             for pdf in FACTURES_ROOT.rglob("*.pdf")
             if "fournisseurs" not in {part.casefold() for part in pdf.parts}
+            and year_token in pdf.stem
         )
 
     return render_template(
         "invoices.html",
-        invoices=invoices,
+        invoices=filtered_invoices,
         q=q,
         unpaid_only=unpaid_only,
         invoice_stats=invoice_stats,
+        year=year,
+        current_year=current_year,
+        archive_years=archive_years,
     )
+
 
 
 @app.route("/repair/<int:rid>/invoice.pdf")
@@ -13062,9 +13179,630 @@ def achats_ventes_sale_invoice_view(entry_id):
     return "Facture client introuvable", 404
 
 
+@app.route("/securite/controle-documents")
+def documents_audit():
+    """Audit non destructif des archives Factures et Devis."""
+    con = db()
+
+    repair_invoice_rows = con.execute("""
+        SELECT r.client_id,
+               c.name AS client_name,
+               r.invoice_no,
+               MIN(COALESCE(NULLIF(r.finished_at,''), r.received_date)) AS repair_date,
+               MAX(COALESCE(r.remarks,'')) AS repair_remarks,
+               MAX(COALESCE(r.legacy_invoice_text,'')) AS legacy_invoice_text,
+               MAX(COALESCE(r.sent_via,'')) AS sent_via,
+               MAX(COALESCE(r.legacy_imported,0)) AS legacy_imported,
+               'repair' AS invoice_source
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(TRIM(r.invoice_no),'')<>''
+        GROUP BY r.client_id, r.invoice_no
+        ORDER BY repair_date DESC, r.invoice_no DESC
+    """).fetchall()
+
+    # Certaines anciennes factures n'ont jamais eu leur numéro recopié dans
+    # repairs.invoice_no, mais il existe bien dans Achats/Ventes.
+    # Exemple : Habarou 090920251600.
+    ledger_invoice_rows = con.execute("""
+        SELECT NULL AS client_id,
+               COALESCE(NULLIF(TRIM(party),''), '—') AS client_name,
+               TRIM(invoice_no) AS invoice_no,
+               MIN(entry_date) AS repair_date,
+               MAX(COALESCE(remarks,'')) AS repair_remarks,
+               '' AS legacy_invoice_text,
+               '' AS sent_via,
+               0 AS legacy_imported,
+               'ledger' AS invoice_source
+        FROM ledger_entries
+        WHERE lower(COALESCE(operation,''))='vente'
+          AND COALESCE(TRIM(invoice_no),'')<>''
+        GROUP BY TRIM(invoice_no), COALESCE(NULLIF(TRIM(party),''), '—')
+        ORDER BY repair_date DESC, invoice_no DESC
+    """).fetchall()
+
+    # Fusion par numéro : si une facture existe dans les deux sources, on garde
+    # en priorité la fiche réparation (plus riche), sinon la vente historique.
+    invoice_by_no = {}
+    for row in ledger_invoice_rows:
+        invoice_by_no[str(row["invoice_no"] or "").strip()] = dict(row)
+    for row in repair_invoice_rows:
+        invoice_by_no[str(row["invoice_no"] or "").strip()] = dict(row)
+
+    invoice_rows = sorted(
+        invoice_by_no.values(),
+        key=lambda row: (
+            str(row.get("repair_date") or ""),
+            str(row.get("invoice_no") or ""),
+        ),
+        reverse=True,
+    )
+
+    quote_docs = con.execute("""
+        SELECT qd.id, qd.quote_id, qd.filename, qd.label, qd.created_at,
+               q.quote_no, q.quote_date, q.client_name
+        FROM quote_documents qd
+        JOIN quotes q ON q.id=qd.quote_id
+        ORDER BY q.quote_date DESC, q.quote_no DESC, qd.id DESC
+    """).fetchall()
+
+    con.close()
+
+    # ---------- Factures ----------
+    invoice_files = sorted(
+        p for p in FACTURES_ROOT.rglob("*.pdf")
+        if p.is_file()
+    ) if FACTURES_ROOT.exists() else []
+
+    missing_invoices = []
+    probable_invoice_matches = []
+    paper_only_invoices = []
+    matched_invoice_paths = set()
+
+    def _invoice_pdf_timestamp(path):
+        """Extrait la date/heure d'un nom de PDF historique.
+
+        Formats connus :
+        - JJMMYYYYHHMM (12 chiffres)
+        - JJMMYYHHMM   (10 chiffres, ancien format)
+        """
+        stem = path.stem
+
+        m = re.search(r'(\d{12})$', stem)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%d%m%Y%H%M")
+            except ValueError:
+                pass
+
+        m = re.search(r'(\d{10})$', stem)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%d%m%y%H%M")
+            except ValueError:
+                pass
+
+        return None
+
+    _pdf_text_cache = {}
+
+    def _pdf_contains_invoice_no(path, invoice_no):
+        """Cherche un numéro de facture dans le texte des 2 premières pages.
+
+        Le contrôle est optionnel : si pypdf n'est pas disponible ou si le PDF
+        n'est pas extractible, l'audit continue simplement avec les autres critères.
+        """
+        if not invoice_no or not re.fullmatch(r"\d{12}", invoice_no):
+            return False
+
+        key = str(path)
+        if key not in _pdf_text_cache:
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(str(path))
+                parts = []
+                for page in reader.pages[:2]:
+                    try:
+                        parts.append(page.extract_text() or "")
+                    except Exception:
+                        continue
+                _pdf_text_cache[key] = "\n".join(parts)
+            except Exception:
+                _pdf_text_cache[key] = ""
+
+        return invoice_no in _pdf_text_cache[key]
+
+    for row in invoice_rows:
+        invoice_no = str(row["invoice_no"] or "").strip()
+        client_name = str(row["client_name"] or "").strip()
+
+        row_dict = dict(row)
+        legacy_text = normalize_history_name(
+            " ".join([
+                str(row_dict.get("repair_remarks") or ""),
+                str(row_dict.get("legacy_invoice_text") or ""),
+                str(row_dict.get("sent_via") or ""),
+            ])
+        )
+        is_legacy_paper_invoice = bool(
+            row_dict.get("legacy_imported") and "facture papier" in legacy_text
+        )
+
+        # 1) Recherche brute du numéro de facture dans le nom du PDF.
+        # Même une ancienne facture marquée "Facture Papier" peut avoir un PDF
+        # archivé : dans ce cas le PDF réel est prioritaire.
+        #    Elle ne dépend pas du nom client et couvre des fichiers historiques
+        #    comme EN_NANI_110920261211_FR.pdf.
+        direct_candidates = [
+            p for p in invoice_files
+            if invoice_no.casefold() in p.name.casefold()
+        ]
+        if direct_candidates:
+            for p in direct_candidates:
+                try:
+                    matched_invoice_paths.add(str(p.resolve()))
+                except Exception:
+                    matched_invoice_paths.add(str(p))
+            continue
+
+        # 2) Correspondance historique exacte sur date/heure.
+        #    Exemple :
+        #    120520261400 -> Leroy_1205261400.pdf
+        #    (même JJ/MM/AAAA HH:MM, année abrégée sur 2 chiffres dans le fichier)
+        exact_datetime_candidates = []
+        if re.fullmatch(r"\d{12}", invoice_no):
+            try:
+                invoice_dt = datetime.strptime(invoice_no, "%d%m%Y%H%M")
+            except ValueError:
+                invoice_dt = None
+
+            if invoice_dt:
+                for pdf in invoice_files:
+                    pdf_dt = _invoice_pdf_timestamp(pdf)
+                    if pdf_dt != invoice_dt:
+                        continue
+
+                    stem_norm = normalize_history_name(pdf.stem)
+                    client_tokens_exact = [
+                        token for token in normalize_history_name(client_name).split()
+                        if len(token) >= 3 and token not in {
+                            "client", "passage", "clientpassage",
+                            "monsieur", "madame",
+                            "le", "la", "les", "de", "du", "des",
+                        }
+                    ]
+
+                    if client_tokens_exact and not any(
+                        token in stem_norm for token in client_tokens_exact
+                    ):
+                        continue
+
+                    exact_datetime_candidates.append(pdf)
+
+        if len(exact_datetime_candidates) == 1:
+            pdf = exact_datetime_candidates[0]
+            try:
+                matched_invoice_paths.add(str(pdf.resolve()))
+            except Exception:
+                matched_invoice_paths.add(str(pdf))
+            continue
+
+        # 3) Résolution stricte déjà utilisée ailleurs dans WOPR.
+        exact = find_client_invoice_pdf(
+            invoice_no,
+            client_name,
+            invoice_files=invoice_files,
+        )
+        if exact and exact.is_file():
+            try:
+                matched_invoice_paths.add(str(exact.resolve()))
+            except Exception:
+                matched_invoice_paths.add(str(exact))
+            continue
+
+        # 4) Contenu du PDF : sur certains historiques, le nom du fichier porte
+        #    la date réelle de facturation/retrait alors que le numéro WOPR est
+        #    inscrit dans le document. Exemple :
+        #    020420261200 -> Bouvart_220420261700.pdf
+        strong_tokens = [
+            token for token in normalize_history_name(client_name).split()
+            if len(token) >= 3 and token not in {
+                "client", "passage", "clientpassage",
+                "monsieur", "madame",
+            }
+        ]
+        content_candidates = []
+        for pdf in invoice_files:
+            stem_norm = normalize_history_name(pdf.stem)
+            if strong_tokens and not any(token in stem_norm for token in strong_tokens):
+                continue
+            if _pdf_contains_invoice_no(pdf, invoice_no):
+                content_candidates.append(pdf)
+
+        if len(content_candidates) == 1:
+            pdf = content_candidates[0]
+            try:
+                matched_invoice_paths.add(str(pdf.resolve()))
+            except Exception:
+                matched_invoice_paths.add(str(pdf))
+            continue
+
+        # 5) Historique : le numéro peut représenter la date d'entrée alors que
+        #    le PDF est nommé avec la date réelle de facturation/retrait.
+        #    On cherche alors par nom client + chronologie, sans déclarer le lien certain.
+        # Les noms clients historiques peuvent contenir des qualificatifs
+        # comme "(client passage)". Ils ne doivent jamais servir à identifier
+        # un PDF : sinon "Batanero (client passage) Stéphane" peut matcher
+        # à tort "Passage_19_08_2026.pdf".
+        client_token_stopwords = {
+            "client", "passage", "clientpassage",
+            "mr", "mme", "monsieur", "madame",
+            # Particules/articles trop génériques : ils provoquent des faux
+            # positifs comme "Quellec Sylvio Le" -> "Le Gallo".
+            "le", "la", "les", "de", "du", "des", "d", "l",
+        }
+        client_tokens = [
+            token for token in normalize_history_name(client_name).split()
+            if len(token) >= 3 and token not in client_token_stopwords
+        ]
+
+        entry_date = invoice_no_date(invoice_no)
+        try:
+            entry_dt = datetime.strptime(entry_date, "%Y-%m-%d") if entry_date else None
+        except ValueError:
+            entry_dt = None
+
+        candidates = []
+        for pdf in invoice_files:
+            stem_norm = normalize_history_name(pdf.stem)
+            pdf_tokens = set(stem_norm.split())
+
+            matched_tokens = []
+            for token in client_tokens:
+                if token in pdf_tokens:
+                    matched_tokens.append(token)
+                    continue
+                # Ancien nom de fichier concaténé : "LeQuellec" doit pouvoir
+                # correspondre à "Quellec" sans pour autant accepter "Le Gallo".
+                if any(
+                    pdf_token.endswith(token) or pdf_token.startswith(token)
+                    for pdf_token in pdf_tokens
+                    if len(pdf_token) >= len(token) + 2
+                ):
+                    matched_tokens.append(token)
+
+            # Sans aucun élément significatif du nom en commun, on ne rapproche jamais.
+            if not matched_tokens:
+                continue
+
+            pdf_dt = _invoice_pdf_timestamp(pdf)
+            score = len(matched_tokens) * 100
+
+            # Les anciens numéros de facture contiennent souvent HHMM à la fin.
+            # Quand plusieurs PDF du même client existent, une heure identique
+            # est un excellent critère de départage :
+            # 090720261600 -> ...260620261600.pdf plutôt que ...010720261730.pdf.
+            invoice_time = invoice_no[-4:] if re.fullmatch(r"\d{12}", invoice_no) else ""
+            pdf_time = pdf_dt.strftime("%H%M") if pdf_dt else ""
+            if invoice_time and pdf_time:
+                if invoice_time == pdf_time:
+                    score += 700
+                elif invoice_time[:2] == pdf_time[:2]:
+                    score += 80
+
+            # Le mois est un bon critère pour les anciens imports où l'année
+            # peut être incohérente. Exemple : 130520251723 doit préférer
+            # Ricquier_060520261100.pdf (mai) à Ricquier_230320261530.pdf (mars).
+            if entry_dt and pdf_dt and pdf_dt.month == entry_dt.month:
+                score += 500
+
+            # Une date identique ou très proche est un indice beaucoup plus fort
+            # qu'un prénom commun. Cela évite Jean-Pierre Leroy -> Jean-Pierre Moreau.
+            if entry_dt and pdf_dt:
+                delta_days = (pdf_dt.date() - entry_dt.date()).days
+
+                if delta_days == 0:
+                    score += 1000
+                elif 0 < delta_days <= 7:
+                    score += 500 - (delta_days * 20)
+                elif 7 < delta_days <= 45:
+                    score += 250 - min(delta_days, 45)
+                elif -7 <= delta_days < 0:
+                    # Certains historiques ont une petite incohérence entre
+                    # date saisie et date imprimée.
+                    score += 180 - (abs(delta_days) * 10)
+                elif 45 < delta_days <= 120:
+                    score += 80
+                elif pdf_dt.year == entry_dt.year:
+                    score += 10
+
+            # Bonus si le nom du fichier commence directement par un token client.
+            stem_first = stem_norm.split()[0] if stem_norm.split() else ""
+            if stem_first in client_tokens:
+                score += 120
+
+            # Un simple prénom commun ne suffit pas. On ne retient que les
+            # rapprochements historiques réellement étayés par le nom + la date/mois/heure.
+            if score >= 300:
+                candidates.append((score, pdf, pdf_dt))
+
+        candidates.sort(key=lambda item: (item[0], item[2] or datetime.min), reverse=True)
+
+        if candidates:
+            best_score = candidates[0][0]
+            best = [item for item in candidates if item[0] == best_score][:5]
+
+            for _, pdf, _ in best:
+                try:
+                    matched_invoice_paths.add(str(pdf.resolve()))
+                except Exception:
+                    matched_invoice_paths.add(str(pdf))
+
+            probable_invoice_matches.append({
+                "invoice_no": invoice_no,
+                "repair_date": row["repair_date"] or "",
+                "client_name": client_name,
+                "files": [
+                    str(pdf.relative_to(FOULFIX_ROOT))
+                    if FOULFIX_ROOT in pdf.parents else str(pdf)
+                    for _, pdf, _ in best
+                ],
+            })
+        else:
+            # Dernier filet de sécurité, volontairement très conservateur :
+            # si le numéro historique est mal formé, on accepte uniquement
+            # UN SEUL PDF du même client dans le même mois + année.
+            #
+            # Exemples :
+            # - Batanero 240720261530 -> Batanero_2407020261530.pdf
+            # - Chiab 60620251900 -> Chiab_230620251000.pdf
+            #
+            # Mais cela ne doit surtout pas rapprocher :
+            # - Vigier 2025/07 -> Vigier 2026/05
+            # - Marin -> aucun PDF
+            fallback_dt = None
+
+            # Tente d'abord la date embarquée dans le numéro, avec plusieurs
+            # longueurs historiques.
+            for fmt in ("%d%m%Y%H%M", "%d%m%y%H%M", "%d%m%Y%H%M"):
+                try:
+                    if fmt == "%d%m%Y%H%M" and len(invoice_no) == 12:
+                        fallback_dt = datetime.strptime(invoice_no, fmt)
+                        break
+                    if fmt == "%d%m%y%H%M" and len(invoice_no) == 10:
+                        fallback_dt = datetime.strptime(invoice_no, fmt)
+                        break
+                except ValueError:
+                    pass
+
+            # Sinon, utilise la date du dossier historique/réparation.
+            if fallback_dt is None:
+                repair_date = str(row.get("repair_date") or "")
+                try:
+                    fallback_dt = datetime.fromisoformat(repair_date)
+                except ValueError:
+                    try:
+                        fallback_dt = datetime.strptime(repair_date[:10], "%Y-%m-%d")
+                    except Exception:
+                        fallback_dt = None
+
+            strong_tokens = [
+                token for token in normalize_history_name(client_name).split()
+                if len(token) >= 3 and token not in {
+                    "client", "passage", "clientpassage",
+                    "monsieur", "madame",
+                    "le", "la", "les", "de", "du", "des",
+                }
+            ]
+
+            same_month_client_files = []
+            if fallback_dt and strong_tokens:
+                expected_year = str(fallback_dt.year)
+                expected_month = f"{fallback_dt.month:02d}"
+
+                for pdf in invoice_files:
+                    try:
+                        rel = pdf.relative_to(FACTURES_ROOT)
+                        parts = rel.parts
+                    except Exception:
+                        continue
+
+                    # Structure attendue : Factures/YYYY/MM - Mois/fichier.pdf
+                    if len(parts) < 3:
+                        continue
+                    folder_year = parts[0]
+                    folder_month = parts[1][:2]
+
+                    if folder_year != expected_year or folder_month != expected_month:
+                        continue
+
+                    stem_norm = normalize_history_name(pdf.stem)
+                    if not any(token in stem_norm for token in strong_tokens):
+                        continue
+
+                    same_month_client_files.append(pdf)
+
+            if len(same_month_client_files) == 1:
+                pdf = same_month_client_files[0]
+                try:
+                    matched_invoice_paths.add(str(pdf.resolve()))
+                except Exception:
+                    matched_invoice_paths.add(str(pdf))
+                probable_invoice_matches.append({
+                    "invoice_no": invoice_no,
+                    "repair_date": row["repair_date"] or "",
+                    "client_name": client_name,
+                    "files": [
+                        str(pdf.relative_to(FOULFIX_ROOT))
+                        if FOULFIX_ROOT in pdf.parents else str(pdf)
+                    ],
+                })
+            elif is_legacy_paper_invoice:
+                row_dict["reason"] = "Facture papier / historique sans PDF archivé"
+                paper_only_invoices.append(row_dict)
+            else:
+                missing_invoices.append(dict(row))
+
+    unmatched_invoice_files = []
+    standalone_invoice_files = []
+    ignored_invoice_supporting_docs = []
+
+    def _looks_like_standalone_invoice(path):
+        """Reconnaît un PDF de facture plausible même si aucune ligne de base
+        ne permet de le rattacher formellement.
+
+        Formats historiques connus :
+        - Client_JJMMYYYYHHMM.pdf
+        - Client_JJMMYYHHMM.pdf
+        - Client_DD_MM_YYYY.pdf
+        - variantes avec suffixe _FR
+        """
+        stem = path.stem
+
+        patterns = (
+            r".*[_-]\d{12}(?:_FR)?$",
+            r".*[_-]\d{10}(?:_FR)?$",
+            r".*[_-]\d{2}[_-]\d{2}[_-]\d{4}(?:_FR)?$",
+        )
+        return any(re.fullmatch(pattern, stem, flags=re.IGNORECASE) for pattern in patterns)
+
+    def _is_invoice_supporting_doc(path):
+        """Détecte les justificatifs rangés avec les factures mais qui ne sont
+        pas eux-mêmes des factures (virement, paiement, reçu bancaire, etc.)."""
+        stem = normalize_history_name(path.stem)
+        supporting_terms = (
+            "virement",
+            "preuve paiement",
+            "preuve de paiement",
+            "justificatif paiement",
+            "justificatif de paiement",
+            "payment proof",
+            "preuve virement",
+            "recu virement",
+        )
+        return any(term in stem for term in supporting_terms)
+
+    for p in invoice_files:
+        try:
+            resolved = str(p.resolve())
+        except Exception:
+            resolved = str(p)
+        if resolved in matched_invoice_paths:
+            continue
+        try:
+            display = str(p.relative_to(FOULFIX_ROOT))
+        except Exception:
+            display = str(p)
+
+        if _is_invoice_supporting_doc(p):
+            ignored_invoice_supporting_docs.append(display)
+            continue
+
+        if _looks_like_standalone_invoice(p):
+            standalone_invoice_files.append(display)
+            continue
+
+        unmatched_invoice_files.append(display)
+
+    # ---------- Devis ----------
+    quote_files = sorted(
+        p for p in DEVIS_ROOT.rglob("*.pdf")
+        if p.is_file()
+    ) if DEVIS_ROOT.exists() else []
+
+    quote_by_basename = {}
+    for p in quote_files:
+        quote_by_basename.setdefault(p.name.casefold(), []).append(p)
+
+    missing_quote_documents = []
+    quote_db_filenames = set()
+
+    for row in quote_docs:
+        filename = str(row["filename"] or "").strip()
+        if not filename:
+            continue
+        key = filename.casefold()
+        quote_db_filenames.add(key)
+        if key not in quote_by_basename:
+            missing_quote_documents.append(dict(row))
+
+    duplicate_quote_links = []
+    quote_link_groups = {}
+    for row in quote_docs:
+        key = str(row["filename"] or "").strip().casefold()
+        if not key:
+            continue
+        quote_link_groups.setdefault(key, []).append(dict(row))
+    for key, members in sorted(quote_link_groups.items()):
+        if len(members) > 1:
+            duplicate_quote_links.append({
+                "filename": members[0]["filename"],
+                "rows": members,
+                "count": len(members),
+            })
+
+    unregistered_quote_files = []
+    for p in quote_files:
+        # Les PDF .foulfix.pdf sont des sorties générées par WOPR :
+        # ils ne sont pas censés exister dans quote_documents.
+        if p.name.casefold().endswith(".foulfix.pdf"):
+            continue
+
+        if p.name.casefold() in quote_db_filenames:
+            continue
+
+        try:
+            display = str(p.relative_to(FOULFIX_ROOT))
+        except Exception:
+            display = str(p)
+
+        unregistered_quote_files.append(display)
+
+    # ---------- Commandes ----------
+    order_files = sorted(
+        p for p in COMMANDES_ROOT.rglob("*.pdf")
+        if p.is_file()
+    ) if COMMANDES_ROOT.exists() else []
+
+    order_file_paths = []
+    for p in order_files:
+        try:
+            order_file_paths.append(str(p.relative_to(FOULFIX_ROOT)))
+        except Exception:
+            order_file_paths.append(str(p))
+
+    return render_template(
+        "documents_audit.html",
+        invoice_count=len(invoice_rows),
+        invoice_pdf_count=len(invoice_files),
+        missing_invoices=missing_invoices,
+        probable_invoice_matches=probable_invoice_matches,
+        paper_only_invoices=paper_only_invoices,
+        unmatched_invoice_files=unmatched_invoice_files,
+        standalone_invoice_files=standalone_invoice_files,
+        ignored_invoice_supporting_docs=ignored_invoice_supporting_docs,
+        quote_document_count=len(quote_docs),
+        quote_pdf_count=len(quote_files),
+        missing_quote_documents=missing_quote_documents,
+        duplicate_quote_links=duplicate_quote_links,
+        unregistered_quote_files=unregistered_quote_files,
+        order_pdf_count=len(order_files),
+        order_file_paths=order_file_paths,
+    )
+
+
 @app.route("/achats-ventes/controle-justificatifs")
 def supplier_documents_audit():
-    """Contrôle non destructif : ne crée, ne déplace, ne renomme et ne supprime aucun fichier."""
+    """Audit non destructif des justificatifs fournisseurs.
+
+    Signale :
+    - les liens valides ;
+    - les liens cassés ;
+    - les fichiers utilisés par plusieurs lignes d'achat ;
+    - les fichiers présents dans Fournisseurs mais non rattachés en base.
+
+    Cette route ne crée, ne déplace, ne renomme et ne supprime aucun fichier.
+    """
     con = db()
     rows = con.execute("""
         SELECT * FROM ledger_entries
@@ -13073,12 +13811,70 @@ def supplier_documents_audit():
         ORDER BY entry_date DESC, id DESC
     """).fetchall()
     con.close()
+
     ok_rows, broken_rows = [], []
+    resolved_by_row = {}
+    linked_real_paths = set()
+
     for row in rows:
         path = ledger_document_file(row)
-        (ok_rows if path and path.is_file() else broken_rows).append(row)
-    return render_template("supplier_documents_audit.html", ok_rows=ok_rows, broken_rows=broken_rows,
-                           linked_count=len(rows))
+        if path and path.is_file():
+            ok_rows.append(row)
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            resolved_by_row[int(row["id"])] = resolved
+            linked_real_paths.add(str(resolved))
+        else:
+            broken_rows.append(row)
+
+    path_groups = {}
+    for row in ok_rows:
+        resolved = resolved_by_row.get(int(row["id"]))
+        if not resolved:
+            continue
+        path_groups.setdefault(str(resolved), []).append(row)
+
+    duplicate_file_groups = []
+    for resolved, members in sorted(path_groups.items()):
+        if len(members) < 2:
+            continue
+        try:
+            display_path = str(Path(resolved).relative_to(FOULFIX_ROOT))
+        except Exception:
+            display_path = str(resolved)
+        duplicate_file_groups.append({
+            "path": display_path,
+            "rows": members,
+            "count": len(members),
+        })
+
+    supplier_exts = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+    orphan_files = []
+    if FOURNISSEURS_ROOT.exists():
+        for path in sorted(FOURNISSEURS_ROOT.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in supplier_exts:
+                continue
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            if str(resolved) in linked_real_paths:
+                continue
+            try:
+                orphan_files.append(str(path.relative_to(FOULFIX_ROOT)))
+            except Exception:
+                orphan_files.append(str(path))
+
+    return render_template(
+        "supplier_documents_audit.html",
+        ok_rows=ok_rows,
+        broken_rows=broken_rows,
+        linked_count=len(rows),
+        duplicate_file_groups=duplicate_file_groups,
+        orphan_files=orphan_files,
+    )
 
 
 @app.route("/contacts")

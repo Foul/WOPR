@@ -10,14 +10,33 @@
   <a class="button primary" href="{{ url_for('quote_new') }}">➕ Nouveau devis</a>
 </div>
 
+<div class="ledger-year-switch">
+  {% if year == current_year %}
+    <span class="ledger-year-current">{{ current_year }}</span>
+    {% if archive_years %}
+    <details class="ledger-archive">
+      <summary>Archives</summary>
+      {% for archive_year in archive_years %}
+      <a href="{{ url_for('quotes_page', year=archive_year) }}">{{ archive_year }}</a>
+      {% endfor %}
+    </details>
+    {% endif %}
+  {% else %}
+    <a class="button primary" href="{{ url_for('quotes_page', year=current_year) }}">← Retour {{ current_year }}</a>
+    <span class="ledger-year-archive">Archive {{ year }}</span>
+  {% endif %}
+</div>
+
 <div class="sheet-note" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-  <strong>{{ historical_quote_count }}</strong> devis distincts
+  <strong>{{ historical_quote_count }}</strong> devis distincts{% if year != current_year %} en {{ year }}{% endif %}
+  {% if year == current_year %}
   <span>•</span>
   <strong>{{ quote_period_counts.week }}</strong> cette semaine
   <span>•</span>
   <strong>{{ quote_period_counts.month }}</strong> ce mois
   <span>•</span>
   <strong>{{ quote_period_counts.year }}</strong> cette année
+  {% endif %}
   <span>•</span>
   <strong>{{ historical_document_count }}</strong> fichiers PDF archivés
   <span class="tiny-note">{{ devis_root }}</span>
