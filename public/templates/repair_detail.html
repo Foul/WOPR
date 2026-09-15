@@ -71,7 +71,6 @@
         <div class="ok">✓ Signature enregistrée</div>
         <div><strong>Client :</strong> {{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</div>
         <div><strong>Date :</strong> {{ r['signature_at'] }}</div>
-        <div class="path">{{ r['signature_path'] }}</div>
       {% else %}
         <img class="qr" src="{{ url_for('qr_png', rid=r['id']) }}">
         <p>Scanne ce QR code avec ton téléphone, puis fais signer le client au doigt.</p>

@@ -10142,6 +10142,45 @@ def total_page():
     return render_template("ca_declarations.html", years=years)
 
 
+@app.route("/total/audit")
+def total_audit():
+    """Contrôle CA en lecture seule : cohérence des encaissements et corrections."""
+    con = db()
+    totals = [dict(row) for row in accounting_monthly_totals(con)]
+    overrides = [dict(row) for row in con.execute("""
+        SELECT year, month, category, amount
+        FROM ca_overrides
+        ORDER BY year, month, category
+    """).fetchall()]
+    duplicate_rows = [dict(row) for row in con.execute("""
+        SELECT invoice_no, COUNT(*) AS occurrences,
+               GROUP_CONCAT(id, ', ') AS repair_ids
+        FROM repairs
+        WHERE paid=1 AND TRIM(COALESCE(invoice_no, '')) <> ''
+        GROUP BY invoice_no
+        HAVING COUNT(*) > 1
+        ORDER BY invoice_no
+    """).fetchall()]
+    missing_period_rows = [dict(row) for row in con.execute("""
+        SELECT id, invoice_no, accounting_date, paid
+        FROM repairs
+        WHERE paid=1
+          AND TRIM(COALESCE(accounting_date, '')) = ''
+          AND (accounting_year IS NULL OR accounting_year < 2000
+               OR accounting_month IS NULL OR accounting_month NOT BETWEEN 1 AND 12)
+        ORDER BY id
+    """).fetchall()]
+    con.close()
+
+    return render_template(
+        "ca_audit.html",
+        totals=totals,
+        overrides=overrides,
+        duplicate_rows=duplicate_rows,
+        missing_period_rows=missing_period_rows,
+    )
+
+
 @app.route("/total/save", methods=["POST"])
 def total_save():
     """

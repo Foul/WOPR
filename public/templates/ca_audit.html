@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Contrôle CA - WOPR{% endblock %}
+{% block body %}
+<div class="banner">
+  <div>
+    <div class="banner-title">Contrôle automatique du CA</div>
+    <div class="banner-sub">Lecture seule — aucune donnée n’est modifiée</div>
+  </div>
+  <a class="button" href="{{ url_for('total_page') }}">← Retour CA / Déclarations</a>
+</div>
+
+<div class="audit-readonly-notice">🔒 Ce contrôle compare les encaissements, les corrections manuelles et les périodes comptables.</div>
+
+<h2>Totaux automatiques</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Année</th><th>Mois</th><th>Prestations</th><th>Marchandises</th><th>Total</th></tr></thead>
+    <tbody>
+    {% for row in totals %}
+      <tr>
+        <td>{{ row.y }}</td><td>{{ row.m }}</td>
+        <td>{{ '%.2f'|format(row.service_total or 0)|replace('.', ',') }} €</td>
+        <td>{{ '%.2f'|format(row.goods_total or 0)|replace('.', ',') }} €</td>
+        <td><strong>{{ '%.2f'|format((row.service_total or 0) + (row.goods_total or 0))|replace('.', ',') }} €</strong></td>
+      </tr>
+    {% else %}<tr><td colspan="5">Aucun encaissement trouvé.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>Corrections manuelles</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Année</th><th>Mois</th><th>Catégorie</th><th>Montant déclaré</th></tr></thead>
+    <tbody>
+    {% for row in overrides %}
+      <tr><td>{{ row.year }}</td><td>{{ row.month }}</td><td>{{ row.category }}</td><td><strong>{{ '%.2f'|format(row.amount or 0)|replace('.', ',') }} €</strong></td></tr>
+    {% else %}<tr><td colspan="4">Aucune correction manuelle.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>Points à vérifier</h2>
+<div class="audit-stats">
+  <div class="{% if duplicate_rows %}audit-bad{% endif %}"><strong>{{ duplicate_rows|length }}</strong><span>numéros de facture répétés</span></div>
+  <div class="{% if missing_period_rows %}audit-bad{% endif %}"><strong>{{ missing_period_rows|length }}</strong><span>encaissements sans période</span></div>
+</div>
+
+{% if duplicate_rows %}
+<div class="table-wrap"><table><thead><tr><th>Facture</th><th>Occurrences</th><th>ID suivi</th></tr></thead><tbody>
+{% for row in duplicate_rows %}<tr><td><code>{{ row.invoice_no }}</code></td><td>{{ row.occurrences }}</td><td>{{ row.repair_ids }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+
+{% if missing_period_rows %}
+<div class="table-wrap"><table><thead><tr><th>ID</th><th>Facture</th><th>Date comptable</th></tr></thead><tbody>
+{% for row in missing_period_rows %}<tr><td>{{ row.id }}</td><td>{{ row.invoice_no or '—' }}</td><td>{{ row.accounting_date or '—' }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% endblock %}
