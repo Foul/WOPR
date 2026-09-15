@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
 **Version documentée : 2.3.287**
-**Documentation mise à jour : 14 septembre 2026**
+**Documentation mise à jour : 15 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -152,7 +152,7 @@ Les actions utilisent une logique commune :
 
 ### 4.3 Thème 8-BIT
 
-Le thème 8-BIT conserve le rendu pixel-art finalisé lors de la série 2.3.285, avec les ajustements de cohérence apportés en 2.3.286.
+Le thème 8-BIT conserve le rendu pixel-art finalisé lors de la série 2.3.285, avec les ajustements de cohérence apportés en 2.3.287.
 
 Les boutons d’action adoptent un rendu pixel-art cohérent, y compris les boutons créés dynamiquement par JavaScript comme certains boutons **Facture** et **Dossier**.
 
@@ -874,7 +874,19 @@ Parmi les évolutions visibles :
 
 ---
 
-## 26. Crédit
+## 26. Nouveautés principales de la release 2.3.287
+
+La version 2.3.287 fiabilise les encaissements, le rapprochement SumUp et la préparation des déclarations.
+
+- le CA encaissé provient d'une source comptable unique issue du Suivi ;
+- les doublons historiques portant la même facture ne sont plus additionnés ;
+- les périodes comptables validées restent stables lorsqu'une preuve de paiement est enrichie ;
+- les corrections manuelles affichent leur valeur automatique de comparaison ;
+- la page CA sépare le cumul des mois précédents, le mois en cours et le total annuel ;
+- les factures orphelines, archives, lignes de facture et rattachements SumUp sont contrôlables ;
+- les bandeaux de confirmation se ferment automatiquement après quelques secondes.
+
+## 27. Crédit
 
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 

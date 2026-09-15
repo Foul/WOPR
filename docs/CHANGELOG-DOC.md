@@ -1,5 +1,15 @@
 # Changelog de la documentation
 
+## 2.3.287 - 15 septembre 2026 - fiabilisation CA, encaissements et SumUp
+- Source comptable unique issue du Suivi, avec dédoublonnage des factures historiques.
+- Périodes comptables validées conservées malgré l’enrichissement ultérieur des preuves de paiement.
+- Rapprochement SumUp historique corrigé sans déplacement silencieux des recettes déjà déclarées.
+- Comparaison visible entre une correction manuelle et sa valeur automatique.
+- Encadré CA distinguant cumul précédent, mois en cours et total annuel.
+- Contrôle des factures orphelines, archives et lignes de facture.
+- Bandeaux de confirmation fermables automatiquement après quelques secondes.
+- Documentation, README, manuel HTML/PDF, maintenance et notes de release alignés sur **2.3.287**.
+
 ## 2.3.286 - 14 septembre 2026 - workflow clients, facturation, e-mail et Abby
 - Recherche client côté serveur, permissive et sans exposition du carnet complet dans la page.
 - Suppression du Mode Client automatique à la création d’une réparation.

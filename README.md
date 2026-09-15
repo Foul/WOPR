@@ -20,6 +20,15 @@ WOPR est une application locale de gestion d’atelier pour suivre réparations,
 - **Windows : supporté** - binaire officiel `WOPR.exe`.
 - **macOS : non supporté** - aucun binaire officiel, aucun test de compatibilité et aucun support garanti.
 
+## Release 2.3.287
+- CA encaissé fiabilisé depuis une source comptable unique issue du Suivi.
+- Doublons historiques de factures dédupliqués et périodes comptables validées conservées.
+- Rapprochement SumUp historique sécurisé sans déplacement silencieux du CA déjà déclaré.
+- Corrections manuelles comparées à leur valeur automatique.
+- Page CA clarifiée : cumul précédent, mois en cours et total annuel séparés.
+- Contrôles des factures orphelines, archives et lignes de facture renforcés.
+- Bandeaux de confirmation fermables automatiquement après quelques secondes.
+
 ## Release 2.3.286
 - workflow **prise en charge → suivi → facturation → restitution** fiabilisé ;
 - recherche client privée et permissive, sans exposer tout le carnet dans la page ;
