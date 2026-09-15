@@ -9,7 +9,7 @@
   <a class="button" href="{{ url_for('total_page') }}">← Retour CA / Déclarations</a>
 </div>
 
-<div class="audit-readonly-notice">🔒 Ce contrôle compare les encaissements, les corrections manuelles et les périodes comptables.</div>
+<div class="audit-readonly-notice">🔒 Ce contrôle compare les encaissements, les corrections manuelles et les périodes comptables. Les doublons signalés sont neutralisés dans le calcul du CA, mais restent à vérifier dans l’historique.</div>
 
 <h2>Totaux automatiques</h2>
 <div class="table-wrap">
@@ -18,7 +18,7 @@
     <tbody>
     {% for row in totals %}
       <tr>
-        <td>{{ row.y }}</td><td>{{ row.m }}</td>
+        <td>{{ row.y }}</td><td>{{ ledger_month_name(row.m)|capitalize }}</td>
         <td>{{ '%.2f'|format(row.bnc_total or 0)|replace('.', ',') }} €</td>
         <td>{{ '%.2f'|format(row.service_total or 0)|replace('.', ',') }} €</td>
         <td>{{ '%.2f'|format(row.goods_total or 0)|replace('.', ',') }} €</td>
@@ -35,7 +35,7 @@
     <thead><tr><th>Année</th><th>Mois</th><th>Catégorie</th><th>Montant déclaré</th></tr></thead>
     <tbody>
     {% for row in overrides %}
-      <tr><td>{{ row.year }}</td><td>{{ row.month }}</td><td>{{ row.category }}</td><td><strong>{{ '%.2f'|format(row.amount or 0)|replace('.', ',') }} €</strong></td></tr>
+      <tr><td>{{ row.year }}</td><td>{{ ledger_month_name(row.month)|capitalize }}</td><td>{{ row.category }}</td><td><strong>{{ '%.2f'|format(row.amount or 0)|replace('.', ',') }} €</strong></td></tr>
     {% else %}<tr><td colspan="4">Aucune correction manuelle.</td></tr>{% endfor %}
     </tbody>
   </table>
@@ -43,7 +43,7 @@
 
 <h2>Points à vérifier</h2>
 <div class="audit-stats">
-  <div class="{% if duplicate_rows %}audit-bad{% endif %}"><strong>{{ duplicate_rows|length }}</strong><span>numéros de facture répétés</span></div>
+  <div class="{% if duplicate_rows %}audit-bad{% endif %}"><strong>{{ duplicate_rows|length }}</strong><span>doublons historiques à vérifier</span></div>
   <div class="{% if missing_period_rows %}audit-bad{% endif %}"><strong>{{ missing_period_rows|length }}</strong><span>encaissements sans période</span></div>
 </div>
 

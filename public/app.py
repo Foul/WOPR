@@ -10196,6 +10196,7 @@ def total_audit():
         overrides=overrides,
         duplicate_rows=duplicate_rows,
         missing_period_rows=missing_period_rows,
+        ledger_month_name=ledger_month_name,
     )
 
 
