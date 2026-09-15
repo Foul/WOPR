@@ -10147,18 +10147,32 @@ def total_audit():
     """Contrôle CA en lecture seule : cohérence des encaissements et corrections."""
     con = db()
     totals = [dict(row) for row in accounting_monthly_totals(con)]
+    bnc_auto = {(2024, 7): 500.0, (2025, 7): 450.0}
+    for row in totals:
+        row["bnc_total"] = bnc_auto.get((int(row["y"]), int(row["m"])), 0.0)
     overrides = [dict(row) for row in con.execute("""
         SELECT year, month, category, amount
         FROM ca_overrides
         ORDER BY year, month, category
     """).fetchall()]
     duplicate_rows = [dict(row) for row in con.execute("""
-        SELECT invoice_no, COUNT(*) AS occurrences,
+        SELECT invoice_no,
+               SUM(CASE WHEN COALESCE(accounting_service_amount, 0)
+                              + COALESCE(accounting_goods_amount, 0)
+                              + COALESCE(service_amount, 0)
+                              + COALESCE(goods_amount, 0) > 0
+                        THEN 1 ELSE 0 END) AS occurrences,
                GROUP_CONCAT(id, ', ') AS repair_ids
         FROM repairs
         WHERE paid=1 AND TRIM(COALESCE(invoice_no, '')) <> ''
         GROUP BY invoice_no
-        HAVING COUNT(*) > 1
+        HAVING SUM(
+            CASE WHEN COALESCE(accounting_service_amount, 0)
+                      + COALESCE(accounting_goods_amount, 0)
+                      + COALESCE(service_amount, 0)
+                      + COALESCE(goods_amount, 0) > 0
+                 THEN 1 ELSE 0 END
+        ) > 1
         ORDER BY invoice_no
     """).fetchall()]
     missing_period_rows = [dict(row) for row in con.execute("""
@@ -10168,6 +10182,10 @@ def total_audit():
           AND TRIM(COALESCE(accounting_date, '')) = ''
           AND (accounting_year IS NULL OR accounting_year < 2000
                OR accounting_month IS NULL OR accounting_month NOT BETWEEN 1 AND 12)
+          AND COALESCE(accounting_service_amount, 0)
+              + COALESCE(accounting_goods_amount, 0)
+              + COALESCE(service_amount, 0)
+              + COALESCE(goods_amount, 0) > 0
         ORDER BY id
     """).fetchall()]
     con.close()

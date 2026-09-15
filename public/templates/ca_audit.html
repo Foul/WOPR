@@ -14,16 +14,17 @@
 <h2>Totaux automatiques</h2>
 <div class="table-wrap">
   <table>
-    <thead><tr><th>Année</th><th>Mois</th><th>Prestations</th><th>Marchandises</th><th>Total</th></tr></thead>
+    <thead><tr><th>Année</th><th>Mois</th><th>BNC</th><th>Prestations</th><th>Marchandises</th><th>Total</th></tr></thead>
     <tbody>
     {% for row in totals %}
       <tr>
         <td>{{ row.y }}</td><td>{{ row.m }}</td>
+        <td>{{ '%.2f'|format(row.bnc_total or 0)|replace('.', ',') }} €</td>
         <td>{{ '%.2f'|format(row.service_total or 0)|replace('.', ',') }} €</td>
         <td>{{ '%.2f'|format(row.goods_total or 0)|replace('.', ',') }} €</td>
-        <td><strong>{{ '%.2f'|format((row.service_total or 0) + (row.goods_total or 0))|replace('.', ',') }} €</strong></td>
+        <td><strong>{{ '%.2f'|format((row.bnc_total or 0) + (row.service_total or 0) + (row.goods_total or 0))|replace('.', ',') }} €</strong></td>
       </tr>
-    {% else %}<tr><td colspan="5">Aucun encaissement trouvé.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="6">Aucun encaissement trouvé.</td></tr>{% endfor %}
     </tbody>
   </table>
 </div>
