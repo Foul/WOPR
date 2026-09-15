@@ -31,24 +31,126 @@
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="return_q" value="{{ q or '' }}">
 
-    <label>Fiche à conserver
-      <select name="target_id" required>
-        <option value="">— Choisir la fiche principale —</option>
+    <fieldset class="merge-target-picker">
+      <legend>Fiche à conserver</legend>
+      <div class="merge-target-help">
+        Clique sur la fiche principale à conserver. La liste reste ouverte et peut défiler.
+      </div>
+
+      <div class="merge-target-list">
         {% for item in candidates %}
           {% set c = item.client %}
-          <option value="{{ c['id'] }}">
-            {% if item.exact_name %}★ {% endif %}
-            #{{ c['id'] }} —
-            {{ c['first_name'] or '' }} {{ c['last_name'] or c['name'] or '' }}
-            {% if c['company'] %} — {{ c['company'] }}{% endif %}
-            {% if c['phone'] %} — {{ c['phone'] }}{% endif %}
-            {% if c['email'] %} — {{ c['email'] }}{% endif %}
-            — {{ item.repairs_count }} suivi(s), {{ item.quotes_count }} devis
-          </option>
+          <label class="merge-target-card">
+            <input type="radio" name="target_id" value="{{ c['id'] }}" required>
+            <span class="merge-target-card-body">
+              <span class="merge-target-title">
+                {% if item.exact_name %}<strong class="merge-target-star">★</strong>{% endif %}
+                <strong>#{{ c['id'] }}</strong>
+                — {{ c['first_name'] or '' }} {{ c['last_name'] or c['name'] or '' }}
+              </span>
+
+              <span class="merge-target-meta">
+                {% if c['company'] %}<span>🏢 {{ c['company'] }}</span>{% endif %}
+                {% if c['phone'] %}<span>☎ {{ c['phone'] }}</span>{% endif %}
+                {% if c['email'] %}<span>✉ {{ c['email'] }}</span>{% endif %}
+              </span>
+
+              <span class="merge-target-counts">
+                {{ item.repairs_count }} suivi(s) · {{ item.quotes_count }} devis
+              </span>
+            </span>
+          </label>
+        {% else %}
+          <div class="sheet-note">Aucune autre fiche compatible trouvée.</div>
         {% endfor %}
-      </select>
+      </div>
+
       <small>★ = même identité détectée, proposée en premier.</small>
-    </label>
+    </fieldset>
+
+    <style>
+      .merge-target-picker{
+        border:1px solid #cbd5e1;
+        border-radius:8px;
+        padding:12px;
+        margin:0;
+      }
+      .merge-target-picker legend{
+        font-weight:700;
+        padding:0 6px;
+      }
+      .merge-target-help{
+        margin-bottom:8px;
+        font-size:.9rem;
+        opacity:.8;
+      }
+      .merge-target-list{
+        max-height:360px;
+        overflow-y:auto;
+        overscroll-behavior:contain;
+        display:flex;
+        flex-direction:column;
+        gap:7px;
+        padding:3px;
+      }
+      .merge-target-card{
+        display:flex;
+        align-items:flex-start;
+        gap:9px;
+        padding:10px;
+        border:1px solid #b8c5d6;
+        border-radius:7px;
+        background:rgba(255,255,255,.55);
+        cursor:pointer;
+        margin:0;
+      }
+      .merge-target-card:hover{
+        border-color:#3399ff;
+      }
+      .merge-target-card:has(input:checked){
+        border:2px solid #1d7eea;
+        padding:9px;
+        background:rgba(51,153,255,.10);
+      }
+      .merge-target-card input[type="radio"]{
+        margin-top:3px;
+        flex:0 0 auto;
+      }
+      .merge-target-card-body{
+        display:flex;
+        min-width:0;
+        flex:1;
+        flex-direction:column;
+        gap:4px;
+      }
+      .merge-target-title,
+      .merge-target-meta,
+      .merge-target-counts{
+        display:block;
+      }
+      .merge-target-title{
+        overflow-wrap:anywhere;
+      }
+      .merge-target-meta{
+        display:flex;
+        flex-wrap:wrap;
+        gap:5px 12px;
+        font-size:.9rem;
+        opacity:.9;
+      }
+      .merge-target-counts{
+        font-size:.85rem;
+        opacity:.75;
+      }
+      .merge-target-star{
+        color:#d28b00;
+      }
+      body.theme-dark .merge-target-card,
+      body.theme-terminal .merge-target-card,
+      body.theme-8bit .merge-target-card{
+        background:rgba(0,0,0,.12);
+      }
+    </style>
 
     <label style="margin-top:1rem;">
       Tape <strong>FUSIONNER</strong> pour confirmer

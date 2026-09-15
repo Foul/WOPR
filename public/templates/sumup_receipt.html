@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Ticket CB SumUp {{ tx.transaction_code or r.sumup_transaction_code or '' }}</title>
+<style>
+body{font-family:Arial,sans-serif;background:#eee;margin:0;padding:20px;color:#111}
+.ticket{width:72mm;max-width:100%;margin:auto;background:#fff;padding:6mm;box-sizing:border-box}
+h1{font-size:18px;text-align:center;margin:0 0 8px}.center{text-align:center}.row{display:flex;justify-content:space-between;gap:10px;margin:5px 0}
+hr{border:0;border-top:1px dashed #555;margin:10px 0}.small{font-size:11px}.big{font-size:20px;font-weight:bold}
+.no-print{width:72mm;max-width:100%;margin:0 auto 12px;text-align:center}
+button{padding:8px 14px}
+@media print{body{background:#fff;padding:0}.ticket{width:72mm;padding:4mm}.no-print{display:none}}
+</style>
+</head>
+<body>
+<div class="no-print"><button onclick="window.print()">🖨 Imprimer</button></div>
+<div class="ticket">
+  <h1>Ticket CB SumUp</h1>
+  {% set mp = (merchant.merchant_profile if merchant and merchant.merchant_profile else {}) %}
+  {% if mp.business_name %}<div class="center"><strong>{{ mp.business_name }}</strong></div>{% endif %}
+  <div class="center">{{ r.client_name }}<br>Facture {{ r.invoice_no }}</div>
+  <hr>
+  <div class="row"><span>Date</span><strong>{{ tx.local_time or r.sumup_transaction_at or '' }}</strong></div>
+  <div class="row"><span>Transaction</span><strong>{{ tx.transaction_code or r.sumup_transaction_code or '' }}</strong></div>
+  <div class="row"><span>Type</span><strong>{{ tx.payment_type or r.sumup_payment_type or 'CB' }}</strong></div>
+  <div class="row"><span>Statut</span><strong>{{ tx.status or 'Payé' }}</strong></div>
+  <hr>
+  <div class="row big"><span>Total</span><span>{{ tx.amount or '' }} {{ tx.currency or 'EUR' }}</span></div>
+  {% if tx.card %}
+    <div class="row"><span>Carte</span><strong>{{ tx.card.type or tx.card.card_type or '' }} {{ tx.card.last_4_digits or tx.card.last_four_digits or '' }}</strong></div>
+  {% endif %}
+  {% if tx.entry_mode %}<div class="row"><span>Lecture</span><strong>{{ tx.entry_mode }}</strong></div>{% endif %}
+  {% if receipt.acquirer_data and receipt.acquirer_data.authorization_code %}
+    <div class="row"><span>Autorisation</span><strong>{{ receipt.acquirer_data.authorization_code }}</strong></div>
+  {% endif %}
+  {% if mp.merchant_code %}<div class="row"><span>Merchant</span><strong>{{ mp.merchant_code }}</strong></div>{% endif %}
+  <hr>
+  <div class="center small">Données de reçu récupérées via l'API SumUp.<br>Conserver avec la facture correspondante.</div>
+</div>
+</body>
+</html>

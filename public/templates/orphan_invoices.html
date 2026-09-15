@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Factures orphelines - WOPR{% endblock %}
+{% block body %}
+<div class="banner">
+  <div>
+    <div class="banner-title">🧩 Factures orphelines</div>
+    <div class="banner-sub">PDF / ventes historiques connus mais sans numéro rattaché à un dossier</div>
+  </div>
+  <div>
+    <a class="button" href="{{ url_for('invoices_page') }}">← Factures</a>
+  </div>
+</div>
+
+<div class="sheet-note" style="margin-bottom:12px;">
+  <strong>Contrôle non destructif.</strong>
+  WOPR ne rattache rien tout seul. Le bouton <strong>Rattacher</strong> ne modifie que
+  <code>repairs.invoice_no</code> : montant, CA, règlement, dates et PDF restent inchangés.
+</div>
+
+<form method="get" class="invoice-search-bar" action="{{ url_for('orphan_invoices_page') }}">
+  <input type="search" name="q" value="{{ q or '' }}" placeholder="N° facture, client, montant…">
+  <button class="button primary" type="submit">RECHERCHER</button>
+  {% if q %}<a class="button" href="{{ url_for('orphan_invoices_page') }}">Effacer</a>{% endif %}
+</form>
+
+{% if items %}
+  {% for item in items %}
+  <section class="sheet-card" style="margin:12px 0;padding:14px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:1.15rem;font-weight:800;">{{ item.invoice_no }}</div>
+        {% if item.inferred_from_pdf %}
+          <div class="tiny-note">🔎 Numéro récupéré depuis le nom du PDF</div>
+        {% endif %}
+        <div><strong>{{ item.party or 'Client inconnu' }}</strong></div>
+        <div class="tiny-note">
+          {{ item.entry_date or 'date inconnue' }}
+          · {{ '%.2f'|format(item.amount)|replace('.', ',') }} €
+          {% if item.payment_type %} · {{ item.payment_type }}{% endif %}
+        </div>
+        {% if item.remarks %}<div class="tiny-note">{{ item.remarks }}</div>{% endif %}
+      </div>
+
+      <div style="display:flex;gap:7px;align-items:flex-start;flex-wrap:wrap;">
+        {% if item.has_pdf %}
+          <a class="mini-btn wopr-action-open"
+             href="{{ url_for('orphan_invoice_pdf', ledger_id=item.ledger_id) }}"
+             target="_blank">📄 Ouvrir le PDF</a>
+          <span class="tiny-note">✓ {{ item.pdf_name }}</span>
+        {% else %}
+          <span class="tiny-note" style="color:#b42318;">⚠ PDF non retrouvé</span>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if item.candidates %}
+      <div style="margin-top:12px;font-weight:700;">Dossiers probables</div>
+      <div style="display:flex;flex-direction:column;gap:7px;margin-top:7px;">
+      {% for c in item.candidates %}
+        <div style="border:1px solid #cbd5e1;border-radius:7px;padding:9px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+          <div>
+            <strong>#{{ c.rid }} — {{ c.client_name }}</strong>
+            <div class="tiny-note">
+              {{ c.received_date or 'date ?' }}
+              {% if c.problem %} · {{ c.problem }}{% endif %}
+              {% if c.status %} · {{ c.status }}{% endif %}
+            </div>
+            {% if c.known_amounts %}
+              <div class="tiny-note">
+                Montants WOPR :
+                {% for a in c.known_amounts %}
+                  {{ '%.2f'|format(a)|replace('.', ',') }} €{% if not loop.last %}, {% endif %}
+                {% endfor %}
+              </div>
+            {% endif %}
+            {% if c.reasons %}
+              <div class="tiny-note">Correspondance : {{ c.reasons|join(' · ') }}</div>
+            {% endif %}
+          </div>
+
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <a class="mini-btn wopr-action-open"
+               href="{{ url_for('repair_detail', rid=c.rid) }}"
+               target="_blank">📁 Vérifier</a>
+            {% if item.has_pdf %}
+            <form method="post"
+                  action="{{ url_for('orphan_invoice_attach', ledger_id=item.ledger_id) }}"
+                  onsubmit="return confirm('Rattacher définitivement la facture {{ item.invoice_no }} au dossier #{{ c.rid }} ?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="rid" value="{{ c.rid }}">
+              <button class="mini-btn wopr-action-save" type="submit">🔗 Rattacher</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="sheet-note" style="margin-top:10px;">
+        Aucun dossier probable trouvé automatiquement. Le PDF reste accessible ci-dessus.
+      </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+{% else %}
+  <div class="sheet-note" style="margin-top:14px;">
+    {% if q %}Aucune facture orpheline trouvée pour « {{ q }} ».{% else %}Aucune facture orpheline détectée.{% endif %}
+  </div>
+{% endif %}
+{% endblock %}

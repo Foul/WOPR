@@ -21,7 +21,7 @@
       <a class="button primary invoice-main-btn wopr-action-special" href="{{ url_for('repair_close', rid=r['id']) }}">MODIFIER FACTURE</a>
       <select class="pdf-lang-select button invoice-main-btn wopr-action-open" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
         <option value="">🌐 PDF {{ r['invoice_no'] }}</option>
-        {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+        {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_archived_pdf', rid=r['id'], lang=code, download=1) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
       </select>
     {% endif %}
   </div>
@@ -192,7 +192,7 @@
     <a class="button primary wopr-action-special" href="{{ url_for('repair_close', rid=r['id']) }}">Modifier facture</a>
     <select class="pdf-lang-select button wopr-action-open" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
       <option value="">🌐 PDF facture {{ r['invoice_no'] }}</option>
-      {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+      {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_archived_pdf', rid=r['id'], lang=code, download=1) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
     </select>
     {% if r['client_email'] %}
       <a class="button wopr-action-send" href="{{ url_for('invoice_email', rid=r['id']) }}">📧 Envoyer la facture</a>

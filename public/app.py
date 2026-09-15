@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, jsonify, Response, session, abort
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, timezone
 import secrets
 import base64
 import io
@@ -30,6 +30,7 @@ import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet, InvalidToken
+from zoneinfo import ZoneInfo
 
 try:
     from google.oauth2.credentials import Credentials
@@ -175,8 +176,10 @@ GOOGLE_CLIENT_SECRET = PRIVATE_ROOT / "data" / "google_client_secret.json"
 GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
+SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
+SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.286"
+APP_VERSION = "2.3.287"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1334,6 +1337,220 @@ def write_abby_settings(settings):
         pass
 
 
+def read_sumup_settings():
+    """Configuration locale SumUp. La clé API est chiffrée sur disque."""
+    defaults = {
+        "enabled": False,
+        "mode": "manual_payment_link",
+        "api_key": "",
+        "merchant_code": "",
+        "base_url": SUMUP_API_BASE,
+        "last_test_at": "",
+        "last_test_ok": False,
+        "last_test_message": "",
+    }
+    try:
+        if SUMUP_SETTINGS_FILE.exists():
+            loaded = json.loads(SUMUP_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                _migrate_secret_in_json(SUMUP_SETTINGS_FILE, "api_key", loaded)
+                defaults.update(loaded)
+                defaults["api_key"] = decrypt_local_secret(defaults.get("api_key", ""))
+    except Exception:
+        pass
+    return defaults
+
+
+def write_sumup_settings(settings):
+    SUMUP_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    stored = {
+        "enabled": bool(settings.get("enabled")),
+        "mode": "manual_payment_link",
+        "api_key": encrypt_local_secret(settings.get("api_key", "")),
+        "merchant_code": str(settings.get("merchant_code") or "").strip(),
+        "base_url": SUMUP_API_BASE,
+        "last_test_at": str(settings.get("last_test_at") or ""),
+        "last_test_ok": bool(settings.get("last_test_ok")),
+        "last_test_message": str(settings.get("last_test_message") or ""),
+    }
+    SUMUP_SETTINGS_FILE.write_text(
+        json.dumps(stored, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    try:
+        os.chmod(SUMUP_SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def sumup_request(method, path, *, query=None, body=None, timeout=25):
+    """Appel serveur -> SumUp. La clé API n'est jamais envoyée au navigateur."""
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        raise RuntimeError("Intégration SumUp non activée.")
+    api_key = str(settings.get("api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError("Clé API SumUp absente.")
+
+    base_url = str(settings.get("base_url") or SUMUP_API_BASE).strip().rstrip("/")
+    url = base_url + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query, doseq=True)
+
+    payload = None
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            if not raw:
+                return {}
+            return json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw else {}
+            detail = parsed.get("detail") or parsed.get("message") or parsed.get("title") or ""
+        except Exception:
+            detail = ""
+        message = f"SumUp HTTP {exc.code}"
+        if detail:
+            message += f" — {detail}"
+        raise RuntimeError(message) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Connexion SumUp impossible — {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("Connexion SumUp expirée (timeout).") from exc
+
+
+def _sumup_api_period(date_from, date_to):
+    """
+    Convert inclusive local dates to SumUp UTC bounds.
+    Foul-Fix operates in Europe/Paris; `newest_time` is exclusive here.
+    """
+    tz = ZoneInfo("Europe/Paris")
+    start_local = datetime.combine(date_from, datetime.min.time(), tzinfo=tz)
+    end_local = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    return (
+        start_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        end_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+
+
+def sumup_transaction_history(date_from=None, date_to=None, limit_per_page=100):
+    """
+    Retrieve every SumUp transaction for the requested inclusive date period.
+    Follows the API's rel=next pagination links instead of imposing a WOPR cap.
+    """
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    if not merchant_code:
+        raise RuntimeError("Merchant code SumUp absent.")
+
+    query = {
+        "order": "descending",
+        "limit": max(1, min(int(limit_per_page or 100), 100)),
+    }
+    if date_from and date_to:
+        oldest_time, newest_time = _sumup_api_period(date_from, date_to)
+        query["oldest_time"] = oldest_time
+        query["newest_time"] = newest_time
+
+    path = f"/v2.1/merchants/{urllib.parse.quote(merchant_code, safe='')}/transactions/history"
+    items = []
+    seen_next = set()
+
+    # Safety cap only protects against a broken/cyclic API pagination response.
+    # 100 pages x 100 items = 10,000 transactions for one requested period.
+    for _page in range(100):
+        data = sumup_request("GET", path, query=query)
+        if not isinstance(data, dict):
+            break
+
+        page_items = data.get("items", [])
+        if isinstance(page_items, list):
+            items.extend(page_items)
+
+        next_href = ""
+        for link in data.get("links", []) or []:
+            if isinstance(link, dict) and str(link.get("rel") or "").lower() == "next":
+                next_href = str(link.get("href") or "").strip()
+                break
+
+        if not next_href or next_href in seen_next:
+            break
+        seen_next.add(next_href)
+
+        parsed = urllib.parse.urlparse(next_href)
+        # SumUp commonly returns a query-only relative href. Preserve our path.
+        if parsed.path and parsed.path != "/":
+            path = parsed.path
+        query = {
+            key: values if len(values) > 1 else values[0]
+            for key, values in urllib.parse.parse_qs(parsed.query, keep_blank_values=True).items()
+        }
+
+    return items
+
+
+def _sumup_local_datetime(raw_timestamp):
+    raw = str(raw_timestamp or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone(ZoneInfo("Europe/Paris"))
+        return local_dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return raw[:19].replace("T", " ")
+
+
+
+
+def sumup_get_transaction(transaction_id):
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    if not merchant_code:
+        raise RuntimeError("Merchant code SumUp absent.")
+    return sumup_request(
+        "GET",
+        f"/v2.1/merchants/{urllib.parse.quote(merchant_code, safe='')}/transactions",
+        query={"id": str(transaction_id)}
+    )
+
+
+def sumup_get_receipt(transaction_id):
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    if not merchant_code:
+        raise RuntimeError("Merchant code SumUp absent.")
+    return sumup_request(
+        "GET",
+        f"/v1.1/receipts/{urllib.parse.quote(str(transaction_id), safe='')}",
+        query={"mid": merchant_code}
+    )
+
+
+def valid_payment_link(url):
+    value = str(url or "").strip()
+    if not value:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except Exception:
+        return False
+    return parsed.scheme.lower() == "https" and bool(parsed.netloc)
+
+
 def abby_request(method, path, *, query=None, body=None, timeout=25):
     """Appel serveur -> Abby. La clé n'est jamais envoyée au navigateur."""
     settings = read_abby_settings()
@@ -1718,6 +1935,200 @@ def db():
     con.create_function("WOPR_NORM", 1, normalize_global_search, deterministic=True)
     return con
 
+
+def accounting_monthly_totals(con, year=None):
+    """
+    Source unique des totaux de CA encaissé WOPR.
+
+    Tous les écrans comptables doivent passer par cette fonction afin que
+    Suivi, Atelier, Achats/Ventes et CA/Déclarations affichent strictement
+    les mêmes montants. Les champs accounting_* restent la source de vérité.
+
+    Garanties comptables :
+    - seules les lignes réellement encaissées (`paid=1`) sont retenues ;
+    - la date d'encaissement gagne sur la date de facture ;
+    - plusieurs lignes historiques portant la même facture ne la comptent
+      qu'une fois ;
+    - une facture historique disparue du Suivi peut être conservée dans les
+      archives comptables et n'est ajoutée qu'une fois ;
+    - une facture remplacée conserve son encaissement sans compter à la fois
+      l'ancienne et la nouvelle référence.
+    """
+    requested_year = int(year) if year is not None else None
+
+    repair_rows = [dict(row) for row in con.execute("""
+        SELECT id, client_id, invoice_no, paid,
+               accounting_year, accounting_month, accounting_date,
+               accounting_service_amount, accounting_goods_amount,
+               service_amount, goods_amount, legacy_imported
+        FROM repairs
+        ORDER BY id
+    """).fetchall()]
+
+    archived_rows = [dict(row) for row in con.execute("""
+        SELECT invoice_no, invoice_total, accounting_date, paid,
+               supersedes_invoice_no
+        FROM archived_invoices
+        ORDER BY invoice_no
+    """).fetchall()]
+
+    superseded_invoice_nos = {
+        canonical_client_invoice_no(row.get("supersedes_invoice_no"))
+        for row in archived_rows
+        if str(row.get("supersedes_invoice_no") or "").strip()
+    }
+
+    paid_groups = {}
+    repairs_by_invoice = {}
+
+    for row in repair_rows:
+        invoice_no = canonical_client_invoice_no(row.get("invoice_no"))
+        if invoice_no:
+            repairs_by_invoice.setdefault(invoice_no, []).append(row)
+        if not bool(row.get("paid")):
+            continue
+        if invoice_no and invoice_no in superseded_invoice_nos:
+            continue
+
+        # Les factures historiques sont regroupées par client + numéro. Une
+        # ligne sans facture reste une recette indépendante et conserve son id.
+        key = (
+            ("invoice", int(row.get("client_id") or 0), invoice_no)
+            if invoice_no
+            else ("row", int(row.get("id") or 0))
+        )
+        paid_groups.setdefault(key, []).append(row)
+
+    contributions = []
+    active_invoice_nos = set()
+
+    def valid_period(row):
+        # accounting_year/month représentent la période comptable validée.
+        # accounting_date peut ensuite être enrichie (ex. preuve SumUp) sans
+        # jamais déplacer à elle seule une déclaration déjà figée.
+        try:
+            paid_year = int(row.get("accounting_year"))
+            paid_month = int(row.get("accounting_month"))
+        except (TypeError, ValueError):
+            paid_year = paid_month = 0
+        if paid_year >= 2000 and 1 <= paid_month <= 12:
+            raw_date = str(row.get("accounting_date") or "").strip()[:10]
+            return paid_year, paid_month, raw_date
+
+        raw_date = str(row.get("accounting_date") or "").strip()[:10]
+        if raw_date:
+            try:
+                paid_day = datetime.strptime(raw_date, "%Y-%m-%d").date()
+                return paid_day.year, paid_day.month, raw_date
+            except ValueError:
+                pass
+        return None
+
+    def accounting_split(row, *, fallback_to_invoice=False):
+        service = max(0.0, float(row.get("accounting_service_amount") or 0))
+        goods = max(0.0, float(row.get("accounting_goods_amount") or 0))
+        if fallback_to_invoice and service + goods <= 0:
+            service = max(0.0, float(row.get("service_amount") or 0))
+            goods = max(0.0, float(row.get("goods_amount") or 0))
+        return service, goods
+
+    for key, members in paid_groups.items():
+        dated_members = [
+            (valid_period(row), row)
+            for row in members
+            if valid_period(row) is not None
+        ]
+        if not dated_members:
+            continue
+
+        # La date la plus récente du groupe correspond à la ligne historique
+        # d'encaissement lorsqu'elle existe. Les montants viennent de la ligne
+        # comptable la plus complète, jamais de la somme des doublons.
+        period, _ = max(
+            dated_members,
+            key=lambda item: (item[0][2], int(item[1].get("id") or 0)),
+        )
+        amount_row = max(
+            members,
+            key=lambda row: (
+                sum(accounting_split(row)),
+                bool(valid_period(row)),
+                int(row.get("id") or 0),
+            ),
+        )
+        service, goods = accounting_split(amount_row)
+        if service + goods <= 0:
+            continue
+
+        if key[0] == "invoice":
+            active_invoice_nos.add(key[2])
+        contributions.append((period[0], period[1], service, goods))
+
+    for row in archived_rows:
+        if not bool(row.get("paid")):
+            continue
+        invoice_no = canonical_client_invoice_no(row.get("invoice_no"))
+        if not invoice_no or invoice_no in active_invoice_nos:
+            continue
+
+        period = valid_period(row)
+        if not period:
+            continue
+
+        total = max(0.0, float(row.get("invoice_total") or 0))
+        if total <= 0:
+            continue
+
+        source_no = canonical_client_invoice_no(row.get("supersedes_invoice_no"))
+        source_rows = repairs_by_invoice.get(source_no, []) if source_no else []
+        source_row = max(
+            source_rows,
+            key=lambda item: (
+                sum(accounting_split(item, fallback_to_invoice=True)),
+                int(item.get("id") or 0),
+            ),
+            default=None,
+        )
+
+        if source_row:
+            source_service, source_goods = accounting_split(
+                source_row,
+                fallback_to_invoice=True,
+            )
+        else:
+            source_service, source_goods = 0.0, 0.0
+
+        source_total = source_service + source_goods
+        if source_total > 0:
+            service = round(total * source_service / source_total, 2)
+            goods = round(total - service, 2)
+        else:
+            service, goods = total, 0.0
+
+        contributions.append((period[0], period[1], service, goods))
+        active_invoice_nos.add(invoice_no)
+
+    totals = {}
+    for paid_year, paid_month, service, goods in contributions:
+        if requested_year is not None and paid_year != requested_year:
+            continue
+        bucket = totals.setdefault(
+            (paid_year, paid_month),
+            {"service_total": 0.0, "goods_total": 0.0},
+        )
+        bucket["service_total"] += service
+        bucket["goods_total"] += goods
+
+    return [
+        {
+            "y": paid_year,
+            "m": paid_month,
+            "service_total": round(values["service_total"], 2),
+            "goods_total": round(values["goods_total"], 2),
+        }
+        for (paid_year, paid_month), values in sorted(totals.items())
+    ]
+
 def pin_is_configured():
     if not ADMIN_PIN_FILE.exists():
         return False
@@ -2083,7 +2494,7 @@ def harden_local_permissions():
     for directory in (DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR):
         try: os.chmod(directory, 0o700)
         except OSError: pass
-    for file_path in (DB, ADMIN_PIN_FILE, APP_SECRET_FILE, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE, ABBY_SETTINGS_FILE, MASTER_SECRET_FILE):
+    for file_path in (DB, ADMIN_PIN_FILE, APP_SECRET_FILE, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE, ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, MASTER_SECRET_FILE):
         if file_path.exists():
             try: os.chmod(file_path, 0o600)
             except OSError: pass
@@ -2122,7 +2533,7 @@ def _portability_diagnostics_impl():
     # doivent être contenus dans WOPR/private.
     managed = (
         DB, CONFIG_PATH, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE,
-        ABBY_SETTINGS_FILE, ADMIN_PIN_FILE, APP_SECRET_FILE, BACKUP_DIR, IMPORT_DIR,
+        ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, ADMIN_PIN_FILE, APP_SECRET_FILE, BACKUP_DIR, IMPORT_DIR,
         SIGNATURES, PRIVATE_ASSETS, PRIVATE_SEEDS, DEVIS_ROOT, FACTURES_ROOT,
         SUIVI_REPARATIONS_ROOT,
     )
@@ -2389,6 +2800,20 @@ def init_db():
         updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS archived_invoices (
+        invoice_no TEXT PRIMARY KEY,
+        client_name TEXT NOT NULL,
+        invoice_date TEXT NOT NULL,
+        invoice_total REAL NOT NULL DEFAULT 0,
+        payment_mode TEXT,
+        accounting_date TEXT,
+        paid INTEGER NOT NULL DEFAULT 0,
+        supersedes_invoice_no TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS antivirus_entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         client_name TEXT NOT NULL,
@@ -2492,6 +2917,52 @@ def init_db():
         FOREIGN KEY(client_id) REFERENCES clients(id)
     );
     """)
+    # Facture historique autonome vérifiée sur PDF + justificatif de virement.
+    # INSERT OR IGNORE : une modification faite ensuite dans WOPR n'est jamais écrasée.
+    stamp_archived_invoice = now().isoformat(timespec="seconds")
+    con.execute("""
+        INSERT OR IGNORE INTO archived_invoices(
+            invoice_no, client_name, invoice_date, invoice_total,
+            payment_mode, accounting_date, paid,
+            supersedes_invoice_no, notes, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        "120220261600",
+        "SUEZ RV SUD OUEST - IMM. TO’",
+        "2026-02-12",
+        765.00,
+        "VIR",
+        "2026-04-20",
+        1,
+        "231220251630",
+        "Facture définitive refaite à la demande de l’entreprise. Bon de commande PO01653157.",
+        stamp_archived_invoice,
+        stamp_archived_invoice,
+    ))
+
+    # Facture historique présente dans le classeur déclaré puis perdue lors
+    # du nettoyage d'une ancienne fiche client. Elle reste une recette de
+    # janvier 2026 même si aucun dossier actif ne la porte désormais.
+    con.execute("""
+        INSERT OR IGNORE INTO archived_invoices(
+            invoice_no, client_name, invoice_date, invoice_total,
+            payment_mode, accounting_date, paid,
+            supersedes_invoice_no, notes, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        "290120261400",
+        "Facture historique",
+        "2026-01-29",
+        39.00,
+        "",
+        "2026-01-29",
+        1,
+        None,
+        "Recette historique restaurée depuis la base Foul-Fix de référence.",
+        stamp_archived_invoice,
+        stamp_archived_invoice,
+    ))
+
     # migration douce pour les anciennes bases
     ensure_column(con, "quotes", "client_company", "TEXT")
     ensure_column(con, "quotes", "edited_in_app", "INTEGER DEFAULT 0")
@@ -2515,6 +2986,23 @@ def init_db():
     ensure_column(con, "repairs", "accounting_goods_amount", "REAL DEFAULT 0")
     ensure_column(con, "repairs", "simple_invoice", "INTEGER DEFAULT 0")
     ensure_column(con, "repairs", "returned_at", "TEXT")
+    ensure_column(con, "repairs", "sumup_payment_url", "TEXT")
+    ensure_column(con, "repairs", "sumup_transaction_id", "TEXT")
+    ensure_column(con, "repairs", "sumup_transaction_code", "TEXT")
+    ensure_column(con, "repairs", "sumup_transaction_at", "TEXT")
+    ensure_column(con, "repairs", "sumup_payment_type", "TEXT")
+    ensure_column(con, "repairs", "sumup_external_refund_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "sumup_external_refund_date", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "sumup_external_refund_note", "TEXT DEFAULT ''")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sumup_transaction_classifications (
+            transaction_id TEXT PRIMARY KEY,
+            transaction_code TEXT,
+            classification TEXT NOT NULL,
+            note TEXT,
+            classified_at TEXT NOT NULL
+        )
+    """)
 
     # V2.3.165 — les anciennes versions stockaient le chemin ABSOLU des signatures.
     # Dès que le fichier est retrouvé dans private/signatures, on ne conserve plus que
@@ -2917,6 +3405,83 @@ def init_db():
             ca_aug_fix_key,
             "; ".join(fixed_notes) if fixed_notes else "aucune correction nécessaire",
             now().isoformat(timespec="seconds")
+        ))
+
+    # Rapprochement comptable V2.3.287 : les rattachements SumUp historiques
+    # avaient déplacé des recettes déjà déclarées dans d'autres mois. On
+    # restaure uniquement les trois lignes identifiées par comparaison avec
+    # la base Foul-Fix d'origine et l'ODS validé.
+    accounting_reconcile_key = "v23287_sumup_declared_periods_reconcile_v1"
+    if not con.execute(
+        "SELECT 1 FROM app_meta WHERE key=?",
+        (accounting_reconcile_key,),
+    ).fetchone():
+        reconciled = 0
+        period_repairs = (
+            ("2025-08-19", 2025, 8, "HIST-2025-0085", "080920251530", 89.00),
+            ("2025-09-30", 2025, 9, "HIST-2025-0103", "290920251400", 108.00),
+            ("2026-01-20", 2026, 1, "HIST-2026-0027", "231220251600", 99.00),
+        )
+        for paid_date, paid_year, paid_month, dossier_no, invoice_no, total in period_repairs:
+            cur = con.execute("""
+                UPDATE repairs
+                SET accounting_date=?, accounting_year=?, accounting_month=?
+                WHERE dossier_no=? AND invoice_no=?
+                  AND ABS(
+                      COALESCE(accounting_service_amount,0)
+                    + COALESCE(accounting_goods_amount,0) - ?
+                  ) < 0.005
+            """, (
+                paid_date, paid_year, paid_month,
+                dossier_no, invoice_no, total,
+            ))
+            reconciled += int(cur.rowcount or 0)
+
+        # La facture 190820261000 correspond à un achat d'alimentation : les
+        # 20 € sont une vente de marchandise, pas une prestation.
+        passage_invoice = con.execute("""
+            SELECT id
+            FROM repairs
+            WHERE invoice_no='190820261000'
+              AND ABS(COALESCE(service_amount,0)
+                    + COALESCE(goods_amount,0) - 20.0) < 0.005
+            ORDER BY legacy_imported, id DESC
+            LIMIT 1
+        """).fetchone()
+        if passage_invoice:
+            passage_id = int(passage_invoice["id"])
+            con.execute("""
+                UPDATE repairs
+                SET service_amount=0, goods_amount=20,
+                    accounting_service_amount=0,
+                    accounting_goods_amount=20
+                WHERE id=?
+            """, (passage_id,))
+            con.execute("""
+                UPDATE invoice_lines
+                SET line_type='goods'
+                WHERE repair_id=?
+                  AND ABS(COALESCE(quantity,0) * COALESCE(unit_price,0) - 20.0) < 0.005
+            """, (passage_id,))
+
+        # Juin a déjà été déclaré à 2 223 € de prestations. La facture SumUp
+        # de 49 € retrouvée ensuite reste dans le calcul automatique (2 272 €)
+        # mais la page Déclarations conserve le montant effectivement déclaré
+        # et montre l'écart via « Auto ».
+        con.execute("""
+            INSERT OR IGNORE INTO ca_overrides(
+                year, month, category, amount, updated_at
+            ) VALUES(2026,6,'service',2223.0,?)
+        """, (now().isoformat(timespec="seconds"),))
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            accounting_reconcile_key,
+            f"{reconciled} période(s) restaurée(s); facture 20 € reclassée; "
+            "juin déclaré conservé à 2223 €",
+            now().isoformat(timespec="seconds"),
         ))
 
     # V2.3.79 : tous les suivis 2025 encore marqués « Terminé » sont
@@ -3395,6 +3960,37 @@ def payment_split_values(detail, method_text=""):
     return values
 
 
+
+def payment_breakdown_info(payment_mode, payment_detail, payment_method):
+    """
+    Normalize current and historical mixed-payment data.
+    Historical ODS rows may contain several modes only in payment_method text,
+    with payment_mode left blank.
+    """
+    mode = normalize_payment_mode(payment_mode or "")
+    values = payment_split_values(payment_detail or "", payment_method or "")
+
+    numeric = {}
+    for key, value in values.items():
+        try:
+            amount = float(value or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            numeric[key] = round(amount, 2)
+
+    inferred_mixed = len(numeric) >= 2
+    is_mixed = mode == "MIXTE" or inferred_mixed
+    cb_part = float(numeric.get("CB") or 0)
+
+    return {
+        "mode": "MIXTE" if is_mixed else mode,
+        "is_mixed": is_mixed,
+        "parts": numeric,
+        "cb_part": round(cb_part, 2),
+    }
+
+
 def payment_data_from_form(total_expected=None, fallback_mode="", fallback_method="", fallback_detail=""):
     """Retourne (mode, texte lisible, détail JSON, erreur)."""
     mode = normalize_payment_mode(request.form.get("payment_mode", ""))
@@ -3612,13 +4208,101 @@ def normalize_client_filename_name(value):
 def canonical_client_invoice_no(value):
     """Normalise les anciens numéros de facture client.
 
-    Les imports ODS ont parfois perdu le zéro initial d'un numéro JJMMYYYYHHMM :
-    040820261400 est ainsi devenu 40820261400 dans ledger_entries.
+    Cas connus de l'historique :
+    - perte du zéro initial pendant l'import ODS ;
+    - typo ponctuelle explicitement identifiée, sans heuristique risquée.
     """
     raw = str(value or "").strip()
+
+    # Corrections historiques sûres, validées par le PDF réellement archivé.
+    known_invoice_no_fixes = {
+        "1901920261400": "190120261400",  # Nordier Christiane
+    }
+    if raw in known_invoice_no_fixes:
+        return known_invoice_no_fixes[raw]
+
     if raw.isdigit() and len(raw) == 11:
         return raw.zfill(12)
     return raw
+
+
+def _invoice_pdf_stem_without_language_suffix(stem):
+    """Retire uniquement un suffixe de langue WOPR connu (_FR, _EN, _UA...)."""
+    value = str(stem or "")
+    suffixes = [str(info[0]) for info in PDF_LANGUAGES.values() if info and info[0]]
+    if suffixes:
+        pattern = r"_(?:" + "|".join(re.escape(x) for x in suffixes) + r")$"
+        value = re.sub(pattern, "", value, flags=re.I)
+    return value
+
+
+def _invoice_no_from_pdf_path(path):
+    """Extrait un n° JJMMYYYYHHMM en fin de nom, avant éventuel suffixe langue."""
+    stem = _invoice_pdf_stem_without_language_suffix(Path(path).stem)
+    m = re.search(r"(?<!\d)(\d{12})$", stem)
+    if not m:
+        return ""
+    candidate = canonical_client_invoice_no(m.group(1))
+    return candidate if re.fullmatch(r"\d{12}", candidate or "") else ""
+
+
+def _find_invoice_pdf_by_client_date(client_name, entry_date, invoice_files=None):
+    """
+    Retrouve prudemment un PDF quand la vieille ligne n'a pas de n° exploitable.
+    On exige la date exacte portée par le n° du PDF et une correspondance de nom.
+    L'ordre prénom/nom dans le fichier n'a pas d'importance.
+    """
+    if not FACTURES_ROOT.exists():
+        return None, ""
+
+    target_date = str(entry_date or "")[:10]
+    try:
+        dt = datetime.strptime(target_date, "%Y-%m-%d")
+        expected_ddmmyyyy = dt.strftime("%d%m%Y")
+    except Exception:
+        return None, ""
+
+    client_tokens = [
+        t for t in normalize_history_name(client_name).split()
+        if len(t) >= 2
+    ]
+    if not client_tokens:
+        return None, ""
+
+    pdf_files = invoice_files if invoice_files is not None else FACTURES_ROOT.rglob("*.pdf")
+    matches = []
+
+    for p in pdf_files:
+        p = Path(p)
+        if "fournisseurs" in {part.casefold() for part in p.parts}:
+            continue
+
+        invoice_no = _invoice_no_from_pdf_path(p)
+        if not invoice_no or not invoice_no.startswith(expected_ddmmyyyy):
+            continue
+
+        clean_stem = _invoice_pdf_stem_without_language_suffix(p.stem)
+        name_part = re.sub(r"\d{12}$", "", normalize_history_name(clean_stem)).strip()
+        name_tokens = set(name_part.split())
+        matched = sum(1 for t in client_tokens if t in name_tokens)
+
+        required = 2 if len(client_tokens) >= 2 else 1
+        if matched < required:
+            continue
+
+        score = matched * 100
+        matches.append((score, p, invoice_no))
+
+    if not matches:
+        return None, ""
+
+    matches.sort(key=lambda x: (-x[0], len(x[1].name), str(x[1]).casefold()))
+    best_score = matches[0][0]
+    best = [x for x in matches if x[0] == best_score]
+    if len(best) != 1:
+        return None, ""
+
+    return best[0][1], best[0][2]
 
 
 def find_client_invoice_pdf(invoice_no, client_name, invoice_files=None):
@@ -3653,9 +4337,10 @@ def find_client_invoice_pdf(invoice_no, client_name, invoice_files=None):
     for p in pdf_files:
         if "fournisseurs" in {part.casefold() for part in p.parts}:
             continue
-        stem_key = _match_key(p.stem)
-        # Le numéro de facture doit être le suffixe du nom, pas une simple
-        # sous-chaîne. Évite 40820261400 -> 140820261400.
+        clean_stem = _invoice_pdf_stem_without_language_suffix(p.stem)
+        stem_key = _match_key(clean_stem)
+        # Le numéro de facture doit être le suffixe du nom, avant éventuel
+        # suffixe langue (_FR, _EN...), pas une simple sous-chaîne.
         if stem_key.endswith(invoice_key):
             candidates.append(p)
 
@@ -3669,8 +4354,9 @@ def find_client_invoice_pdf(invoice_no, client_name, invoice_files=None):
     ]
 
     def score(path):
-        stem_key = normalize_history_name(path.stem)
-        stem_compact = _match_key(path.stem)
+        clean_stem = _invoice_pdf_stem_without_language_suffix(path.stem)
+        stem_key = normalize_history_name(clean_stem)
+        stem_compact = _match_key(clean_stem)
         points = 0
 
         if stem_compact.endswith(invoice_key):
@@ -6619,6 +7305,27 @@ def security_page():
                 flash("Logo des factures supprimé. Les PDF seront générés sans logo.")
             except Exception as exc:
                 flash(f"Impossible de supprimer le logo : {exc}")
+        elif action == "abby_settings":
+            current = read_abby_settings()
+            api_key = request.form.get("abby_api_key", "").strip()
+            if api_key:
+                current["api_key"] = api_key
+            current["enabled"] = request.form.get("abby_enabled") == "on"
+            current["base_url"] = ABBY_API_BASE
+            write_abby_settings(current)
+            audit_event("ABBY_SETTINGS", "Configuration Abby mise à jour depuis Sécurité", request.remote_addr)
+            flash("Configuration Abby enregistrée localement.")
+        elif action == "sumup_settings":
+            current = read_sumup_settings()
+            api_key = request.form.get("sumup_api_key", "").strip()
+            if api_key:
+                current["api_key"] = api_key
+            current["merchant_code"] = request.form.get("sumup_merchant_code", "").strip()
+            current["enabled"] = request.form.get("sumup_enabled") == "on"
+            current["base_url"] = SUMUP_API_BASE
+            write_sumup_settings(current)
+            audit_event("SUMUP_SETTINGS", f"enabled={int(current['enabled'])}; merchant={current['merchant_code']}", request.remote_addr)
+            flash("Configuration SumUp enregistrée localement.")
         elif action == "smtp_save":
             current = read_smtp_settings()
             token = request.form.get("smtp_token", "").strip()
@@ -6646,6 +7353,8 @@ def security_page():
         if backups else None
     )
     smtp_settings = read_smtp_settings()
+    abby_settings = read_abby_settings()
+    sumup_settings = read_sumup_settings()
     business = cfg()
     return render_template(
         "security.html",
@@ -6654,6 +7363,10 @@ def security_page():
         session_hours=ADMIN_SESSION_HOURS,
         smtp_settings=smtp_settings,
         smtp_token_configured=bool(smtp_settings.get("token")),
+        abby={k: v for k, v in abby_settings.items() if k != "api_key"},
+        abby_api_key_configured=bool(abby_settings.get("api_key")),
+        sumup={k: v for k, v in sumup_settings.items() if k != "api_key"},
+        sumup_api_key_configured=bool(sumup_settings.get("api_key")),
         master_key_configured=MASTER_SECRET_FILE.exists(),
         portability=portability_diagnostics(),
         business_email=str(business.get("email") or "").strip(),
@@ -6932,6 +7645,54 @@ def import_supplier_xml_to_ledger(storage):
     return {"status": "created", "entry_id": entry_id, "saved_path": str(dest), **info}
 
 
+
+@app.route("/sumup/api-key/reveal", methods=["POST"])
+def sumup_api_key_reveal():
+    settings = read_sumup_settings()
+    audit_event("SUMUP_API_KEY_REVEAL", "Clé API SumUp affichée à l'écran", request.remote_addr)
+    return jsonify({"api_key": str(settings.get("api_key") or "")})
+
+
+@app.route("/sumup/test", methods=["POST"])
+def sumup_test():
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    try:
+        if not settings.get("enabled"):
+            raise RuntimeError("Active d'abord l'intégration SumUp.")
+        if not settings.get("api_key"):
+            raise RuntimeError("Clé API SumUp absente.")
+        if not merchant_code:
+            raise RuntimeError("Merchant code SumUp absent.")
+
+        data = sumup_request(
+            "GET",
+            f"/v2.1/merchants/{urllib.parse.quote(merchant_code, safe='')}/transactions/history",
+            query={"order": "descending", "limit": 1}
+        )
+        count = len(data.get("items", [])) if isinstance(data, dict) else 0
+        message = f"Connexion SumUp OK — merchant {merchant_code}, accès transactions OK"
+        if count:
+            message += " (historique accessible)."
+        else:
+            message += " (aucune transaction récente renvoyée)."
+        settings["last_test_at"] = now().isoformat(timespec="seconds")
+        settings["last_test_ok"] = True
+        settings["last_test_message"] = message
+        write_sumup_settings(settings)
+        audit_event("SUMUP_TEST_OK", message, request.remote_addr)
+        flash(message)
+    except Exception as exc:
+        message = str(exc)
+        settings["last_test_at"] = now().isoformat(timespec="seconds")
+        settings["last_test_ok"] = False
+        settings["last_test_message"] = message
+        write_sumup_settings(settings)
+        audit_event("SUMUP_TEST_ERROR", type(exc).__name__, request.remote_addr)
+        flash(f"Échec connexion SumUp : {message}")
+    return redirect(url_for("security_page") + "#sumup-integration")
+
+
 @app.route("/abby")
 def abby_page():
     settings = read_abby_settings()
@@ -7030,7 +7791,7 @@ def abby_settings_save():
     write_abby_settings(current)
     audit_event("ABBY_SETTINGS", "Configuration Abby mise à jour", request.remote_addr)
     flash("Configuration Abby enregistrée localement.")
-    return redirect(url_for("abby_page"))
+    return redirect(url_for("security_page") + "#integrations")
 
 
 @app.route("/abby/test", methods=["POST"])
@@ -7067,7 +7828,7 @@ def abby_test():
         write_abby_settings(settings)
         audit_event("ABBY_TEST_ERROR", type(exc).__name__, request.remote_addr)
         flash(f"Échec connexion Abby : {message}")
-    return redirect(url_for("abby_page"))
+    return redirect(url_for("security_page") + "#integrations")
 
 
 @app.route("/abby/sync-clients", methods=["POST"])
@@ -7143,14 +7904,15 @@ def atelier_dashboard():
         if str(r["received_date"] or "")[:7] == month_prefix
     ]
 
-    # CA encaissé du mois : même source de vérité que CA / Déclarations.
-    ca_row = con.execute("""
-        SELECT COALESCE(SUM(accounting_service_amount),0) AS service,
-               COALESCE(SUM(accounting_goods_amount),0) AS goods
-        FROM repairs
-        WHERE accounting_year=? AND accounting_month=?
-    """, (current_year, current_month)).fetchone()
-    ca_month = float(ca_row["service"] or 0) + float(ca_row["goods"] or 0)
+    # CA encaissé du mois : source comptable centralisée.
+    ca_row = next(
+        (r for r in accounting_monthly_totals(con, current_year) if int(r["m"]) == current_month),
+        None,
+    )
+    ca_month = (
+        float(ca_row["service_total"] or 0) + float(ca_row["goods_total"] or 0)
+        if ca_row else 0.0
+    )
 
     # Impayés : exactement la même logique que la page Factures, une seule fois par facture.
     # Cela évite de compter plusieurs lignes techniques / historiques d'une même facture.
@@ -7351,29 +8113,47 @@ def index():
     if available_years and requested_year not in available_years:
         requested_year = max(available_years)
 
-    rows = con.execute("""
-        SELECT r.*,
-               c.name client_name,
-               c.first_name client_first_name,
-               c.last_name client_last_name,
-               c.phone client_phone
-        FROM repairs r
-        JOIN clients c ON c.id=r.client_id
-        WHERE COALESCE(r.simple_invoice,0)=0
-          AND COALESCE(
-            r.followup_year,
-            CAST(substr(r.received_date,1,4) AS INTEGER)
-        )=?
-        ORDER BY
-            COALESCE(r.followup_month, CAST(substr(r.received_date,6,2) AS INTEGER)) DESC,
-            r.received_date DESC,
-            CASE WHEN r.legacy_source_row IS NULL THEN 999999 ELSE r.legacy_source_row END DESC,
-            r.id DESC
-    """, (requested_year,)).fetchall()
+    if client_search_folded:
+        # Recherche transverse : toutes les années du Suivi.
+        rows = con.execute("""
+            SELECT r.*,
+                   c.name client_name,
+                   c.first_name client_first_name,
+                   c.last_name client_last_name,
+                   c.phone client_phone,
+                   c.email client_email,
+                   c.company client_company
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE COALESCE(r.simple_invoice,0)=0
+            ORDER BY r.received_date DESC,
+                     CASE WHEN r.legacy_source_row IS NULL THEN 999999 ELSE r.legacy_source_row END DESC,
+                     r.id DESC
+        """).fetchall()
+    else:
+        rows = con.execute("""
+            SELECT r.*,
+                   c.name client_name,
+                   c.first_name client_first_name,
+                   c.last_name client_last_name,
+                   c.phone client_phone,
+                   c.email client_email,
+                   c.company client_company
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE COALESCE(r.simple_invoice,0)=0
+              AND COALESCE(
+                r.followup_year,
+                CAST(substr(r.received_date,1,4) AS INTEGER)
+              )=?
+            ORDER BY
+                COALESCE(r.followup_month, CAST(substr(r.received_date,6,2) AS INTEGER)) DESC,
+                r.received_date DESC,
+                CASE WHEN r.legacy_source_row IS NULL THEN 999999 ELSE r.legacy_source_row END DESC,
+                r.id DESC
+        """, (requested_year,)).fetchall()
 
-    # V2.3.84 : recherche client directement dans le Suivi.
-    # On filtre avant la construction mensuelle afin que les compteurs et la vue
-    # « À restituer » correspondent exactement aux lignes affichables.
+    # Recherche transverse : client, facture, dossier, appareil et panne.
     if client_search_folded:
         filtered_rows = []
         for row in rows:
@@ -7381,7 +8161,18 @@ def index():
                 str(row["client_first_name"] or ""),
                 str(row["client_last_name"] or ""),
                 str(row["client_name"] or ""),
+                str(row["client_company"] or ""),
                 str(row["client_phone"] or ""),
+                str(row["client_email"] or ""),
+                str(row["invoice_no"] or ""),
+                str(row["dossier_no"] or ""),
+                str(row["device_type"] or ""),
+                str(row["brand_model"] or ""),
+                str(row["serial_no"] or ""),
+                str(row["problem"] or ""),
+                str(row["diagnosis"] or ""),
+                str(row["status"] or ""),
+                str(row["received_date"] or ""),
             ]).casefold()
             if client_search_folded in haystack:
                 filtered_rows.append(row)
@@ -7392,7 +8183,7 @@ def index():
     # On fabrique donc uniquement une ligne d'affichage virtuelle.
     cross_month_payments = {}
     for source_row in rows:
-        if to_return_only:
+        if to_return_only or client_search_folded:
             continue
         ay = source_row["accounting_year"]
         am = source_row["accounting_month"]
@@ -7471,15 +8262,7 @@ def index():
             continue
         to_return_count += 1
 
-    totals_rows = con.execute("""
-        SELECT accounting_month m,
-               SUM(COALESCE(accounting_service_amount,0)) service_total,
-               SUM(COALESCE(accounting_goods_amount,0)) goods_total
-        FROM repairs
-        WHERE accounting_year=?
-          AND accounting_month BETWEEN 1 AND 12
-        GROUP BY accounting_month
-    """, (requested_year,)).fetchall()
+    totals_rows = [] if client_search_folded else accounting_monthly_totals(con, requested_year)
 
     totals_map = {
         int(x["m"]): {
@@ -7590,6 +8373,7 @@ def index():
         to_return_count=to_return_count,
         to_return_only=to_return_only,
         client_search=client_search,
+        search_all_years=bool(client_search_folded),
         edit_id=edit_id,
         current_period=now().strftime("%Y-%m"),
     )
@@ -7825,6 +8609,8 @@ def quote_client_email(con, quote_row):
 
 @app.route("/devis")
 def quotes_page():
+    q = " ".join(str(request.args.get("q") or "").split()).strip()
+    q_folded = q.casefold()
     con = db()
     seed_legacy_management_data(con)
     seed_result = seed_legacy_quotes37(con)
@@ -7833,7 +8619,9 @@ def quotes_page():
     rows = con.execute("""
         SELECT q.*,
                (SELECT COALESCE(SUM(ql.quantity * ql.unit_price),0)
-                FROM quote_lines ql WHERE ql.quote_id=q.id) AS total
+                FROM quote_lines ql WHERE ql.quote_id=q.id) AS total,
+               (SELECT COALESCE(GROUP_CONCAT(ql.description, ' '),'')
+                FROM quote_lines ql WHERE ql.quote_id=q.id) AS lines_text
         FROM quotes q
         ORDER BY q.quote_date DESC, q.id DESC
     """).fetchall()
@@ -7872,11 +8660,30 @@ def quotes_page():
         year = current_year
     archive_years = [y for y in available_years if y != current_year]
 
-    quotes = [
-        q for q in all_quotes
-        if str(q.get("quote_date") or "").startswith(f"{year:04d}-")
-    ]
-    archived_quotes = [q for q in quotes if q["document_count"] > 0]
+    if q_folded:
+        quotes = []
+        for quote in all_quotes:
+            haystack = " ".join([
+                str(quote.get("quote_no") or ""),
+                str(quote.get("quote_date") or ""),
+                str(quote.get("client_name") or ""),
+                str(quote.get("client_company") or ""),
+                str(quote.get("contact_name") or ""),
+                str(quote.get("status") or ""),
+                str(quote.get("notes") or ""),
+                str(quote.get("lines_text") or ""),
+                f"{float(quote.get('total') or 0):.2f}",
+                f"{float(quote.get('total') or 0):.2f}".replace(".", ","),
+            ]).casefold()
+            if q_folded in haystack:
+                quotes.append(quote)
+    else:
+        quotes = [
+            quote for quote in all_quotes
+            if str(quote.get("quote_date") or "").startswith(f"{year:04d}-")
+        ]
+
+    archived_quotes = [quote for quote in quotes if quote["document_count"] > 0]
     historical_quote_count = len(archived_quotes)
     historical_document_count = sum(q["document_count"] for q in archived_quotes)
 
@@ -7909,6 +8716,8 @@ def quotes_page():
         year=year,
         current_year=current_year,
         archive_years=archive_years,
+        q=q,
+        search_all_years=bool(q_folded),
     )
 
 
@@ -8885,12 +9694,15 @@ def achats_ventes_page():
     repair_dead_supplier_document_links()
 
     con = db()
-    all_entries = con.execute("""
+    all_entries_all_years = con.execute("""
         SELECT *
         FROM ledger_entries
-        WHERE substr(entry_date,1,4)=?
         ORDER BY entry_date DESC, id DESC
-    """, (str(year),)).fetchall()
+    """).fetchall()
+    all_entries = [
+        row for row in all_entries_all_years
+        if str(row["entry_date"] or "").startswith(f"{year:04d}-")
+    ]
     supplier_docs_count = sum(
         1 for row in all_entries
         if (row["operation"] or "").casefold() == "achat" and str(row["document_path"] or "").strip()
@@ -8920,7 +9732,7 @@ def achats_ventes_page():
             invoice_groups.setdefault(key, []).append(inv_row)
 
     sale_invoice_rids = {}
-    for row in all_entries:
+    for row in all_entries_all_years:
         if (row["operation"] or "").casefold() != "vente":
             continue
         inv_no = str(row["invoice_no"] or "").strip()
@@ -8968,18 +9780,10 @@ def achats_ventes_page():
     # au calcul du CA. Les montants de ventes officiels sont lus dans repairs,
     # exactement comme la page CA / Déclarations et le tableau de bord Atelier.
     con = db()
-    suivi_sales_rows = con.execute("""
-        SELECT accounting_month AS m,
-               COALESCE(SUM(accounting_service_amount),0) AS service,
-               COALESCE(SUM(accounting_goods_amount),0) AS goods
-        FROM repairs
-        WHERE accounting_year=?
-          AND accounting_month BETWEEN 1 AND 12
-        GROUP BY accounting_month
-    """, (year,)).fetchall()
+    suivi_sales_rows = accounting_monthly_totals(con, year)
     con.close()
     suivi_sales_by_month = {
-        int(r["m"]): float(r["service"] or 0) + float(r["goods"] or 0)
+        int(r["m"]): float(r["service_total"] or 0) + float(r["goods_total"] or 0)
         for r in suivi_sales_rows
     }
     sales_total = sum(suivi_sales_by_month.values())
@@ -8996,7 +9800,7 @@ def achats_ventes_page():
                 f"{float(row['amount_ttc'] or 0):.2f}".replace('.', ','),
             ]
             return " ".join(str(v or "") for v in values).casefold()
-        entries = [row for row in all_entries if needle in _ledger_search_text(row)]
+        entries = [row for row in all_entries_all_years if needle in _ledger_search_text(row)]
 
     months = []
     # Les achats restent issus du registre Achats/Ventes ; ils ne constituent pas le CA.
@@ -9051,6 +9855,7 @@ def achats_ventes_page():
         sale_invoice_rids=sale_invoice_rids,
         search_q=search_q,
         search_count=len(entries),
+        search_all_years=bool(search_q),
     )
 
 
@@ -9245,16 +10050,7 @@ def total_page():
     """
     con = db()
 
-    rows = con.execute("""
-        SELECT accounting_year y, accounting_month m,
-               SUM(COALESCE(accounting_service_amount,0)) service_total,
-               SUM(COALESCE(accounting_goods_amount,0)) goods_total
-        FROM repairs
-        WHERE accounting_year IS NOT NULL
-          AND accounting_month BETWEEN 1 AND 12
-        GROUP BY accounting_year, accounting_month
-        ORDER BY accounting_year, accounting_month
-    """).fetchall()
+    rows = accounting_monthly_totals(con)
 
     override_rows = con.execute("""
         SELECT year, month, category, amount
@@ -9285,6 +10081,7 @@ def total_page():
     years_set = set(bnc_auto) | set(bic_auto) | {key[0] for key in overrides}
     years_set.add(now().year)
 
+    today = now()
     years = []
     for year in sorted(years_set):
         auto_bnc = [0.0] * 12
@@ -9317,6 +10114,10 @@ def total_page():
 
         total_months = [bnc[i] + service[i] + goods[i] for i in range(12)]
 
+        is_current_year = year == today.year
+        current_month_total = total_months[today.month - 1] if is_current_year else 0.0
+        closed_month_total = sum(total_months[:today.month - 1]) if is_current_year else 0.0
+
         years.append({
             "year": year,
             "bnc": bnc,
@@ -9331,6 +10132,11 @@ def total_page():
             "service_total": sum(service),
             "goods_total": sum(goods),
             "grand_total": sum(total_months),
+            "is_current_year": is_current_year,
+            "current_month_name": ledger_month_name(today.month) if is_current_year else "",
+            "current_month_total": current_month_total,
+            "closed_month_name": ledger_month_name(today.month - 1) if is_current_year and today.month > 1 else "",
+            "closed_month_total": closed_month_total,
         })
 
     return render_template("ca_declarations.html", years=years)
@@ -9353,15 +10159,7 @@ def total_save():
         flash(f"{year} remis entièrement en automatique depuis le Suivi.")
         return redirect(url_for("total_page"))
 
-    auto_rows = con.execute("""
-        SELECT accounting_year y, accounting_month m,
-               SUM(COALESCE(accounting_service_amount,0)) service_total,
-               SUM(COALESCE(accounting_goods_amount,0)) goods_total
-        FROM repairs
-        WHERE accounting_year IS NOT NULL
-          AND accounting_month BETWEEN 1 AND 12
-        GROUP BY accounting_year, accounting_month
-    """).fetchall()
+    auto_rows = accounting_monthly_totals(con)
 
     auto_map = {}
     for row in auto_rows:
@@ -10689,9 +11487,37 @@ def repair_close(rid):
         service_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "service")
         goods_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "goods")
 
-        inv = r["invoice_no"] or make_invoice_no()
+        requested_invoice_no = str(request.form.get("invoice_no") or "").strip()
+        if requested_invoice_no:
+            requested_invoice_no = re.sub(r"\s+", "", requested_invoice_no)
+            if not re.fullmatch(r"\d{12}", requested_invoice_no):
+                con.close()
+                flash("Numéro de facture invalide : 12 chiffres attendus (JJMMYYYYHHMM).")
+                return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
 
-        # V2.3.204 — date de facture éditable depuis FACTURE / MODIFIER FACTURE.
+            current_invoice_no = re.sub(r"\s+", "", str(r["invoice_no"] or "").strip())
+
+            # Une simple modification de date, montant, règlement, désignation, etc.
+            # ne doit jamais être bloquée par l'anti-doublon si le numéro actuel
+            # de la facture n'a pas changé.
+            if requested_invoice_no != current_invoice_no:
+                duplicate_invoice = con.execute("""
+                    SELECT id
+                    FROM repairs
+                    WHERE trim(COALESCE(invoice_no,''))=?
+                      AND id<>?
+                    LIMIT 1
+                """, (requested_invoice_no, rid)).fetchone()
+                if duplicate_invoice:
+                    con.close()
+                    flash(f"Le numéro de facture {requested_invoice_no} existe déjà dans WOPR.")
+                    return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
+
+            inv = requested_invoice_no
+        else:
+            inv = r["invoice_no"] or make_invoice_no()
+
+        # V2.3.287 — date de facture éditable depuis FACTURE / MODIFIER FACTURE.
         invoice_date_raw = request.form.get("invoice_date", "").strip()
         try:
             invoice_day = datetime.strptime(invoice_date_raw, "%Y-%m-%d").date()
@@ -10855,6 +11681,9 @@ def repair_close(rid):
             rid
         ))
 
+        if paid_flag:
+            con.execute("UPDATE repairs SET sumup_payment_url='' WHERE id=?", (rid,))
+
         record_repair_status_change(con, rid, r["status"], close_status, "Facturation")
 
         con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
@@ -10866,7 +11695,10 @@ def repair_close(rid):
 
         con.commit()
         con.close()
-        flash("Facture modifiée." if r["invoice_no"] else "Facture créée.")
+        if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
+            flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
+        else:
+            flash("Facture modifiée." if r["invoice_no"] else "Facture créée.")
 
         if request.form.get("return_to") == "suivi":
             try:
@@ -10991,7 +11823,11 @@ def repair_close(rid):
         invoice_was_reconstructed=invoice_was_reconstructed,
         original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
         payment_split=payment_split_values(r["payment_detail"], r["payment_method"]),
-        invoice_date_value=((r["finished_at"] or now().date().isoformat())[:10]),
+        invoice_date_value=(
+            invoice_no_date(r["invoice_no"])
+            or str(r["finished_at"] or "")[:10]
+            or now().date().isoformat()
+        ),
         accounting_date_value=(
             (r["accounting_date"] or r["returned_at"] or now().date().isoformat())[:10]
             if r["paid"] else ""
@@ -11778,7 +12614,6 @@ def invoices_page():
         WHERE COALESCE(trim(r.invoice_no),'')<>''
         ORDER BY r.id
     """).fetchall()
-    con.close()
 
     grouped = {}
     for raw in raw_rows:
@@ -11861,6 +12696,26 @@ def invoices_page():
         if edited_line_totals:
             invoice_total = max(edited_line_totals)
 
+        payment_info = payment_breakdown_info(
+            representative.get("payment_mode") or "",
+            representative.get("payment_detail") or "",
+            representative.get("payment_method") or ""
+        )
+        if payment_info["is_mixed"]:
+            parts_text = []
+            for mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ"):
+                amount = float(payment_info["parts"].get(mode) or 0)
+                if amount > 0:
+                    parts_text.append(
+                        f"{amount:.2f} € {mode}".replace(".", ",")
+                    )
+            if parts_text:
+                payment_mode_display = "Mixte · " + " + ".join(parts_text)
+            else:
+                payment_mode_display = "Mixte"
+        else:
+            payment_mode_display = " + ".join(modes)
+
         invoice = {
             "id": representative["id"],
             "invoice_no": group["invoice_no"],
@@ -11868,16 +12723,81 @@ def invoices_page():
             "client_email": group.get("client_email") or "",
             "invoice_date": inv_date,
             "invoice_total": invoice_total,
-            "payment_mode_display": (("Mixte · " + str(representative.get("payment_method") or "")) if normalize_payment_mode(representative.get("payment_mode")) == "MIXTE" else " + ".join(modes)),
+            "payment_mode_display": payment_mode_display,
             "accounting_date": accounting_date,
             "accounting_status": "red" if not is_paid else representative.get("accounting_status"),
             "legacy_imported": 0 if editable else 1,
             "historical": 0 if editable else 1,
             "simple_invoice": int(representative.get("simple_invoice") or 0),
+            "sumup_payment_url": str(representative.get("sumup_payment_url") or "").strip(),
+            "sumup_transaction_id": str(representative.get("sumup_transaction_id") or "").strip(),
+            "sumup_transaction_code": str(representative.get("sumup_transaction_code") or "").strip(),
         }
 
         invoice["is_paid"] = is_paid
         invoices.append(invoice)
+
+    archived_rows = con.execute("""
+        SELECT *
+        FROM archived_invoices
+        ORDER BY invoice_date DESC, invoice_no DESC
+    """).fetchall()
+
+    superseded_invoice_nos = {
+        canonical_client_invoice_no(str(x["supersedes_invoice_no"] or "").strip())
+        for x in archived_rows
+        if str(x["supersedes_invoice_no"] or "").strip()
+    }
+
+    # Une facture remplacée reste dans les archives/PDF mais n'est plus une
+    # facture active dans la liste normale.
+    if superseded_invoice_nos:
+        invoices = [
+            inv for inv in invoices
+            if canonical_client_invoice_no(str(inv.get("invoice_no") or "").strip())
+               not in superseded_invoice_nos
+        ]
+
+    existing_invoice_nos_for_archived = {
+        canonical_client_invoice_no(str(inv.get("invoice_no") or "").strip())
+        for inv in invoices
+        if str(inv.get("invoice_no") or "").strip()
+    }
+
+    for ar in archived_rows:
+        invoice_no = canonical_client_invoice_no(ar["invoice_no"])
+        if not re.fullmatch(r"\d{12}", invoice_no or ""):
+            continue
+        if invoice_no in existing_invoice_nos_for_archived:
+            continue
+
+        pdf = find_client_invoice_pdf(invoice_no, ar["client_name"] or "")
+        if not pdf or not pdf.exists():
+            continue
+
+        paid = bool(ar["paid"])
+        invoices.append({
+            "id": None,
+            "archived_meta": True,
+            "invoice_no": invoice_no,
+            "client_name": str(ar["client_name"] or ""),
+            "client_email": "",
+            "invoice_date": str(ar["invoice_date"] or "")[:10],
+            "invoice_total": float(ar["invoice_total"] or 0),
+            "payment_mode_display": str(ar["payment_mode"] or ""),
+            "accounting_date": str(ar["accounting_date"] or "")[:10],
+            "accounting_status": "normal" if paid else "red",
+            "legacy_imported": 1,
+            "historical": 1,
+            "simple_invoice": 0,
+            "sumup_payment_url": "",
+            "sumup_transaction_id": "",
+            "sumup_transaction_code": "",
+            "is_paid": paid,
+            "pdf_name": pdf.name,
+            "notes": str(ar["notes"] or ""),
+            "supersedes_invoice_no": str(ar["supersedes_invoice_no"] or ""),
+        })
 
     invoices.sort(
         key=lambda x: (str(x["invoice_date"] or ""), str(x["invoice_no"] or ""), int(x["id"] or 0)),
@@ -11906,19 +12826,144 @@ def invoices_page():
         if str(inv.get("invoice_date") or "").startswith(f"{year:04d}-")
     ]
 
+    # Une recherche ne doit jamais être limitée à l'année affichée.
+    # Sans recherche, on conserve la navigation annuelle normale.
+    invoice_search_source = invoices if q else year_invoices
+
+    # A query that looks like a price is treated as an exact invoice amount.
+    # Examples: 12, 12€, 12 €, 12,00, 12.00, =12
+    amount_query = None
+    if q:
+        raw_q = q.strip().replace("\u00a0", " ")
+        has_currency = bool(re.search(r"(?:€|eur)\s*$", raw_q, flags=re.IGNORECASE))
+        has_decimal = bool(re.search(r"[,.]\d{1,2}\s*(?:€|eur)?\s*$", raw_q, flags=re.IGNORECASE))
+        explicit_amount = raw_q.startswith("=")
+
+        amount_text = re.sub(r"^=\s*", "", raw_q)
+        amount_text = re.sub(r"\s*(?:€|eur)\s*$", "", amount_text, flags=re.IGNORECASE)
+        amount_text = amount_text.strip().replace(" ", "").replace(",", ".")
+
+        # Long all-digit values are invoice numbers (JJMMYYYYHHMM), not amounts.
+        # Short numeric values remain convenient amount searches: 12 -> 12,00 €.
+        looks_like_invoice_no = bool(re.fullmatch(r"\d{8,}", amount_text))
+        looks_like_amount = bool(re.fullmatch(r"\d+(?:\.\d{1,2})?", amount_text))
+
+        if looks_like_amount and (explicit_amount or has_currency or has_decimal or not looks_like_invoice_no):
+            try:
+                amount_query = round(float(amount_text), 2)
+            except ValueError:
+                amount_query = None
+
     filtered_invoices = []
-    for invoice in year_invoices:
+    for invoice in invoice_search_source:
         if q:
-            haystack = " ".join([
-                str(invoice["invoice_no"]), str(invoice["client_name"]),
-                str(invoice["invoice_date"]), str(invoice["invoice_total"]),
-                str(invoice["payment_mode_display"]), str(invoice["accounting_date"]),
-            ]).casefold()
-            if q.casefold() not in haystack:
-                continue
+            if amount_query is not None:
+                if abs(float(invoice["invoice_total"] or 0) - amount_query) >= 0.005:
+                    continue
+            else:
+                haystack = " ".join([
+                    str(invoice["invoice_no"]), str(invoice["client_name"]),
+                    str(invoice["invoice_date"]), str(invoice["invoice_total"]),
+                    str(invoice["payment_mode_display"]), str(invoice["accounting_date"]),
+                ]).casefold()
+                if q.casefold() not in haystack:
+                    continue
         if unpaid_only and invoice.get("is_paid"):
             continue
         filtered_invoices.append(invoice)
+
+
+    # Ajoute les vraies factures historiques connues dans Achats/Ventes + PDF
+    # lorsqu'elles ne sont liées à aucun dossier repairs. Elles doivent rester
+    # visibles dans Factures sans créer artificiellement une réparation.
+    if not unpaid_only:
+        existing_invoice_nos = {
+            canonical_client_invoice_no(str(inv.get("invoice_no") or "").strip())
+            for inv in invoices
+            if str(inv.get("invoice_no") or "").strip()
+        }
+        superseded_invoice_nos = {
+            canonical_client_invoice_no(str(x["supersedes_invoice_no"] or "").strip())
+            for x in con.execute("""
+                SELECT supersedes_invoice_no
+                FROM archived_invoices
+                WHERE COALESCE(TRIM(supersedes_invoice_no),'')<>''
+            """).fetchall()
+        }
+
+        ledger_sql = """
+            SELECT le.*
+            FROM ledger_entries le
+            WHERE lower(COALESCE(le.operation,''))='vente'
+              AND COALESCE(TRIM(le.invoice_no),'')<>''
+        """
+        ledger_params = []
+
+        if not q:
+            ledger_sql += " AND substr(COALESCE(le.entry_date,''),1,4)=?"
+            ledger_params.append(str(year))
+
+        ledger_sql += " ORDER BY le.entry_date DESC, le.id DESC"
+
+        for le in con.execute(ledger_sql, tuple(ledger_params)).fetchall():
+            invoice_no = canonical_client_invoice_no(le["invoice_no"])
+            if not re.fullmatch(r"\d{12}", invoice_no or ""):
+                continue
+            if invoice_no in existing_invoice_nos or invoice_no in superseded_invoice_nos:
+                continue
+
+            amount = float(le["amount_ttc"] or 0)
+
+            if q:
+                if amount_query is not None:
+                    if abs(amount - amount_query) >= 0.005:
+                        continue
+                else:
+                    haystack = " ".join([
+                        invoice_no,
+                        str(le["party"] or ""),
+                        str(le["entry_date"] or ""),
+                        str(amount),
+                        str(le["payment_type"] or ""),
+                        str(le["remarks"] or ""),
+                    ]).casefold()
+                    if q.casefold() not in haystack:
+                        continue
+
+            pdf = find_client_invoice_pdf(invoice_no, le["party"] or "")
+            if not pdf or not pdf.exists():
+                continue
+
+            invoice_date = str(le["entry_date"] or "")[:10]
+            filtered_invoices.append({
+                "id": None,
+                "ledger_only": True,
+                "ledger_id": int(le["id"]),
+                "invoice_no": invoice_no,
+                "client_name": str(le["party"] or ""),
+                "client_email": "",
+                "invoice_date": invoice_date,
+                "invoice_total": amount,
+                "payment_mode_display": str(le["payment_type"] or ""),
+                "accounting_date": invoice_date,
+                "accounting_status": "normal",
+                "historical": True,
+                "simple_invoice": False,
+                "is_paid": True,
+                "sumup_payment_url": "",
+                "sumup_transaction_id": "",
+                "sumup_transaction_code": "",
+                "pdf_name": pdf.name,
+                "remarks": str(le["remarks"] or ""),
+            })
+
+        filtered_invoices.sort(
+            key=lambda inv: (
+                str(inv.get("invoice_date") or ""),
+                str(inv.get("invoice_no") or "")
+            ),
+            reverse=True
+        )
 
     today = now().date()
     week_start = today - timedelta(days=today.weekday())
@@ -11952,22 +12997,84 @@ def invoices_page():
             and year_token in pdf.stem
         )
 
+    # Même source que la page de maintenance : le bouton n'apparaît que
+    # lorsqu'au moins une vraie facture orpheline est actuellement détectée.
+    orphan_invoice_count = len(_collect_orphan_invoices(con))
+
+    con.close()
+
     return render_template(
         "invoices.html",
         invoices=filtered_invoices,
         q=q,
+        amount_query=amount_query,
         unpaid_only=unpaid_only,
         invoice_stats=invoice_stats,
         year=year,
         current_year=current_year,
         archive_years=archive_years,
+        search_all_years=bool(q),
+        sumup_enabled=bool(read_sumup_settings().get("enabled")),
+        orphan_invoice_count=orphan_invoice_count,
+    )
+
+
+@app.route("/repair/<int:rid>/invoice/sumup", methods=["GET", "POST"])
+def invoice_sumup_link(rid):
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("L'intégration SumUp est désactivée. Active-la dans Sécurité.")
+        return redirect(url_for("security_page") + "#sumup-integration")
+
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+    if not r["invoice_no"]:
+        con.close()
+        flash("Aucune facture n'est encore créée pour ce dossier.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    cancel_url = url_for("invoices_page")
+    if request.method == "POST":
+        action = request.form.get("sumup_action", "save")
+        if action == "remove":
+            con.execute("UPDATE repairs SET sumup_payment_url='' WHERE id=?", (rid,))
+            con.commit()
+            con.close()
+            audit_event("SUMUP_LINK_REMOVED", f"Facture {r['invoice_no']}", request.remote_addr)
+            flash(f"Lien SumUp retiré de la facture {r['invoice_no']}.")
+            return redirect(cancel_url)
+
+        payment_url = request.form.get("sumup_payment_url", "").strip()
+        if not valid_payment_link(payment_url):
+            con.close()
+            flash("Lien de paiement invalide : utilise une adresse HTTPS complète.")
+            return redirect(url_for("invoice_sumup_link", rid=rid))
+
+        con.execute("UPDATE repairs SET sumup_payment_url=? WHERE id=?", (payment_url, rid))
+        con.commit()
+        con.close()
+        audit_event("SUMUP_LINK_SAVED", f"Facture {r['invoice_no']}", request.remote_addr)
+        flash(f"Lien SumUp enregistré pour la facture {r['invoice_no']}.")
+        return redirect(cancel_url)
+
+    con.close()
+    return render_template(
+        "invoice_sumup.html",
+        r=r,
+        cancel_url=cancel_url,
     )
 
 
 
-
-def send_pdf_with_title(path, title, download_name=None):
-    """Affiche un PDF avec un titre navigateur propre sans modifier l'original."""
+def send_pdf_with_title(path, title, download_name=None, as_attachment=False):
+    """Envoie un PDF sans modifier l'original, en affichage ou téléchargement."""
     try:
         from pypdf import PdfReader, PdfWriter
 
@@ -11995,7 +13102,7 @@ def send_pdf_with_title(path, title, download_name=None):
         return send_file(
             bio,
             mimetype="application/pdf",
-            as_attachment=False,
+            as_attachment=as_attachment,
             download_name=download_name or Path(path).name,
         )
     except Exception as exc:
@@ -12003,14 +13110,1856 @@ def send_pdf_with_title(path, title, download_name=None):
         return send_file(
             path,
             mimetype="application/pdf",
-            as_attachment=False,
+            as_attachment=as_attachment,
             download_name=download_name or Path(path).name,
         )
+
+
+
+
+def _sumup_invoice_total_from_members(members):
+    """
+    Total de facture utilisé uniquement pour le rapprochement SumUp.
+
+    Priorités :
+    1. invoice_lines : si une facture a été reconstruite/modifiée dans WOPR,
+       ses lignes sont la source de vérité.
+    2. montants comptables historiques : ils représentent le CA réellement
+       affecté à la facture.
+    3. ancien texte de règlement quand il contient un montant exploitable.
+    4. anciens montants Suivi service + marchandises.
+
+    On évite volontairement max(toutes les sources), qui pouvait transformer
+    138 € en 207 € lorsqu'une vieille ligne historique avait déjà réintégré
+    une des composantes de la facture.
+    """
+    members = [dict(x) for x in (members or [])]
+
+    line_totals = [
+        round(float(x.get("line_total") or x.get("invoice_lines_total") or 0), 2)
+        for x in members
+        if float(x.get("line_total") or x.get("invoice_lines_total") or 0) > 0
+    ]
+    if line_totals:
+        return max(line_totals), "lignes de facture"
+
+    accounting_totals = [
+        round(
+            float(x.get("accounting_service_amount") or 0)
+            + float(x.get("accounting_goods_amount") or 0),
+            2
+        )
+        for x in members
+        if (
+            float(x.get("accounting_service_amount") or 0)
+            + float(x.get("accounting_goods_amount") or 0)
+        ) > 0
+    ]
+    if accounting_totals:
+        return max(accounting_totals), "montants comptables"
+
+    payment_totals = []
+    for x in members:
+        try:
+            amount = float(payment_amount_from_text(x.get("payment_method")) or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            payment_totals.append(round(amount, 2))
+    if payment_totals:
+        return max(payment_totals), "ancien règlement"
+
+    followup_totals = [
+        round(
+            float(x.get("service_amount") or 0)
+            + float(x.get("goods_amount") or 0),
+            2
+        )
+        for x in members
+        if (
+            float(x.get("service_amount") or 0)
+            + float(x.get("goods_amount") or 0)
+        ) > 0
+    ]
+    return (max(followup_totals), "anciens montants Suivi") if followup_totals else (0.0, "aucun montant")
+
+
+
+def _sumup_invoice_amount_options(members):
+    """
+    Montants historiques plausibles connus pour une facture, sans additionner
+    des représentations différentes entre elles.
+    """
+    members = [dict(x) for x in (members or [])]
+    options = []
+
+    def add(amount, source):
+        try:
+            amount = round(float(amount or 0), 2)
+        except Exception:
+            return
+        if amount <= 0:
+            return
+        if not any(abs(amount - x["amount"]) < 0.005 for x in options):
+            options.append({"amount": amount, "source": source})
+
+    for x in members:
+        add(x.get("line_total") or x.get("invoice_lines_total") or 0, "lignes de facture")
+    for x in members:
+        add(
+            float(x.get("accounting_service_amount") or 0)
+            + float(x.get("accounting_goods_amount") or 0),
+            "montants comptables"
+        )
+    for x in members:
+        try:
+            add(payment_amount_from_text(x.get("payment_method")) or 0, "ancien règlement")
+        except Exception:
+            pass
+    for x in members:
+        add(
+            float(x.get("service_amount") or 0)
+            + float(x.get("goods_amount") or 0),
+            "anciens montants Suivi"
+        )
+    return options
+
+
+def _sumup_invoice_candidates():
+    """
+    Candidate pool for SumUp reconciliation.
+    Includes paid + unpaid invoices because historical WOPR/ODS rows may already
+    contain a payment date even when no SumUp transaction id was stored yet.
+    """
+    con = db()
+    rows = con.execute("""
+        SELECT r.*, c.name AS client_name,
+               (
+                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                 FROM invoice_lines il WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.invoice_no),'')<>''
+        ORDER BY r.id DESC
+    """).fetchall()
+    con.close()
+
+    grouped = {}
+    for raw in rows:
+        r = dict(raw)
+        key = (r["client_id"], r["invoice_no"])
+        grouped.setdefault(key, []).append(r)
+
+    result = []
+    for members in grouped.values():
+        rep = next((x for x in members if not x.get("legacy_imported")), members[0])
+        total, total_source = _sumup_invoice_total_from_members(members)
+
+        # If any row of the same invoice is already linked to SumUp, exclude it
+        # from new candidate suggestions.
+        already_linked = any(str(x.get("sumup_transaction_id") or "").strip() for x in members)
+
+        payment_info = payment_breakdown_info(
+            rep.get("payment_mode") or "",
+            rep.get("payment_detail") or "",
+            rep.get("payment_method") or ""
+        )
+        payment_mode = payment_info["mode"]
+        cb_part = payment_info["cb_part"]
+
+        # For current OR historical mixed payments, SumUp represents only
+        # the CB portion.
+        match_amount = cb_part if payment_info["is_mixed"] and cb_part > 0 else total
+
+        result.append({
+            "id": int(rep["id"]),
+            "invoice_no": str(rep.get("invoice_no") or ""),
+            "client_name": str(rep.get("client_name") or ""),
+            "invoice_date": str(rep.get("invoice_date") or ""),
+            "accounting_date": str(rep.get("accounting_date") or ""),
+            "paid": bool(rep.get("paid")),
+            "payment_mode": payment_mode,
+            "invoice_total": round(total, 2),
+            "invoice_total_source": total_source,
+            "amount_options": _sumup_invoice_amount_options(members),
+            "cb_part": round(cb_part, 2),
+            "match_amount": round(match_amount, 2),
+            "already_linked": already_linked,
+        })
+    return result
+
+
+def _sumup_rank_candidates(tx, candidates):
+    """
+    Returns candidates sorted by confidence.
+    Hard rule: exact amount.
+    Strongest signal: existing accounting/payment date equals SumUp date.
+    Then invoice date proximity. No automatic link is ever performed.
+    """
+    amount = float(tx.get("amount") or 0)
+
+    tx_date = None
+    raw_ts = str(tx.get("timestamp") or "").strip()
+    if raw_ts:
+        try:
+            tx_date = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).date()
+        except Exception:
+            tx_date = None
+
+    ranked = []
+    for c in candidates:
+        if c.get("already_linked"):
+            continue
+
+        option_match = next(
+            (
+                opt for opt in (c.get("amount_options") or [])
+                if abs(float(opt.get("amount") or 0) - amount) < 0.005
+            ),
+            None
+        )
+        if option_match:
+            c = dict(c)
+            c["match_amount"] = float(option_match.get("amount") or c.get("match_amount") or 0)
+            c["invoice_total_source"] = option_match.get("source") or c.get("invoice_total_source")
+
+        if abs(float(c["match_amount"]) - amount) >= 0.005:
+            continue
+
+        invoice_date = None
+        accounting_date = None
+
+        raw_invoice_date = str(c.get("invoice_date") or "").strip()
+        if raw_invoice_date:
+            try:
+                invoice_date = date.fromisoformat(raw_invoice_date[:10])
+            except Exception:
+                pass
+
+        raw_accounting_date = str(c.get("accounting_date") or "").strip()
+        if raw_accounting_date:
+            try:
+                accounting_date = date.fromisoformat(raw_accounting_date[:10])
+            except Exception:
+                pass
+
+        score = 0
+        reasons = []
+
+        if tx_date and accounting_date:
+            delta_pay = abs((tx_date - accounting_date).days)
+            if delta_pay == 0:
+                score += 100
+                reasons.append("date d'encaissement exacte")
+            elif delta_pay <= 1:
+                score += 70
+                reasons.append("encaissement à ±1 jour")
+            elif delta_pay <= 3:
+                score += 40
+                reasons.append("encaissement proche")
+            else:
+                # Existing payment date strongly disagrees with this SumUp tx.
+                continue
+
+        if tx_date and invoice_date:
+            delta_inv = (tx_date - invoice_date).days
+
+            # Payment before invoice by more than 2 days is suspicious;
+            # payment more than 45 days later is too broad for auto suggestion.
+            if delta_inv < -2 or delta_inv > 45:
+                if not accounting_date:
+                    continue
+            else:
+                proximity = max(0, 30 - abs(delta_inv))
+                score += proximity
+                if delta_inv == 0:
+                    reasons.append("même jour que la facture")
+                elif abs(delta_inv) <= 2:
+                    reasons.append("facture à ±2 jours")
+                elif abs(delta_inv) <= 7:
+                    reasons.append("facture proche")
+
+        if c.get("paid"):
+            score += 5
+            if accounting_date:
+                reasons.append("déjà marquée payée dans WOPR")
+
+        # Keep exact-amount historical candidates even if date data is sparse.
+        ranked.append({
+            **c,
+            "_score": score,
+            "_reasons": reasons,
+        })
+
+    ranked.sort(
+        key=lambda c: (
+            int(c.get("_score") or 0),
+            str(c.get("accounting_date") or ""),
+            str(c.get("invoice_date") or "")
+        ),
+        reverse=True
+    )
+
+    # Only candidates plausibly close enough should be presented first.
+    # Keep max 6 to avoid a giant dropdown on recurring amounts like 30 €.
+    return ranked[:6]
+
+
+
+
+@app.route("/sumup/transactions")
+def sumup_transactions_page():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("L'intégration SumUp est désactivée. Active-la dans Sécurité.")
+        return redirect(url_for("security_page") + "#sumup-integration")
+    if not settings.get("api_key") or not settings.get("merchant_code"):
+        flash("Configure la clé API et le Merchant code SumUp dans Sécurité.")
+        return redirect(url_for("security_page") + "#sumup-integration")
+
+    today = now().date()
+
+    # Default: current month. Custom from/to dates override year/month.
+    raw_from = str(request.args.get("from_date") or "").strip()
+    raw_to = str(request.args.get("to_date") or "").strip()
+    selected_year = request.args.get("year", type=int)
+    selected_month = request.args.get("month", type=int)
+
+    if raw_from or raw_to:
+        try:
+            date_from = date.fromisoformat(raw_from) if raw_from else today.replace(day=1)
+            date_to = date.fromisoformat(raw_to) if raw_to else today
+        except ValueError:
+            flash("Période SumUp invalide.")
+            return redirect(url_for("sumup_transactions_page"))
+        if date_to < date_from:
+            date_from, date_to = date_to, date_from
+        period_mode = "custom"
+    else:
+        year = selected_year if selected_year and 2000 <= selected_year <= 2100 else today.year
+        month = selected_month if selected_month and 1 <= selected_month <= 12 else today.month
+        date_from = date(year, month, 1)
+        if month == 12:
+            next_month_date = date(year + 1, 1, 1)
+        else:
+            next_month_date = date(year, month + 1, 1)
+        date_to = next_month_date - timedelta(days=1)
+        period_mode = "month"
+
+    # Navigation month boundaries.
+    first_month = date(date_from.year, date_from.month, 1)
+    prev_last = first_month - timedelta(days=1)
+    prev_year, prev_month = prev_last.year, prev_last.month
+    if first_month.month == 12:
+        next_year, next_month = first_month.year + 1, 1
+    else:
+        next_year, next_month = first_month.year, first_month.month + 1
+
+    channel = str(request.args.get("channel") or "ALL").strip().upper()
+    if channel not in {"ALL", "POS", "ECOM"}:
+        channel = "ALL"
+
+    try:
+        transactions_all = sumup_transaction_history(date_from, date_to)
+    except Exception as exc:
+        flash(f"Impossible de récupérer les transactions SumUp : {exc}")
+        return redirect(url_for("invoices_page"))
+
+    if channel == "ALL":
+        transactions = transactions_all
+    else:
+        transactions = [
+            tx for tx in transactions_all
+            if str((tx or {}).get("payment_type") or "").upper() == channel
+        ]
+
+    candidates = _sumup_invoice_candidates()
+    con = db()
+    linked_rows = con.execute("""
+        SELECT id, invoice_no, sumup_transaction_id, sumup_transaction_code
+        FROM repairs
+        WHERE COALESCE(sumup_transaction_id,'')<>''
+    """).fetchall()
+    con.close()
+    linked = {
+        str(r["sumup_transaction_id"] or ""): {
+            "rid": int(r["id"]), "invoice_no": str(r["invoice_no"] or ""),
+            "transaction_code": str(r["sumup_transaction_code"] or "")
+        }
+        for r in linked_rows if str(r["sumup_transaction_id"] or "").strip()
+    }
+
+    con = db()
+    class_rows = con.execute("""
+        SELECT transaction_id, transaction_code, classification, note, classified_at
+        FROM sumup_transaction_classifications
+    """).fetchall()
+    con.close()
+    classifications = {
+        str(r["transaction_id"]): {
+            "classification": str(r["classification"] or ""),
+            "note": str(r["note"] or ""),
+            "classified_at": str(r["classified_at"] or ""),
+            "transaction_code": str(r["transaction_code"] or ""),
+        }
+        for r in class_rows
+    }
+
+    prepared = []
+    for tx in transactions:
+        tx = dict(tx or {})
+        tx_id = str(tx.get("id") or tx.get("transaction_id") or "").strip()
+        amount = float(tx.get("amount") or 0)
+        ranked = _sumup_rank_candidates(tx, candidates)
+
+        best = ranked[0] if ranked else None
+        second = ranked[1] if len(ranked) > 1 else None
+
+        # "Strong" means we can safely propose a one-click confirmation:
+        # score >= 60 and clearly ahead of the second candidate.
+        best_score = int(best.get("_score") or 0) if best else 0
+        second_score = int(second.get("_score") or 0) if second else -999
+        strong = bool(best and best_score >= 60 and (best_score - second_score) >= 25)
+
+        prepared.append({
+            **tx,
+            "_id": tx_id,
+            "_amount": amount,
+            "_local_datetime": _sumup_local_datetime(tx.get("timestamp")),
+            "_channel": str(tx.get("payment_type") or tx.get("entry_mode") or "AUTRE").upper(),
+            "_linked": linked.get(tx_id),
+            "_classification": classifications.get(tx_id),
+            "_candidates": ranked,
+            "_best_candidate": best,
+            "_strong_candidate": best if strong else None,
+        })
+
+    counts = {
+        "all": len(transactions_all),
+        "pos": sum(1 for tx in transactions_all if str((tx or {}).get("payment_type") or "").upper() == "POS"),
+        "ecom": sum(1 for tx in transactions_all if str((tx or {}).get("payment_type") or "").upper() == "ECOM"),
+        "linked": sum(1 for tx in prepared if tx.get("_linked")),
+        "outside": sum(
+            1 for tx in prepared
+            if tx.get("_classification")
+            and tx["_classification"].get("classification") == "outside_wopr"
+        ),
+    }
+
+    month_names = [
+        "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+        "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+    ]
+    if period_mode == "month":
+        period_label = f"{month_names[date_from.month]} {date_from.year}"
+    else:
+        period_label = f"{date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')}"
+
+    return render_template(
+        "sumup_transactions.html",
+        transactions=prepared,
+        merchant_code=str(settings.get("merchant_code") or ""),
+        date_from=date_from.isoformat(),
+        date_to=date_to.isoformat(),
+        period_label=period_label,
+        period_mode=period_mode,
+        channel=channel,
+        counts=counts,
+        prev_year=prev_year,
+        prev_month=prev_month,
+        next_year=next_year,
+        next_month=next_month,
+        current_month=(today.year == date_from.year and today.month == date_from.month and period_mode == "month"),
+    )
+
+
+
+def _sumup_transactions_redirect_from_form():
+    """Return to the same SumUp period/filter and transaction row after a POST action."""
+    from_date = str(request.form.get("return_from_date") or "").strip()
+    to_date = str(request.form.get("return_to_date") or "").strip()
+    channel = str(request.form.get("return_channel") or "ALL").strip().upper()
+    anchor = str(request.form.get("return_anchor") or "").strip()
+    if channel not in {"ALL", "POS", "ECOM"}:
+        channel = "ALL"
+
+    # L'ancre vient uniquement du tableau SumUp. On la filtre pour ne jamais
+    # réinjecter une valeur arbitraire dans l'URL de retour.
+    if not re.fullmatch(r"sumup-tx-[A-Za-z0-9_-]+", anchor):
+        anchor = ""
+
+    kwargs = {"channel": channel}
+    if from_date:
+        kwargs["from_date"] = from_date
+    if to_date:
+        kwargs["to_date"] = to_date
+    if anchor:
+        kwargs["_anchor"] = anchor
+    return redirect(url_for("sumup_transactions_page", **kwargs))
+
+
+@app.route("/sumup/transactions/classify", methods=["POST"])
+def sumup_transaction_classify():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("Intégration SumUp désactivée.")
+        return redirect(url_for("invoices_page"))
+
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    transaction_code = str(request.form.get("transaction_code") or "").strip()
+    action = str(request.form.get("classification_action") or "").strip()
+
+    if not transaction_id:
+        flash("Transaction SumUp manquante.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    if action == "outside":
+        con.execute("""
+            INSERT INTO sumup_transaction_classifications
+                (transaction_id, transaction_code, classification, note, classified_at)
+            VALUES (?, ?, 'outside_wopr', ?, ?)
+            ON CONFLICT(transaction_id) DO UPDATE SET
+                transaction_code=excluded.transaction_code,
+                classification='outside_wopr',
+                note=excluded.note,
+                classified_at=excluded.classified_at
+        """, (
+            transaction_id,
+            transaction_code,
+            str(request.form.get("note") or "").strip(),
+            now().isoformat(timespec="seconds"),
+        ))
+        con.commit()
+        con.close()
+        audit_event(
+            "SUMUP_TRANSACTION_CLASSIFY",
+            f"tx={transaction_id}; code={transaction_code}; classification=outside_wopr",
+            request.remote_addr
+        )
+        flash(f"Transaction SumUp {transaction_code or transaction_id} classée « Hors facture WOPR ».")
+    elif action == "clear":
+        con.execute(
+            "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+            (transaction_id,)
+        )
+        con.commit()
+        con.close()
+        audit_event(
+            "SUMUP_TRANSACTION_CLASSIFY_CLEAR",
+            f"tx={transaction_id}; code={transaction_code}",
+            request.remote_addr
+        )
+        flash(f"Classement retiré pour {transaction_code or transaction_id}.")
+    else:
+        con.close()
+        flash("Classement SumUp inconnu.")
+
+    return _sumup_transactions_redirect_from_form()
+
+
+
+@app.route("/sumup/transactions/link-existing", methods=["POST"])
+def sumup_transaction_link_existing():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("Intégration SumUp désactivée.")
+        return redirect(url_for("invoices_page"))
+
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    transaction_code = str(request.form.get("transaction_code") or "").strip()
+    invoice_no = str(request.form.get("invoice_no") or "").strip()
+    force_amount = str(request.form.get("force_amount") or "").strip().lower() in {"1", "true", "yes", "oui"}
+
+    if not transaction_id or not invoice_no:
+        flash("Transaction SumUp ou numéro de facture manquant.")
+        return _sumup_transactions_redirect_from_form()
+
+    try:
+        tx = sumup_get_transaction(transaction_id)
+    except Exception as exc:
+        flash(f"Transaction SumUp illisible : {exc}")
+        return _sumup_transactions_redirect_from_form()
+
+    if str(tx.get("status") or "").upper() != "SUCCESSFUL":
+        flash("Cette transaction SumUp n'est pas marquée SUCCESSFUL.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    rows = con.execute("""
+        SELECT r.*,
+               (
+                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                 FROM invoice_lines il WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r
+        WHERE trim(COALESCE(r.invoice_no,''))=?
+        ORDER BY r.id DESC
+    """, (invoice_no,)).fetchall()
+
+    if not rows:
+        con.close()
+        flash(f"Facture {invoice_no} introuvable dans WOPR.")
+        return _sumup_transactions_redirect_from_form()
+
+    # Some historical invoices can span several repair rows. Prefer a non-legacy
+    # row for metadata, but calculate the invoice total from the whole group.
+    r = next((row for row in rows if not row["legacy_imported"]), rows[0])
+    invoice_total, invoice_total_source = _sumup_invoice_total_from_members(rows)
+    tx_amount = float(tx.get("amount") or 0)
+
+    amount_options = _sumup_invoice_amount_options(rows)
+    exact_known_amount = next(
+        (opt for opt in amount_options if abs(float(opt["amount"]) - tx_amount) < 0.005),
+        None
+    )
+    if exact_known_amount:
+        invoice_total = float(exact_known_amount["amount"])
+        invoice_total_source = exact_known_amount["source"]
+
+    payment_info = payment_breakdown_info(
+        r["payment_mode"] or "",
+        r["payment_detail"] or "",
+        r["payment_method"] or ""
+    )
+    payment_mode = payment_info["mode"]
+    cb_part = payment_info["cb_part"]
+
+    expected_sumup_amount = (
+        cb_part
+        if payment_info["is_mixed"] and cb_part > 0
+        else invoice_total
+    )
+
+    amount_mismatch = abs(expected_sumup_amount - tx_amount) >= 0.005
+    if amount_mismatch and not force_amount:
+        con.close()
+        if payment_info["is_mixed"] and cb_part > 0:
+            flash(
+                f"Montant différent : facture {invoice_no} = {invoice_total:.2f} € "
+                f"dont {cb_part:.2f} € CB / SumUp = {tx_amount:.2f} €. "
+                "Si tu as vérifié l'encaissement, coche « Forcer »."
+            )
+        else:
+            known_text = ", ".join(
+                f"{opt['amount']:.2f} € ({opt['source']})"
+                for opt in amount_options
+            )
+            suffix = f" Valeurs WOPR connues : {known_text}." if known_text else ""
+            flash(
+                f"Montant différent : facture {invoice_no} = {invoice_total:.2f} € "
+                f"({invoice_total_source}) / SumUp = {tx_amount:.2f} €."
+                f"{suffix} Si tu as vérifié l'encaissement, coche « Forcer »."
+            )
+        return _sumup_transactions_redirect_from_form()
+
+    already = con.execute("""
+        SELECT id, invoice_no
+        FROM repairs
+        WHERE COALESCE(sumup_transaction_id,'')=?
+          AND id<>?
+        LIMIT 1
+    """, (transaction_id, int(r["id"]))).fetchone()
+    if already:
+        con.close()
+        flash(
+            f"Cette transaction SumUp est déjà rattachée à la facture "
+            f"{already['invoice_no']}."
+        )
+        return _sumup_transactions_redirect_from_form()
+
+    ts = str(tx.get("timestamp") or "")
+    try:
+        pay_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pay_date = pay_dt.date()
+    except Exception:
+        pay_date = now().date()
+        ts = now().isoformat(timespec="seconds")
+
+    # Keep the original payment breakdown. A SumUp transaction can be only
+    # the CB part of a MIXTE invoice, so never replace MIXTE by CB.
+    if not int(r["paid"] or 0):
+        fy = r["followup_year"]
+        fm = r["followup_month"]
+        acc_status = "yellow" if (fy and fm and (int(fy), int(fm)) != (pay_date.year, pay_date.month)) else "normal"
+        if payment_info["is_mixed"]:
+            con.execute("""
+                UPDATE repairs SET
+                    paid=1,
+                    accounting_year=?,
+                    accounting_month=?,
+                    accounting_date=?,
+                    accounting_status=?,
+                    accounting_service_amount=COALESCE(service_amount,0),
+                    accounting_goods_amount=COALESCE(goods_amount,0)
+                WHERE id=?
+            """, (
+                pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(r["id"])
+            ))
+        else:
+            con.execute("""
+                UPDATE repairs SET
+                    paid=1,
+                    payment_mode='CB',
+                    payment_method='CB',
+                    accounting_year=?,
+                    accounting_month=?,
+                    accounting_date=?,
+                    accounting_status=?,
+                    accounting_service_amount=COALESCE(service_amount,0),
+                    accounting_goods_amount=COALESCE(goods_amount,0)
+                WHERE id=?
+            """, (
+                pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(r["id"])
+            ))
+
+    con.execute("""
+        UPDATE repairs SET
+            sumup_payment_url='',
+            sumup_transaction_id=?,
+            sumup_transaction_code=?,
+            sumup_transaction_at=?,
+            sumup_payment_type=?
+        WHERE id=?
+    """, (
+        str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+        str(tx.get("transaction_code") or transaction_code),
+        ts,
+        str(tx.get("payment_type") or ""),
+        int(r["id"])
+    ))
+
+    con.execute(
+        "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+        (transaction_id,)
+    )
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_TRANSACTION_LINK_EXISTING",
+        f"repair_id={r['id']}; invoice={invoice_no}; tx={transaction_id}; "
+        f"code={transaction_code}; amount={tx_amount:.2f}; "
+        f"forced_amount_mismatch={1 if amount_mismatch else 0}",
+        request.remote_addr
+    )
+    if amount_mismatch:
+        flash(
+            f"Transaction SumUp {transaction_code or transaction_id} ({tx_amount:.2f} €) "
+            f"rattachée manuellement à la facture {invoice_no} malgré le montant WOPR "
+            f"de {invoice_total:.2f} €."
+        )
+    else:
+        flash(
+            f"Transaction SumUp {transaction_code or transaction_id} rattachée "
+            f"définitivement à la facture {invoice_no}."
+        )
+    return _sumup_transactions_redirect_from_form()
+
+
+
+@app.route("/sumup/transactions/relink-existing", methods=["POST"])
+def sumup_transaction_relink_existing():
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    transaction_code = str(request.form.get("transaction_code") or "").strip()
+    invoice_no = str(request.form.get("invoice_no") or "").strip()
+
+    if not transaction_id or not invoice_no:
+        flash("Transaction SumUp ou numéro de facture manquant.")
+        return _sumup_transactions_redirect_from_form()
+
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("L'intégration SumUp est désactivée.")
+        return _sumup_transactions_redirect_from_form()
+
+    try:
+        tx = sumup_get_transaction(transaction_id)
+    except Exception as exc:
+        flash(f"Impossible de relire la transaction SumUp : {exc}")
+        return _sumup_transactions_redirect_from_form()
+
+    if str(tx.get("status") or "").upper() != "SUCCESSFUL":
+        flash("Rattachement refusé : la transaction SumUp n'est pas SUCCESSFUL.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+
+    current = con.execute("""
+        SELECT id, invoice_no
+        FROM repairs
+        WHERE sumup_transaction_id=?
+        LIMIT 1
+    """, (transaction_id,)).fetchone()
+
+    if not current:
+        con.close()
+        flash("Cette transaction SumUp n'est pas actuellement rattachée.")
+        return _sumup_transactions_redirect_from_form()
+
+    rows = con.execute("""
+        SELECT r.*,
+               COALESCE((
+                   SELECT SUM(quantity * unit_price)
+                   FROM invoice_lines il
+                   WHERE il.repair_id=r.id
+               ), 0) AS line_total
+        FROM repairs r
+        WHERE trim(COALESCE(r.invoice_no,''))=?
+        ORDER BY COALESCE(r.legacy_imported,0), r.id DESC
+    """, (invoice_no,)).fetchall()
+
+    if not rows:
+        con.close()
+        flash(f"Facture {invoice_no} introuvable dans WOPR.")
+        return _sumup_transactions_redirect_from_form()
+
+    target = next((row for row in rows if not row["legacy_imported"]), rows[0])
+
+    # Refuse if target invoice is already linked to another SumUp transaction.
+    existing_target_link = con.execute("""
+        SELECT id, sumup_transaction_id, sumup_transaction_code
+        FROM repairs
+        WHERE trim(COALESCE(invoice_no,''))=?
+          AND COALESCE(sumup_transaction_id,'')<>''
+          AND sumup_transaction_id<>?
+        LIMIT 1
+    """, (invoice_no, transaction_id)).fetchone()
+
+    if existing_target_link:
+        con.close()
+        flash(
+            f"Facture {invoice_no} déjà rattachée à une autre transaction SumUp "
+            f"({existing_target_link['sumup_transaction_code'] or existing_target_link['sumup_transaction_id']})."
+        )
+        return _sumup_transactions_redirect_from_form()
+
+    tx_amount = float(tx.get("amount") or 0)
+
+    # Same historical/plausible amount logic used by normal manual linking.
+    amount_options = _sumup_invoice_amount_options(rows)
+    exact_known_amount = next(
+        (
+            opt for opt in amount_options
+            if abs(float(opt.get("amount") or 0) - tx_amount) < 0.005
+        ),
+        None
+    )
+
+    invoice_total, invoice_total_source = _sumup_invoice_total_from_members(rows)
+    if exact_known_amount:
+        invoice_total = float(exact_known_amount["amount"])
+        invoice_total_source = str(exact_known_amount.get("source") or invoice_total_source)
+
+    payment_info = payment_breakdown_info(
+        target["payment_mode"] or "",
+        target["payment_detail"] or "",
+        target["payment_method"] or ""
+    )
+    cb_part = float(payment_info["cb_part"] or 0)
+
+    expected_sumup_amount = (
+        cb_part
+        if payment_info["is_mixed"] and cb_part > 0
+        else invoice_total
+    )
+
+    if abs(expected_sumup_amount - tx_amount) >= 0.005:
+        con.close()
+        known_text = ", ".join(
+            f"{opt['amount']:.2f} € ({opt['source']})"
+            for opt in amount_options
+        )
+        suffix = f" Valeurs WOPR connues : {known_text}." if known_text else ""
+        flash(
+            f"Changement refusé : facture {invoice_no} = {expected_sumup_amount:.2f} € "
+            f"/ SumUp = {tx_amount:.2f} €.{suffix}"
+        )
+        return _sumup_transactions_redirect_from_form()
+
+    tx_timestamp = str(tx.get("timestamp") or "").strip()
+    tx_date = ""
+    if tx_timestamp:
+        try:
+            tx_date = datetime.fromisoformat(
+                tx_timestamp.replace("Z", "+00:00")
+            ).astimezone(ZoneInfo("Europe/Paris")).date().isoformat()
+        except Exception:
+            tx_date = ""
+
+    old_invoice_no = str(current["invoice_no"] or "")
+    old_rid = int(current["id"])
+
+    # Clear only SumUp linkage from old invoice. Do not alter its paid/accounting state.
+    con.execute("""
+        UPDATE repairs
+        SET sumup_transaction_id='',
+            sumup_transaction_code='',
+            sumup_transaction_at='',
+            sumup_payment_type=''
+        WHERE id=?
+    """, (old_rid,))
+
+    # Store SumUp link on target.
+    con.execute("""
+        UPDATE repairs
+        SET sumup_transaction_id=?,
+            sumup_transaction_code=?,
+            sumup_transaction_at=?,
+            sumup_payment_type=?,
+            sumup_payment_url=''
+        WHERE id=?
+    """, (
+        transaction_id,
+        transaction_code or str(tx.get("transaction_code") or ""),
+        tx_timestamp,
+        str(tx.get("payment_type") or ""),
+        int(target["id"])
+    ))
+
+    # If target invoice was not yet marked paid, align it with the real SumUp payment.
+    if not int(target["paid"] or 0):
+        con.execute("""
+            UPDATE repairs
+            SET paid=1,
+                payment_mode='CB',
+                payment_method='CB',
+                accounting_date=?,
+                accounting_year=?,
+                accounting_month=?,
+                accounting_service_amount=?,
+                accounting_goods_amount=?,
+                accounting_status='normal'
+            WHERE id=?
+        """, (
+            tx_date or str(target["accounting_date"] or "")[:10],
+            int((tx_date or str(target["accounting_date"] or "")[:10])[:4]) if (tx_date or str(target["accounting_date"] or "")[:10]) else None,
+            int((tx_date or str(target["accounting_date"] or "")[:10])[5:7]) if (tx_date or str(target["accounting_date"] or "")[:10]) else None,
+            float(target["service_amount"] or 0),
+            float(target["goods_amount"] or 0),
+            int(target["id"])
+        ))
+
+    con.execute(
+        "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+        (transaction_id,)
+    )
+
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_TRANSACTION_RELINK",
+        f"tx={transaction_id}; code={transaction_code}; "
+        f"old_invoice={old_invoice_no}; new_invoice={invoice_no}; amount={tx_amount:.2f}",
+        request.remote_addr
+    )
+
+    flash(
+        f"Transaction SumUp {transaction_code or transaction_id} déplacée de "
+        f"{old_invoice_no} vers la facture {invoice_no}."
+    )
+    return _sumup_transactions_redirect_from_form()
+
+
+@app.route("/sumup/transactions/link", methods=["POST"])
+def sumup_transaction_link():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("Intégration SumUp désactivée.")
+        return redirect(url_for("invoices_page"))
+
+    rid = int(request.form.get("rid") or 0)
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    if not rid or not transaction_id:
+        flash("Facture ou transaction SumUp manquante.")
+        return _sumup_transactions_redirect_from_form()
+
+    try:
+        tx = sumup_get_transaction(transaction_id)
+    except Exception as exc:
+        flash(f"Transaction SumUp illisible : {exc}")
+        return _sumup_transactions_redirect_from_form()
+
+    if str(tx.get("status") or "").upper() != "SUCCESSFUL":
+        flash("Cette transaction SumUp n'est pas marquée SUCCESSFUL.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               (
+                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                 FROM invoice_lines il WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not r or not str(r["invoice_no"] or "").strip():
+        con.close()
+        flash("Facture WOPR introuvable.")
+        return _sumup_transactions_redirect_from_form()
+
+    invoice_total = max(
+        float(r["line_total"] or 0),
+        float(r["service_amount"] or 0) + float(r["goods_amount"] or 0),
+        0.0
+    )
+    tx_amount = float(tx.get("amount") or 0)
+
+    payment_info = payment_breakdown_info(
+        r["payment_mode"] or "",
+        r["payment_detail"] or "",
+        r["payment_method"] or ""
+    )
+    payment_mode = payment_info["mode"]
+    cb_part = payment_info["cb_part"]
+
+    expected_sumup_amount = (
+        cb_part
+        if payment_info["is_mixed"] and cb_part > 0
+        else invoice_total
+    )
+
+    if abs(expected_sumup_amount - tx_amount) >= 0.005:
+        con.close()
+        if payment_info["is_mixed"] and cb_part > 0:
+            flash(
+                f"Montant différent : facture {invoice_total:.2f} € "
+                f"dont {cb_part:.2f} € CB / SumUp {tx_amount:.2f} €. "
+                "Rattachement refusé."
+            )
+        else:
+            flash(
+                f"Montant différent : facture {invoice_total:.2f} € / "
+                f"SumUp {tx_amount:.2f} €. Rattachement refusé."
+            )
+        return _sumup_transactions_redirect_from_form()
+
+    ts = str(tx.get("timestamp") or "")
+    try:
+        pay_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pay_date = pay_dt.date()
+    except Exception:
+        pay_date = now().date()
+        ts = now().isoformat(timespec="seconds")
+
+    fy = r["followup_year"]
+    fm = r["followup_month"]
+    acc_status = "yellow" if (fy and fm and (int(fy), int(fm)) != (pay_date.year, pay_date.month)) else "normal"
+
+    # Un rattachement SumUp tardif ne doit jamais réécrire une recette déjà
+    # comptabilisée : sa période a pu être déclarée depuis plusieurs mois.
+    # Dans ce cas on ajoute seulement la preuve SumUp. Les champs comptables
+    # ne sont initialisés depuis la transaction que pour une facture qui ne
+    # possède pas encore d'encaissement exploitable.
+    accounting_locked = (
+        bool(r["paid"])
+        and int(r["accounting_year"] or 0) >= 2000
+        and 1 <= int(r["accounting_month"] or 0) <= 12
+        and (
+            float(r["accounting_service_amount"] or 0)
+            + float(r["accounting_goods_amount"] or 0)
+        ) > 0
+    )
+
+    if accounting_locked:
+        if payment_info["is_mixed"]:
+            con.execute("""
+                UPDATE repairs SET
+                    sumup_payment_url='',
+                    sumup_transaction_id=?,
+                    sumup_transaction_code=?,
+                    sumup_transaction_at=?,
+                    sumup_payment_type=?
+                WHERE id=?
+            """, (
+                str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+                str(tx.get("transaction_code") or ""),
+                ts,
+                str(tx.get("payment_type") or ""),
+                rid,
+            ))
+        else:
+            con.execute("""
+                UPDATE repairs SET
+                    payment_mode='CB',
+                    payment_method='CB',
+                    sumup_payment_url='',
+                    sumup_transaction_id=?,
+                    sumup_transaction_code=?,
+                    sumup_transaction_at=?,
+                    sumup_payment_type=?
+                WHERE id=?
+            """, (
+                str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+                str(tx.get("transaction_code") or ""),
+                ts,
+                str(tx.get("payment_type") or ""),
+                rid,
+            ))
+    elif payment_info["is_mixed"]:
+        con.execute("""
+            UPDATE repairs SET
+                paid=1,
+                accounting_year=?,
+                accounting_month=?,
+                accounting_date=?,
+                accounting_status=?,
+                accounting_service_amount=COALESCE(service_amount,0),
+                accounting_goods_amount=COALESCE(goods_amount,0),
+                sumup_payment_url='',
+                sumup_transaction_id=?,
+                sumup_transaction_code=?,
+                sumup_transaction_at=?,
+                sumup_payment_type=?
+            WHERE id=?
+        """, (
+            pay_date.year, pay_date.month, pay_date.isoformat(), acc_status,
+            str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+            str(tx.get("transaction_code") or ""),
+            ts,
+            str(tx.get("payment_type") or ""),
+            rid
+        ))
+    else:
+        con.execute("""
+            UPDATE repairs SET
+                paid=1,
+                payment_mode='CB',
+                payment_method='CB',
+                accounting_year=?,
+                accounting_month=?,
+                accounting_date=?,
+                accounting_status=?,
+                accounting_service_amount=COALESCE(service_amount,0),
+                accounting_goods_amount=COALESCE(goods_amount,0),
+                sumup_payment_url='',
+                sumup_transaction_id=?,
+                sumup_transaction_code=?,
+                sumup_transaction_at=?,
+                sumup_payment_type=?
+            WHERE id=?
+        """, (
+            pay_date.year, pay_date.month, pay_date.isoformat(), acc_status,
+            str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+            str(tx.get("transaction_code") or ""),
+            ts,
+            str(tx.get("payment_type") or ""),
+            rid
+        ))
+    con.execute(
+        "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+        (transaction_id,)
+    )
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_TRANSACTION_LINK",
+        f"repair_id={rid}; invoice={r['invoice_no']}; tx={transaction_id}; amount={tx_amount:.2f}",
+        request.remote_addr
+    )
+    if payment_info["is_mixed"]:
+        flash(
+            f"Paiement SumUp {tx_amount:.2f} € rattaché à la part CB de la facture "
+            f"{r['invoice_no']} — paiement MIXTE conservé."
+        )
+    else:
+        flash(
+            f"Paiement SumUp {tx_amount:.2f} € rattaché à la facture "
+            f"{r['invoice_no']} — facture marquée payée par CB."
+        )
+    return _sumup_transactions_redirect_from_form()
+
+
+
+@app.route("/repair/<int:rid>/sumup/external-refund", methods=["POST"])
+def sumup_external_refund(rid):
+    raw_amount = str(request.form.get("refund_amount") or "").strip()
+    refund_date = str(request.form.get("refund_date") or "").strip()
+    note = str(request.form.get("refund_note") or "").strip()
+
+    try:
+        amount = parse_money_input(raw_amount)
+    except Exception:
+        flash("Montant du remboursement invalide.")
+        return _sumup_transactions_redirect_from_form()
+
+    if amount <= 0:
+        flash("Le remboursement doit être supérieur à 0 €.")
+        return _sumup_transactions_redirect_from_form()
+
+    if refund_date:
+        try:
+            date.fromisoformat(refund_date)
+        except Exception:
+            flash("Date de remboursement invalide.")
+            return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    r = con.execute(
+        "SELECT id, invoice_no, sumup_transaction_id FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    if not r:
+        con.close()
+        flash("Facture WOPR introuvable.")
+        return _sumup_transactions_redirect_from_form()
+
+    con.execute("""
+        UPDATE repairs SET
+            sumup_external_refund_amount=?,
+            sumup_external_refund_date=?,
+            sumup_external_refund_note=?
+        WHERE id=?
+    """, (
+        round(float(amount), 2),
+        refund_date,
+        note or "Remboursement effectué hors SumUp",
+        rid
+    ))
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_EXTERNAL_REFUND",
+        f"repair_id={rid}; invoice={r['invoice_no']}; amount={amount:.2f}; "
+        f"date={refund_date}; tx={r['sumup_transaction_id'] or ''}; trace_only=1",
+        request.remote_addr
+    )
+    flash(
+        f"Remboursement hors SumUp de {amount:.2f} € enregistré en note sur la facture "
+        f"{r['invoice_no']} (CA non modifié automatiquement)."
+    )
+    return _sumup_transactions_redirect_from_form()
+
+
+@app.route("/repair/<int:rid>/sumup/receipt")
+def sumup_receipt(rid):
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+    if not r:
+        return "Dossier introuvable", 404
+    tx_id = str(r["sumup_transaction_id"] or "").strip()
+    if not tx_id:
+        flash("Aucune transaction SumUp n'est rattachée à cette facture.")
+        return redirect(url_for("invoices_page"))
+
+    try:
+        receipt = sumup_get_receipt(tx_id)
+    except Exception as exc:
+        flash(f"Impossible de récupérer le ticket SumUp : {exc}")
+        return redirect(url_for("invoices_page"))
+
+    return render_template(
+        "sumup_receipt.html",
+        receipt=receipt,
+        r=r,
+        tx=receipt.get("transaction_data", {}) if isinstance(receipt, dict) else {},
+        merchant=receipt.get("merchant_data", {}) if isinstance(receipt, dict) else {},
+    )
+
+
+
+
+def _orphan_invoice_quote(con, ledger_row):
+    """Retrouve le devis explicitement référencé par une vente historique."""
+    text = " ".join([
+        str(ledger_row["remarks"] or ""),
+        str(ledger_row["party"] or ""),
+    ])
+    match = re.search(
+        r"(?i)\bdevis(?:\s*(?:n[°ºo]?|num(?:[ée]ro)?\.?))?\s*[:#-]?\s*(\d{12})\b",
+        text,
+    )
+    if not match:
+        return None
+    quote_no = match.group(1)
+    return con.execute(
+        "SELECT * FROM quotes WHERE quote_no=?",
+        (quote_no,),
+    ).fetchone()
+
+
+def _orphan_invoice_candidates_for_ledger(con, ledger_row):
+    """Propose des dossiers sans facture pour une vente historique orpheline."""
+    invoice_no = canonical_client_invoice_no(ledger_row["invoice_no"])
+    party = str(ledger_row["party"] or "").strip()
+    party_key = normalize_client_filename_name(party)
+    invoice_date = invoice_no_date(invoice_no) or str(ledger_row["entry_date"] or "")[:10]
+    ledger_amount = float(ledger_row["amount_ttc"] or 0)
+    quote_row = _orphan_invoice_quote(con, ledger_row)
+
+    clients = con.execute("""
+        SELECT id, name, first_name, last_name, company
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+    """).fetchall()
+
+    matched_client_ids = []
+    for c in clients:
+        labels = [
+            str(c["name"] or ""),
+            " ".join(filter(None, [str(c["first_name"] or ""), str(c["last_name"] or "")])).strip(),
+            str(c["company"] or ""),
+        ]
+        label_keys = [normalize_client_filename_name(x) for x in labels if str(x or "").strip()]
+        score = 0
+        for ck in label_keys:
+            if not ck or not party_key:
+                continue
+            if ck == party_key:
+                score = max(score, 100)
+            elif ck in party_key or party_key in ck:
+                score = max(score, 70)
+            else:
+                party_tokens = set(party_key.split())
+                client_tokens = set(ck.split())
+                common = party_tokens & client_tokens
+                if common:
+                    score = max(score, 40 + 10 * len(common))
+        if score >= 50:
+            matched_client_ids.append((score, int(c["id"])))
+
+    # Un devis explicitement référencé est une preuve bien plus forte que le
+    # libellé historique du client (ex. "SUEZ RV SUD OUEST" vs nom complet).
+    if quote_row and quote_row["client_id"]:
+        quote_client_id = int(quote_row["client_id"])
+        matched_client_ids = [
+            (score, cid) for score, cid in matched_client_ids
+            if cid != quote_client_id
+        ]
+        matched_client_ids.append((140, quote_client_id))
+
+    if not matched_client_ids:
+        return []
+
+    matched_client_ids.sort(reverse=True)
+    ids = [cid for _, cid in matched_client_ids[:8]]
+    placeholders = ",".join("?" for _ in ids)
+    repairs = con.execute(f"""
+        SELECT r.*, c.name AS client_name,
+               (
+                   SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)),0)
+                   FROM invoice_lines il
+                   WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.client_id IN ({placeholders})
+          AND COALESCE(TRIM(r.invoice_no),'')=''
+        ORDER BY r.received_date DESC, r.id DESC
+    """, tuple(ids)).fetchall()
+
+    try:
+        inv_dt = datetime.strptime(invoice_date, "%Y-%m-%d").date() if invoice_date else None
+    except Exception:
+        inv_dt = None
+
+    client_score_map = {cid: score for score, cid in matched_client_ids}
+    candidates = []
+
+    for r in repairs:
+        score = client_score_map.get(int(r["client_id"]), 0)
+        reasons = []
+
+        if quote_row and quote_row["client_id"] and int(r["client_id"]) == int(quote_row["client_id"]):
+            reasons.append(f"devis {quote_row['quote_no']}")
+        elif score >= 100:
+            reasons.append("client exact")
+        elif score >= 70:
+            reasons.append("client proche")
+
+        repair_date = str(r["received_date"] or "")[:10]
+        day_diff = None
+        if inv_dt and repair_date:
+            try:
+                rd = datetime.strptime(repair_date, "%Y-%m-%d").date()
+                day_diff = (inv_dt - rd).days
+                ad = abs(day_diff)
+                if 0 <= day_diff <= 7:
+                    score += 70
+                    reasons.append(f"facture {day_diff} j après dépôt")
+                elif 0 <= day_diff <= 30:
+                    score += 45
+                    reasons.append(f"facture {day_diff} j après dépôt")
+                elif ad <= 30:
+                    score += 20
+                    reasons.append(f"dates proches ({ad} j)")
+                elif ad > 90:
+                    score -= 40
+            except Exception:
+                pass
+
+        values = [
+            float(r["line_total"] or 0),
+            float(r["service_amount"] or 0) + float(r["goods_amount"] or 0),
+            float(r["accounting_service_amount"] or 0) + float(r["accounting_goods_amount"] or 0),
+            payment_amount_from_text(r["payment_method"]),
+        ]
+        known_amounts = sorted({round(v, 2) for v in values if v and v > 0})
+        amount_match = any(abs(v - ledger_amount) < 0.005 for v in known_amounts) if ledger_amount > 0 else False
+        if amount_match:
+            score += 80
+            reasons.append(f"montant {ledger_amount:.2f} €")
+        elif ledger_amount > 0 and known_amounts:
+            nearest = min(abs(v - ledger_amount) for v in known_amounts)
+            if nearest <= 1:
+                score += 40
+                reasons.append("montant quasi identique")
+
+        candidates.append({
+            "rid": int(r["id"]),
+            "client_name": str(r["client_name"] or ""),
+            "received_date": repair_date,
+            "problem": str(r["problem"] or ""),
+            "status": str(r["status"] or ""),
+            "known_amounts": known_amounts,
+            "score": score,
+            "reasons": reasons,
+        })
+
+    candidates.sort(key=lambda x: (-x["score"], x["received_date"], x["rid"]))
+    return candidates[:8]
+
+
+
+@app.route("/factures/historique/<invoice_no>/pdf")
+def archived_historical_invoice_pdf(invoice_no):
+    invoice_no = canonical_client_invoice_no(invoice_no)
+    con = db()
+    row = con.execute(
+        "SELECT * FROM archived_invoices WHERE invoice_no=?",
+        (invoice_no,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return "Facture historique introuvable", 404
+
+    pdf = find_client_invoice_pdf(invoice_no, row["client_name"] or "")
+    if not pdf or not pdf.exists():
+        return "PDF de facture introuvable", 404
+
+    return send_pdf_with_title(
+        pdf,
+        f"Facture {invoice_no} - {row['client_name'] or ''}",
+        download_name=pdf.name,
+    )
+
+
+@app.route("/factures/historique/<invoice_no>/encaissement", methods=["POST"])
+def archived_historical_invoice_payment(invoice_no):
+    invoice_no = canonical_client_invoice_no(invoice_no)
+    con = db()
+    row = con.execute(
+        "SELECT * FROM archived_invoices WHERE invoice_no=?",
+        (invoice_no,)
+    ).fetchone()
+    if not row:
+        con.close()
+        flash("Facture historique introuvable.")
+        return redirect(url_for("invoices_page"))
+
+    paid = 1 if request.form.get("paid") == "on" else 0
+    payment_mode = normalize_payment_mode(request.form.get("payment_mode") or "")
+    accounting_date = (request.form.get("accounting_date") or "").strip()
+
+    if paid and not accounting_date:
+        con.close()
+        flash("Indique la date d'encaissement pour une facture payée.")
+        return redirect(url_for("invoices_page", q=invoice_no))
+
+    if accounting_date and not ledger_valid_date(accounting_date):
+        con.close()
+        flash("Date d'encaissement invalide.")
+        return redirect(url_for("invoices_page", q=invoice_no))
+
+    if not paid:
+        accounting_date = ""
+
+    con.execute("""
+        UPDATE archived_invoices
+        SET payment_mode=?, accounting_date=?, paid=?, updated_at=?
+        WHERE invoice_no=?
+    """, (
+        payment_mode,
+        accounting_date,
+        paid,
+        now().isoformat(timespec="seconds"),
+        invoice_no,
+    ))
+    con.commit()
+    con.close()
+
+    audit_event(
+        "ARCHIVED_INVOICE_PAYMENT_EDIT",
+        f"invoice={invoice_no}; paid={paid}; mode={payment_mode}; date={accounting_date}",
+        request.remote_addr
+    )
+    flash(f"Encaissement de la facture {invoice_no} mis à jour.")
+    return redirect(url_for("invoices_page", q=invoice_no))
+
+
+def _collect_orphan_invoices(con):
+    """Retourne les factures historiques réellement orphelines.
+
+    Cette fonction est la source unique utilisée à la fois par le bouton de la
+    page Factures et par la page de maintenance /factures/orphelines.
+    """
+    ledger_rows = con.execute("""
+        SELECT le.*
+        FROM ledger_entries le
+        WHERE lower(COALESCE(le.operation,''))='vente'
+          AND COALESCE(TRIM(le.invoice_no),'')<>''
+        ORDER BY le.entry_date DESC, le.id DESC
+    """).fetchall()
+
+    repair_invoice_nos = {
+        canonical_client_invoice_no(row["invoice_no"])
+        for row in con.execute("""
+            SELECT DISTINCT TRIM(invoice_no) AS invoice_no
+            FROM repairs
+            WHERE COALESCE(TRIM(invoice_no),'')<>''
+        """).fetchall()
+    }
+
+    invoice_files = sorted(
+        p for p in FACTURES_ROOT.rglob("*.pdf")
+        if p.is_file() and "fournisseurs" not in {part.casefold() for part in p.parts}
+    ) if FACTURES_ROOT.exists() else []
+
+    items = []
+    seen = set()
+
+    for row in ledger_rows:
+        raw_invoice_no = canonical_client_invoice_no(row["invoice_no"])
+        invoice_no = raw_invoice_no if re.fullmatch(r"\d{12}", raw_invoice_no or "") else ""
+        pdf = None
+        inferred_from_pdf = False
+
+        if invoice_no:
+            pdf = find_client_invoice_pdf(invoice_no, row["party"] or "", invoice_files=invoice_files)
+        else:
+            pdf, inferred_no = _find_invoice_pdf_by_client_date(
+                row["party"] or "",
+                row["entry_date"] or "",
+                invoice_files=invoice_files,
+            )
+            if inferred_no:
+                invoice_no = inferred_no
+                inferred_from_pdf = True
+
+        if not invoice_no or invoice_no in repair_invoice_nos or invoice_no in seen:
+            continue
+        seen.add(invoice_no)
+
+        quote_row = _orphan_invoice_quote(con, row)
+        candidates = _orphan_invoice_candidates_for_ledger(con, row)
+
+        # Une facture explicitement issue d'un devis connu n'est pas une vraie
+        # orpheline si aucun dossier sans facture ne peut raisonnablement lui
+        # être associé. Elle reste visible dans Factures et son PDF reste intact.
+        if quote_row and not candidates:
+            continue
+
+        items.append({
+            "ledger_id": int(row["id"]),
+            "invoice_no": invoice_no,
+            "party": str(row["party"] or ""),
+            "entry_date": str(row["entry_date"] or "")[:10],
+            "amount": float(row["amount_ttc"] or 0),
+            "payment_type": str(row["payment_type"] or ""),
+            "remarks": str(row["remarks"] or ""),
+            "has_pdf": bool(pdf and pdf.exists()),
+            "pdf_name": pdf.name if pdf and pdf.exists() else "",
+            "inferred_from_pdf": inferred_from_pdf,
+            "candidates": candidates,
+        })
+
+    return items
+
+
+@app.route("/factures/orphelines")
+def orphan_invoices_page():
+    """Factures historiques connues/PDF présentes mais sans rattachement à repairs.invoice_no."""
+    con = db()
+    items = _collect_orphan_invoices(con)
+    con.close()
+
+    q = " ".join(request.args.get("q", "").split()).strip()
+    if q:
+        qk = q.casefold()
+        items = [
+            item for item in items
+            if qk in " ".join([
+                item["invoice_no"], item["party"], item["entry_date"],
+                f"{item['amount']:.2f}", item["payment_type"], item["remarks"],
+                item["pdf_name"],
+            ]).casefold()
+        ]
+
+    return render_template(
+        "orphan_invoices.html",
+        items=items,
+        q=q,
+    )
+
+
+@app.route("/factures/orphelines/<int:ledger_id>/pdf")
+def orphan_invoice_pdf(ledger_id):
+    con = db()
+    row = con.execute("""
+        SELECT * FROM ledger_entries
+        WHERE id=? AND lower(COALESCE(operation,''))='vente'
+    """, (ledger_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Vente historique introuvable", 404
+
+    invoice_no = canonical_client_invoice_no(row["invoice_no"])
+    pdf = None
+    if re.fullmatch(r"\d{12}", invoice_no or ""):
+        pdf = find_client_invoice_pdf(invoice_no, row["party"] or "")
+    else:
+        pdf, inferred_no = _find_invoice_pdf_by_client_date(
+            row["party"] or "", row["entry_date"] or ""
+        )
+        if inferred_no:
+            invoice_no = inferred_no
+
+    if not pdf or not pdf.exists():
+        return "PDF de facture introuvable", 404
+
+    return send_pdf_with_title(
+        pdf,
+        f"Facture {invoice_no} - {row['party'] or ''}",
+        download_name=pdf.name,
+    )
+
+
+@app.route("/factures/orphelines/<int:ledger_id>/rattacher", methods=["POST"])
+def orphan_invoice_attach(ledger_id):
+    try:
+        rid = int(request.form.get("rid") or 0)
+    except (TypeError, ValueError):
+        rid = 0
+    if rid <= 0:
+        flash("Choisis un dossier à rattacher.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    con = db()
+    ledger = con.execute("""
+        SELECT * FROM ledger_entries
+        WHERE id=? AND lower(COALESCE(operation,''))='vente'
+    """, (ledger_id,)).fetchone()
+    if not ledger:
+        con.close()
+        flash("Vente historique introuvable.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    invoice_no = canonical_client_invoice_no(ledger["invoice_no"])
+    resolved_pdf = None
+
+    if re.fullmatch(r"\d{12}", invoice_no or ""):
+        resolved_pdf = find_client_invoice_pdf(invoice_no, ledger["party"] or "")
+    else:
+        resolved_pdf, inferred_no = _find_invoice_pdf_by_client_date(
+            ledger["party"] or "", ledger["entry_date"] or ""
+        )
+        if inferred_no:
+            invoice_no = inferred_no
+
+    if not re.fullmatch(r"\d{12}", invoice_no or ""):
+        con.close()
+        flash("Impossible de déterminer un numéro de facture fiable depuis le PDF.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    target = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not target:
+        con.close()
+        flash("Dossier cible introuvable.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    existing = con.execute("""
+        SELECT r.id, c.name AS client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE TRIM(COALESCE(r.invoice_no,''))=?
+          AND r.id<>?
+        LIMIT 1
+    """, (invoice_no, rid)).fetchone()
+    if existing:
+        con.close()
+        flash(
+            f"Facture {invoice_no} déjà rattachée au dossier #{existing['id']} "
+            f"({existing['client_name']})."
+        )
+        return redirect(url_for("orphan_invoices_page", q=invoice_no))
+
+    current_no = str(target["invoice_no"] or "").strip()
+    if current_no and canonical_client_invoice_no(current_no) != invoice_no:
+        con.close()
+        flash(
+            f"Le dossier #{rid} possède déjà la facture {current_no}. "
+            "Aucune modification effectuée."
+        )
+        return redirect(url_for("orphan_invoices_page", q=invoice_no))
+
+    # Vérifie que le PDF annoncé existe réellement quand il est disponible.
+    pdf = resolved_pdf or find_client_invoice_pdf(invoice_no, ledger["party"] or "")
+    if not pdf or not pdf.exists():
+        con.close()
+        flash(
+            f"PDF {invoice_no} introuvable dans les archives. "
+            "Rattachement annulé pour éviter de créer une référence vide."
+        )
+        return redirect(url_for("orphan_invoices_page", q=invoice_no))
+
+    # IMPORTANT : on ne touche qu'au numéro de facture.
+    # Montants, paiement, CA, dates et PDF restent inchangés.
+    con.execute(
+        "UPDATE repairs SET invoice_no=? WHERE id=?",
+        (invoice_no, rid)
+    )
+    con.commit()
+    con.close()
+
+    audit_event(
+        "ORPHAN_INVOICE_ATTACH",
+        f"invoice={invoice_no}; ledger_id={ledger_id}; repair_id={rid}; pdf={pdf.name}",
+        request.remote_addr
+    )
+    flash(
+        f"Facture {invoice_no} rattachée au dossier #{rid}. "
+        f"PDF conservé : {pdf.name}."
+    )
+    return redirect(url_for("invoices_page", q=invoice_no))
+
+
+@app.route("/repair/<int:rid>/invoice-file.pdf")
+def invoice_archived_pdf(rid):
+    """
+    Sert la copie PDF déjà archivée de la facture.
+    Avec ?download=1, le fichier est téléchargé au lieu d'être affiché.
+    Contrairement à invoice_pdf(), cette route ne régénère et ne réécrit rien
+    tant qu'une archive correspondant à la langue existe.
+    """
+    lang = pdf_lang()
+    force_download = request.args.get("download") == "1" and request.args.get("inline") != "1"
+    con = db()
+    r = con.execute("""
+        SELECT r.id, r.invoice_no, r.finished_at, r.received_date,
+               r.legacy_imported, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not r:
+        return "Facture introuvable", 404
+    if not str(r["invoice_no"] or "").strip():
+        return "Aucune facture pour ce dossier", 404
+
+    invoice_no = str(r["invoice_no"]).strip()
+    client_name = str(r["client_name"] or "").strip()
+    suffix = pdf_language_suffix(lang)
+
+    # 1) Nom WOPR actuel exact, dans le dossier de la vraie date de facture.
+    invoice_date_value = invoice_no_date(invoice_no)
+    if not invoice_date_value:
+        invoice_date_value = str(r["finished_at"] or r["received_date"] or "")[:10]
+
+    expected_name = safe_document_name(
+        f"{safe_filename(client_name)}_{safe_filename(invoice_no)}_{suffix}.pdf"
+    )
+
+    try:
+        folder = year_month_folder(
+            FACTURES_ROOT,
+            invoice_date_value,
+            create=False
+        )
+    except Exception:
+        folder = None
+
+    if folder:
+        exact_path = Path(folder) / expected_name
+        if exact_path.is_file():
+            return send_pdf_with_title(
+                exact_path,
+                f"Facture {invoice_no} - {client_name}",
+                download_name=exact_path.name,
+                as_attachment=force_download,
+            )
+
+    # 2) Pour le français, accepter aussi le vrai PDF historique original
+    # (souvent sans suffixe _FR).
+    if lang == "fr":
+        original_pdf = (
+            find_client_invoice_pdf(invoice_no, client_name)
+            or find_document_recursive(FACTURES_ROOT, document_no=invoice_no)
+        )
+        if original_pdf and Path(original_pdf).is_file():
+            original_pdf = Path(original_pdf)
+            return send_pdf_with_title(
+                original_pdf,
+                f"Facture {invoice_no} - {client_name}",
+                download_name=original_pdf.name,
+                as_attachment=force_download,
+            )
+
+    # 3) Une traduction archivée peut avoir un nom légèrement différent :
+    # chercher numéro + suffixe sans modifier aucun fichier.
+    candidates = []
+    try:
+        for pdf in FACTURES_ROOT.rglob("*.pdf"):
+            if not pdf.is_file():
+                continue
+            stem_upper = pdf.stem.upper()
+            if invoice_no not in pdf.stem:
+                continue
+            if suffix.upper() in stem_upper.split("_"):
+                candidates.append(pdf)
+    except Exception:
+        candidates = []
+
+    if len(candidates) == 1:
+        pdf = candidates[0]
+        return send_pdf_with_title(
+            pdf,
+            f"Facture {invoice_no} - {client_name}",
+            download_name=pdf.name,
+            as_attachment=force_download,
+        )
+
+    # Aucun PDF archivé : on génère seulement en dernier recours.
+    # Le paramètre est explicitement conservé pour éviter une boucle.
+    return redirect(url_for(
+        "invoice_pdf",
+        rid=rid,
+        lang=lang,
+        _wopr_download="1" if force_download else None,
+    ))
 
 
 @app.route("/repair/<int:rid>/invoice.pdf")
 def invoice_pdf(rid):
     lang = pdf_lang()
+    # Affichage/impression : cette route reste toujours inline pour les liens normaux.
+    # Le téléchargement n'est autorisé que via le fallback interne de Facture PDF.
+    force_download = request.args.get("_wopr_download") == "1" and request.args.get("inline") != "1"
     con = db()
     r = con.execute("""
         SELECT r.*, c.name client_name, c.company client_company, c.address client_address,
@@ -12049,6 +14998,7 @@ def invoice_pdf(rid):
                 original_pdf,
                 f"Facture {r['invoice_no']} - {r['client_name']}",
                 download_name=legacy_filename,
+                as_attachment=force_download,
             )
 
     conf = cfg()
@@ -12378,7 +15328,7 @@ def invoice_pdf(rid):
         # V2.3.239 : la copie officielle est déjà archivée dans
         # private/documents/Factures. Affichage navigateur, sans doublon
         # automatique dans Téléchargements.
-        as_attachment=False,
+        as_attachment=force_download,
         download_name=invoice_filename
     )
 
@@ -12622,9 +15572,17 @@ def invoice_email(rid):
 
         ident = business_identity()
         subject = f"{ident['name']} - Facture {r['invoice_no']}"
+        sumup_url = str(r["sumup_payment_url"] or "").strip()
+        sumup_block = ""
+        if read_sumup_settings().get("enabled") and sumup_url:
+            sumup_block = (
+                "Si vous souhaitez régler en ligne, vous pouvez utiliser ce lien SumUp sécurisé :\n"
+                f"{sumup_url}\n\n"
+            )
         body = (
             "Bonjour,\n\n"
             f"Veuillez trouver ci-joint votre facture {ident['name']}.\n\n"
+            f"{sumup_block}"
             "Je vous remercie pour votre confiance.\n\n"
             "Cordialement,\n"
             f"{business_signature()}"
@@ -13252,7 +16210,7 @@ def import_proton_cancel():
 def global_search():
     """Recherche globale WOPR : multi-mots, accents et ponctuation ignorés."""
     q = " ".join(str(request.args.get("q") or "").split()).strip()
-    results = {"clients": [], "repairs": [], "ledger": [], "quotes": []}
+    results = {"clients": [], "repairs": [], "ledger": [], "quotes": [], "archived_invoices": []}
 
     if q:
         normalized_q = normalize_global_search(q)
@@ -13341,6 +16299,47 @@ def global_search():
             ORDER BY entry_date DESC, id DESC
             LIMIT 50
         """, params).fetchall()
+
+        # Factures historiques qui n'existent que dans archived_invoices.
+        # La page Factures les affiche déjà ; la recherche globale doit donc
+        # interroger la même source afin qu'une facture historique ne soit pas
+        # "visible ici mais introuvable là-bas".
+        archived_expr = [
+            "COALESCE(ai.invoice_no,'')",
+            "COALESCE(ai.client_name,'')",
+            "COALESCE(ai.invoice_date,'')",
+            "COALESCE(ai.payment_mode,'')",
+            "COALESCE(ai.accounting_date,'')",
+            "COALESCE(ai.notes,'')",
+            "printf('%.2f',COALESCE(ai.invoice_total,0))",
+        ]
+        where, params = build_where(archived_expr)
+        archived_rows = con.execute(f"""
+            SELECT ai.*
+            FROM archived_invoices ai
+            WHERE {where}
+            ORDER BY ai.invoice_date DESC, ai.invoice_no DESC
+            LIMIT 50
+        """, params).fetchall()
+
+        # Évite les doublons lorsque la même facture est déjà trouvée via un
+        # dossier réparation ou une vente historique. archived_invoices reste
+        # la source de secours pour les factures qui n'ont aucune autre ligne.
+        found_invoice_nos = {
+            canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
+            for r in results["repairs"]
+            if str(r["invoice_no"] or "").strip()
+        }
+        found_invoice_nos.update(
+            canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
+            for r in results["ledger"]
+            if str(r["invoice_no"] or "").strip()
+        )
+        results["archived_invoices"] = [
+            r for r in archived_rows
+            if canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
+               not in found_invoice_nos
+        ]
 
         quote_expr = [
             "COALESCE(q.quote_no,'')",

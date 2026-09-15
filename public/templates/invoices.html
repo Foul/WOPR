@@ -7,28 +7,58 @@
     <div class="banner-title">Factures</div>
     <div class="banner-sub">Dernières factures en premier</div>
   </div>
-  <a class="button invoice-shortcut-btn" href="{{ url_for('simple_invoice_new') }}"><span class="invoice-shortcut-icon">➕</span><span>Facture simple</span></a>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+    {% if sumup_enabled %}<a class="button" href="{{ url_for('sumup_transactions_page') }}">💳 Paiements SumUp</a>{% endif %}
+    {% if orphan_invoice_count %}<a class="button" href="{{ url_for('orphan_invoices_page') }}">🧩 Factures orphelines ({{ orphan_invoice_count }})</a>{% endif %}
+    <a class="button invoice-shortcut-btn" href="{{ url_for('simple_invoice_new') }}"><span class="invoice-shortcut-icon">➕</span><span>Facture simple</span></a>
+  </div>
+</div>
+
+<div class="ledger-year-switch" style="margin:10px 0 14px;">
+  {% if year == current_year %}
+    <span class="ledger-year-current">{{ current_year }}</span>
+    {% if archive_years %}
+      <details class="ledger-archive">
+        <summary>Archives</summary>
+        {% for archive_year in archive_years %}
+          <a href="{{ url_for('invoices_page', year=archive_year) }}">{{ archive_year }}</a>
+        {% endfor %}
+      </details>
+    {% endif %}
+  {% else %}
+    <a class="button primary" href="{{ url_for('invoices_page', year=current_year) }}">← Retour {{ current_year }}</a>
+    <span class="ledger-year-archive">Archive {{ year }}</span>
+  {% endif %}
 </div>
 
 {% if unpaid_only %}
 <div class="sheet-note" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
   <strong>💳 Affichage : factures impayées uniquement</strong>
-  <a class="mini-btn" href="{{ url_for('invoices_page') }}">Voir toutes les factures</a>
+  <a class="mini-btn" href="{{ url_for('invoices_page', year=year) }}">Voir toutes les factures</a>
 </div>
 {% endif %}
 
 <form method="get" action="{{ url_for('invoices_page') }}" class="invoice-search-bar">
+  <input type="hidden" name="year" value="{{ year }}">
   <input type="search"
          name="q"
          value="{{ q or '' }}"
-         placeholder="Rechercher facture, client, date, mode de paiement..."
+         placeholder="Rechercher facture, client, montant (ex. 12 €), date, paiement..."
          autocomplete="off">
   <button class="button primary" type="submit">RECHERCHER</button>
   {% if q %}
-    <a class="button" href="{{ url_for('invoices_page') }}">Effacer</a>
+    <a class="button" href="{{ url_for('invoices_page', year=year) }}">Effacer</a>
   {% endif %}
 </form>
+{% if amount_query is not none %}
+<div class="sheet-note" style="margin-bottom:10px;">
+  Recherche par montant exact : <strong>{{ '%.2f'|format(amount_query)|replace('.', ',') }} €</strong>
+</div>
+{% endif %}
 
+{% if search_all_years %}
+<div class="tiny-note" style="margin:6px 0 10px;">🔎 Recherche dans toutes les années, archives comprises.</div>
+{% endif %}
 <div class="table-scroll">
 <table class="invoice-list-table">
   <thead>
@@ -49,16 +79,24 @@
         {% if r['invoice_date'] %}{{ r['invoice_date'][8:10] }}/{{ r['invoice_date'][5:7] }}/{{ r['invoice_date'][0:4] }}{% endif %}
       </td>
       <td>
-        <a class="invoice-number-edit-link"
-           href="{{ url_for('repair_close', rid=r['id'], return='factures') }}"
-           title="Modifier la facture">
-          {{ r['invoice_no'] }}
-        </a>
-        {% if r['historical'] %}
-          <span class="legacy-mini">ODS</span>
-        {% endif %}
-        {% if r['simple_invoice'] %}
-          <span class="simple-invoice-mini">SIMPLE</span>
+        {% if r.get('archived_meta') %}
+          <strong>{{ r['invoice_no'] }}</strong>
+          <span class="legacy-mini">HIST.</span>
+        {% elif r.get('ledger_only') %}
+          <strong>{{ r['invoice_no'] }}</strong>
+          <span class="legacy-mini">HIST.</span>
+        {% else %}
+          <a class="invoice-number-edit-link"
+             href="{{ url_for('repair_close', rid=r['id'], return='factures') }}"
+             title="Modifier la facture">
+            {{ r['invoice_no'] }}
+          </a>
+          {% if r['historical'] %}
+            <span class="legacy-mini">ODS</span>
+          {% endif %}
+          {% if r['simple_invoice'] %}
+            <span class="simple-invoice-mini">SIMPLE</span>
+          {% endif %}
         {% endif %}
       </td>
       <td><strong>{{ r['client_name'] }}</strong></td>
@@ -76,26 +114,82 @@
         {% endif %}
       </td>
       <td class="invoice-list-actions">
-        <a class="mini-btn invoice-edit-direct wopr-action-edit"
-           href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">
-          Modifier facture
-        </a>
-        <select class="pdf-lang-select mini-btn wopr-action-open wopr-action-invoice-pdf" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
-          <option value="">🌐 Facture PDF</option>
-          {% for code, info in pdf_languages.items() %}
-            <option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>
-          {% endfor %}
-        </select>
-        {% if r['client_email'] %}
-        <a class="mini-btn invoice-email-btn wopr-action-send" href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">📧 Envoyer</a>
+        {% if r.get('archived_meta') %}
+          <a class="mini-btn wopr-action-open"
+             href="{{ url_for('archived_historical_invoice_pdf', invoice_no=r['invoice_no']) }}"
+             target="_blank"
+             title="{{ r['pdf_name'] }}">
+            📄 Ouvrir PDF
+          </a>
+
+          <details class="invoice-payment-edit" style="display:inline-block;">
+            <summary class="mini-btn wopr-action-edit" style="cursor:pointer;">💰 Encaissement</summary>
+            <form method="post"
+                  action="{{ url_for('archived_historical_invoice_payment', invoice_no=r['invoice_no']) }}"
+                  style="margin-top:6px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;min-width:230px;">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <label style="display:block;margin-bottom:6px;">
+                <input type="checkbox" name="paid" {% if r['is_paid'] %}checked{% endif %}>
+                Payée
+              </label>
+              <label style="display:block;margin-bottom:6px;">
+                Mode
+                <select name="payment_mode">
+                  {% for mode in ['', 'ESP', 'CB', 'VIR', 'PAY', 'BTC', 'CHQ'] %}
+                    <option value="{{ mode }}" {% if r['payment_mode_display']==mode %}selected{% endif %}>{{ mode or '—' }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label style="display:block;margin-bottom:6px;">
+                Date encaissée
+                <input type="date" name="accounting_date" value="{{ r['accounting_date'] or '' }}">
+              </label>
+              <button class="mini-btn wopr-action-save" type="submit">💾 Enregistrer</button>
+            </form>
+          </details>
+        {% elif r.get('ledger_only') %}
+          <a class="mini-btn wopr-action-open"
+             href="{{ url_for('orphan_invoice_pdf', ledger_id=r['ledger_id']) }}"
+             target="_blank"
+             title="{{ r['pdf_name'] }}">
+            📄 Ouvrir PDF
+          </a>
         {% else %}
-        <span class="invoice-email-missing" title="Aucune adresse e-mail client">📧 —</span>
+          <a class="mini-btn invoice-edit-direct wopr-action-edit"
+             href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">
+            Modifier facture
+          </a>
+          <select class="pdf-lang-select mini-btn wopr-action-open wopr-action-invoice-pdf" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
+            <option value="">🌐 Facture PDF</option>
+            {% for code, info in pdf_languages.items() %}
+              <option value="{{ url_for('invoice_archived_pdf', rid=r['id'], lang=code, download=1) }}">{{ info[0] }} - {{ info[1] }}</option>
+            {% endfor %}
+          </select>
+          {% if r['client_email'] %}
+          <a class="mini-btn invoice-email-btn wopr-action-send" href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">📧 Envoyer</a>
+          {% else %}
+          <span class="invoice-email-missing" title="Aucune adresse e-mail client">📧 —</span>
+          {% endif %}
+          {% if sumup_enabled and not r['is_paid'] %}
+          <a class="mini-btn wopr-action-send"
+             href="{{ url_for('invoice_sumup_link', rid=r['id']) }}"
+             title="{{ 'Lien SumUp enregistré' if r['sumup_payment_url'] else 'Ajouter un lien de paiement SumUp' }}">
+            💳 SumUp{% if r['sumup_payment_url'] %} ✓{% endif %}
+          </a>
+          {% endif %}
+          {% if sumup_enabled and r['sumup_transaction_id'] %}
+          <a class="mini-btn wopr-action-open"
+             href="{{ url_for('sumup_receipt', rid=r['id']) }}" target="_blank"
+             title="Ticket CB SumUp {{ r['sumup_transaction_code'] }}">
+            🧾 Ticket CB
+          </a>
+          {% endif %}
+          <button type="button"
+                  class="mini-btn wopr-action-folder"
+                  data-wopr-folder-url="{{ url_for('repair_invoice_folder', rid=r['id']) }}">
+            📁 Dossier
+          </button>
         {% endif %}
-        <button type="button"
-                class="mini-btn wopr-action-folder"
-                data-wopr-folder-url="{{ url_for('repair_invoice_folder', rid=r['id']) }}">
-          📁 Dossier
-        </button>
       </td>
     </tr>
   {% else %}

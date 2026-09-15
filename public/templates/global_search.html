@@ -21,6 +21,10 @@
 {% for e in results.ledger %}<div class="search-card"><strong>{{ e.entry_date }} · {{ e.operation }} · {{ e.party or '' }}</strong><br>{{ e.description or '' }} · {{ '%.2f'|format(e.amount_ttc or 0) }} €{% if e.invoice_no %} · {{ e.invoice_no }}{% endif %}<div><a class="button" href="{{ url_for('achats_ventes_page', year=e.entry_date[:4], q=q) }}">Voir dans Achats / Ventes</a></div></div>{% endfor %}
 </div></section>{% endif %}
 
+{% if results.archived_invoices %}<section class="search-section"><h2>🧾 Factures historiques ({{ results.archived_invoices|length }})</h2><div class="search-cards">
+{% for f in results.archived_invoices %}<div class="search-card"><strong>{{ f.invoice_date }} · {{ f.client_name or '' }}</strong><br>Facture {{ f.invoice_no }} · {{ '%.2f'|format(f.invoice_total or 0) }} €{% if f.payment_mode %} · {{ f.payment_mode }}{% endif %}<div><a class="button primary" href="{{ url_for('archived_historical_invoice_pdf', invoice_no=f.invoice_no) }}">📄 Ouvrir le PDF</a> <a class="button" href="{{ url_for('invoices_page', q=f.invoice_no) }}">Voir dans Factures</a></div></div>{% endfor %}
+</div></section>{% endif %}
+
 {% if results.quotes %}<section class="search-section"><h2>📝 Devis ({{ results.quotes|length }})</h2><div class="search-cards">
 {% for d in results.quotes %}<div class="search-card"><strong>{{ d.quote_date }} · {{ d.quote_no }} · {{ d.client_name }}</strong><br>{{ d.status }}<div><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">Ouvrir le devis</a></div></div>{% endfor %}
 </div></section>{% endif %}

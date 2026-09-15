@@ -68,6 +68,17 @@
   <div class="section-title">Règlement et remise de la facture</div>
   <div class="grid two billing-meta">
 
+    <label>Numéro de facture
+      <input type="text"
+             name="invoice_no"
+             value="{{ r['invoice_no'] or '' }}"
+             inputmode="numeric"
+             maxlength="12"
+             pattern="[0-9]{12}"
+             placeholder="JJMMYYYYHHMM">
+      <small>12 chiffres. Exemple : 300720261200. Contrôle anti-doublon à l'enregistrement.</small>
+    </label>
+
     <label>Date de facture
       <input type="date" name="invoice_date" value="{{ invoice_date_value }}" required>
       <small>Modifiable avant ou après création de la facture.</small>
@@ -151,15 +162,15 @@
       {% endif %}
       Les montants historiques sont conservés. La <strong>date d'encaissement</strong> reste modifiable ici.
     {% elif r["invoice_no"] %}
-      Le numéro <strong>{{ r["invoice_no"] }}</strong> reste inchangé.
+      Le numéro actuel est <strong>{{ r["invoice_no"] }}</strong>. Tu peux le corriger ci-dessus ; WOPR vérifie qu'il n'est pas déjà utilisé.
     {% else %}
-      Le numéro de facture sera créé au moment de l'enregistrement.
+      Laisse le numéro vide pour une génération automatique, ou saisis un numéro historique au format JJMMYYYYHHMM.
     {% endif %}
   </div>
 
   {% if r['legacy_imported'] and original_invoice_pdf and not invoice_was_reconstructed %}
     <div class="historical-pdf-original">
-      <a class="button" target="_blank" href="{{ url_for('invoice_pdf', rid=r['id']) }}">Facture PDF originale</a>
+      <a class="button" target="_blank" href="{{ url_for('invoice_archived_pdf', rid=r['id']) }}">Facture PDF originale</a>
     </div>
   {% endif %}
 

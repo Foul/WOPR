@@ -13,26 +13,25 @@
   </div>
 
   <div class="ledger-year-switch">
-    {% if year == current_year %}
-      <span class="ledger-year-current">{{ current_year }}</span>
-      {% if archive_years %}
+    {% if year == 2026 %}
+      <span class="ledger-year-current">2026</span>
       <details class="ledger-archive">
         <summary>Archives</summary>
-        {% for archive_year in archive_years %}
-        <a href="{{ url_for('achats_ventes_page', year=archive_year) }}">{{ archive_year }}</a>
-        {% endfor %}
+        <a href="{{ url_for('achats_ventes_page', year=2025) }}">2025</a>
       </details>
-      {% endif %}
     {% else %}
-      <a class="button primary" href="{{ url_for('achats_ventes_page', year=current_year) }}">← Retour {{ current_year }}</a>
-      <span class="ledger-year-archive">Archive {{ year }}</span>
+      <a class="button primary" href="{{ url_for('achats_ventes_page', year=2026) }}">← Retour 2026</a>
+      <span class="ledger-year-archive">Archive 2025</span>
     {% endif %}
   </div>
 </div>
 
+{% if year in [2025, 2026] %}
 <div class="ledger-history-note">
+  Données historiques reprises du classeur WOPR.ods — toutes les lignes restent modifiables.<br>
   <strong>🔒 Chiffres de vente / CA : source unique = Suivi.</strong> Les PDF sont uniquement des justificatifs et ne sont jamais lus pour calculer un montant.
 </div>
+{% endif %}
 
 <div class="ledger-summary">
   <div class="ledger-summary-card">
@@ -64,7 +63,7 @@
     {% endif %}
   </form>
   {% if search_q %}
-    <small><strong>{{ search_count }}</strong> résultat(s) pour « {{ search_q }} ».</small>
+    <small><strong>{{ search_count }}</strong> résultat(s) pour « {{ search_q }} » — toutes années, archives comprises.</small>
   {% endif %}
 </div>
 

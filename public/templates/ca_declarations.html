@@ -121,6 +121,18 @@
             <td class="case"></td>
           </tr>
 
+          {% if y.is_current_year %}
+          <tr class="ca-current-period-row">
+            <td colspan="15">
+              {% if y.closed_month_name %}
+                <span><strong>Cumul au 31 {{ y.closed_month_name|lower }} :</strong> {{ eur(y.closed_month_total) }}</span>
+              {% endif %}
+              <span><strong>{{ y.current_month_name }} en cours :</strong> {{ eur(y.current_month_total) }}</span>
+              <span><strong>Total encaissé {{ y.year }} :</strong> {{ eur(y.grand_total) }}</span>
+            </td>
+          </tr>
+          {% endif %}
+
           <tr class="ca-year-controls">
             <td colspan="15">
               <button type="button" class="button ca-save-button" onclick="this.form.requestSubmit()">ENREGISTRER LES MODIFICATIONS</button>

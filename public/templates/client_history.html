@@ -61,7 +61,7 @@
           <strong>{{ last_invoice.invoice_no }}</strong>
           <small>{{ last_invoice.received_date }} · {{ '%.2f'|format((last_invoice.service_amount or 0)+(last_invoice.goods_amount or 0)) }} €</small>
           <p>{{ last_invoice.device_type or 'Facture client' }}{% if last_invoice.brand_model %} · {{ last_invoice.brand_model }}{% endif %}</p>
-          <a class="button" href="{{ url_for('invoice_pdf', rid=last_invoice.id) }}" target="_blank">📄 Ouvrir la facture</a>
+          <a class="button" href="{{ url_for('invoice_archived_pdf', rid=last_invoice.id) }}" target="_blank">📄 Ouvrir la facture</a>
         {% else %}
           <span class="cell-muted">Aucune facture</span>
         {% endif %}
@@ -105,7 +105,7 @@
         <td><span class="history-status status-{{ (r.status or '')|lower|replace(' ', '-')|replace('é','e')|replace('è','e')|replace('à','a') }}">{{ r.status }}</span></td>
         <td>{% if r.invoice_no %}<strong>{{ r.invoice_no }}</strong>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
         <td class="nowrap"><strong>{{ '%.2f'|format((r.service_amount or 0)+(r.goods_amount or 0)) }} €</strong>{% if r.paid %}<div class="paid-mark">✓ encaissé</div>{% endif %}</td>
-        <td class="history-row-actions"><a class="button" href="{{ url_for('repair_detail', rid=r.id) }}">📂 Dossier</a>{% if r.invoice_no %}<a class="button" href="{{ url_for('invoice_pdf', rid=r.id) }}" target="_blank">📄 Facture</a>{% endif %}</td>
+        <td class="history-row-actions"><a class="button" href="{{ url_for('repair_detail', rid=r.id) }}">📂 Dossier</a>{% if r.invoice_no %}<a class="button" href="{{ url_for('invoice_archived_pdf', rid=r.id) }}" target="_blank">📄 Facture</a>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody></table></div>

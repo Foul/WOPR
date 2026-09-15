@@ -49,10 +49,7 @@
       WOPR crée une sauvegarde quotidienne et une nouvelle sauvegarde lorsque tu l'arrêtes avec le bouton/script d'arrêt.
       Les nouvelles sauvegardes sont compressées en <strong>GZIP</strong>. Les <strong>30 dernières sauvegardes générées par WOPR</strong> sont conservées dans <code>private/data/backups/</code>.
     </p>
-    <div class="backup-auto-status">
-      ✓ Sauvegarde quotidienne + sauvegarde à l'arrêt actives
-      {% if latest_backup_at %}<br><small>Dernière sauvegarde réelle : {{ latest_backup_at }}</small>{% endif %}
-    </div>
+    <div class="backup-auto-status">✓ Sauvegarde quotidienne + sauvegarde à l'arrêt actives</div>
     <form method="post" style="margin-top:12px;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="backup">
@@ -78,18 +75,20 @@
     {% endif %}
   </section>
   <section class="security-card">
-    <h2>🔎 Contrôle des documents</h2>
-    <p>
-      Vérifie en lecture seule la cohérence entre la base WOPR et les PDF archivés
-      dans <strong>Factures</strong>, <strong>Devis</strong> et <strong>Commandes</strong>.
-    </p>
-    <p class="muted">
-      Aucun fichier ni aucune donnée ne sont modifiés : les anciens noms atypiques
-      sont simplement signalés comme cas à vérifier.
-    </p>
-    <a class="button" href="{{ url_for('documents_audit') }}">Contrôler les documents</a>
+    <h2>🧳 Diagnostic de portabilité</h2>
+    <div class="smtp-status {% if portability.ready %}ok{% else %}warn{% endif %}">
+      {% if portability.ready %}✓ WOPR est prêt à être déplacé{% else %}⚠ Un point bloque encore la portabilité{% endif %}
+    </div>
+    <ul class="backup-list portability-list">
+      {% for item in portability.checks %}
+      <li>
+        <strong>{% if item.ok %}✓{% elif item.required %}⚠{% else %}○{% endif %} {{ item.label }}</strong><br>
+        <small>{{ item.detail }}</small>
+      </li>
+      {% endfor %}
+    </ul>
   </section>
-  <section class="security-card smtp-card">
+  <section class="security-card">
     <h2>📧 Envoi des factures — Proton SMTP</h2>
     <p>Le jeton SMTP reste uniquement sur ce PC dans <code>data/smtp_settings.json</code> et n'est jamais affiché après enregistrement.</p>
     <form method="post" class="grid one">
@@ -132,20 +131,91 @@
       <button class="primary" type="submit">Enregistrer SMTP Proton</button>
     </form>
   </section>
-  <section class="security-card">
-    <h2>🧳 Diagnostic de portabilité</h2>
-    <div class="smtp-status {% if portability.ready %}ok{% else %}warn{% endif %}">
-      {% if portability.ready %}✓ WOPR est prêt à être déplacé{% else %}⚠ Un point bloque encore la portabilité{% endif %}
-    </div>
-    <ul class="backup-list portability-list">
-      {% for item in portability.checks %}
-      <li>
-        <strong>{% if item.ok %}✓{% elif item.required %}⚠{% else %}○{% endif %} {{ item.label }}</strong><br>
-        <small>{{ item.detail }}</small>
-      </li>
-      {% endfor %}
-    </ul>
+  <section class="security-card" id="integrations">
+    <h2>🔵 Intégration Abby</h2>
+    <p>Configuration et secrets Abby. Les fonctions métier restent accessibles dans la page <strong>Abby</strong>.</p>
+    <p class="tiny-note">🔐 La clé API est <strong>chiffrée sur disque</strong> et n'est déchiffrée qu'au moment d'un appel Abby ou lorsque tu demandes explicitement à l'afficher.</p>
+    <form method="post" class="grid one">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="abby_settings">
+      <label class="checkboxline">
+        <input type="checkbox" name="abby_enabled" {% if abby.enabled %}checked{% endif %}>
+        Activer l'intégration Abby
+      </label>
+      <label>Clé API Abby
+        <div class="password-field">
+          <input type="password" name="abby_api_key" value="" autocomplete="off" spellcheck="false"
+                 placeholder="{{ 'Clé déjà enregistrée — laisser vide pour la conserver' if abby_api_key_configured else 'suk-…' }}">
+          <button type="button" class="password-toggle abby-key-toggle"
+                  data-reveal-url="{{ url_for('abby_api_key_reveal') }}"
+                  data-csrf="{{ csrf_token() }}" aria-label="Afficher la clé">👁</button>
+        </div>
+      </label>
+      <button class="primary" type="submit">Enregistrer Abby</button>
+    </form>
+    <form method="post" action="{{ url_for('abby_test') }}" style="margin-top:10px;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="button" type="submit" {% if not abby_api_key_configured %}disabled{% endif %}>🔌 Tester la connexion</button>
+    </form>
+    {% if abby.last_test_at %}
+      <div class="smtp-status {% if abby.last_test_ok %}ok{% else %}warn{% endif %}" style="margin-top:10px;">
+        {{ '✓' if abby.last_test_ok else '✗' }} {{ abby.last_test_message }}
+      </div>
+    {% endif %}
+    <p style="margin-top:10px;"><a class="button" href="{{ url_for('abby_page') }}">Ouvrir Abby</a></p>
   </section>
+
+  <section class="security-card" id="sumup-integration">
+    <h2>💳 Intégration SumUp</h2>
+    <p>Liens de paiement par facture, récupération des transactions et impression des tickets CB SumUp.</p>
+    <p class="tiny-note">🔐 La clé API est <strong>chiffrée sur disque</strong>. Elle n'est déchiffrée qu'au moment d'un appel SumUp ou lorsque tu demandes explicitement à l'afficher.</p>
+    <form method="post" class="grid one">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="sumup_settings">
+      <label class="checkboxline">
+        <input type="checkbox" name="sumup_enabled" {% if sumup.enabled %}checked{% endif %}>
+        Activer l'intégration SumUp
+      </label>
+      <label>Clé API SumUp
+        <div class="password-field">
+          <input type="password" name="sumup_api_key" value="" autocomplete="off" spellcheck="false"
+                 placeholder="{{ 'Clé déjà enregistrée — laisser vide pour la conserver' if sumup_api_key_configured else 'sup_sk_…' }}">
+          <button type="button" class="password-toggle abby-key-toggle"
+                  data-reveal-url="{{ url_for('sumup_api_key_reveal') }}"
+                  data-csrf="{{ csrf_token() }}" aria-label="Afficher la clé">👁</button>
+        </div>
+      </label>
+      <label>Merchant code SumUp
+        <input name="sumup_merchant_code" value="{{ sumup.merchant_code or '' }}" autocomplete="off"
+               placeholder="ex. MH4H92C7">
+      </label>
+      <div class="smtp-status {% if sumup.enabled and sumup_api_key_configured and sumup.merchant_code %}ok{% else %}warn{% endif %}">
+        {% if sumup.enabled and sumup_api_key_configured and sumup.merchant_code %}
+          ✓ SumUp actif — API configurée
+        {% elif sumup.enabled %}
+          ⚠ SumUp actif — API incomplète
+        {% else %}
+          SumUp désactivé
+        {% endif %}
+      </div>
+      <small>Les Payment Links longue durée restent créés dans SumUp puis collés dans WOPR. L'API sert ici au suivi des transactions et aux tickets CB.</small>
+      <button class="primary" type="submit">Enregistrer SumUp</button>
+    </form>
+    <form method="post" action="{{ url_for('sumup_test') }}" style="margin-top:10px;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="button" type="submit" {% if not sumup_api_key_configured or not sumup.merchant_code %}disabled{% endif %}>🔌 Tester la connexion</button>
+    </form>
+    {% if sumup.last_test_at %}
+      <div class="smtp-status {% if sumup.last_test_ok %}ok{% else %}warn{% endif %}" style="margin-top:10px;">
+        {{ '✓' if sumup.last_test_ok else '✗' }} {{ sumup.last_test_message }}
+      </div>
+    {% endif %}
+    {% if sumup.enabled and sumup_api_key_configured and sumup.merchant_code %}
+      <p style="margin-top:10px;"><a class="button" href="{{ url_for('sumup_transactions_page') }}">Voir les paiements SumUp</a></p>
+    {% endif %}
+  </section>
+
+
 
   <section class="security-card">
     <h2>Protections actives</h2>

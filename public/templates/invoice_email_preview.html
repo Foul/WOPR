@@ -36,7 +36,7 @@
     <div class="footer-actions">
       <button class="primary email-send-btn" type="submit">📧 Envoyer la facture</button>
       <a class="button" href="{{ cancel_url }}">Annuler</a>
-      <a class="button" href="{{ url_for('invoice_pdf', rid=r['id'], lang=pdf_lang) }}" target="_blank">Voir le PDF</a>
+      <a class="button" href="{{ url_for('invoice_archived_pdf', rid=r['id'], lang=pdf_lang) }}" target="_blank">Voir le PDF</a>
     </div>
   </form>
 </div>

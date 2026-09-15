@@ -51,7 +51,7 @@
 
 <div class="followup-year-tabs">
   {% for y in available_years %}
-    <a class="year-tab {% if y == selected_year %}active{% endif %}" href="{{ url_for('index', year=y, a_restituer=1 if to_return_only else None, q=client_search or None) }}">{{ y }}</a>
+    <a class="year-tab {% if y == selected_year %}active{% endif %}" href="{{ url_for('index', year=y, a_restituer=1 if to_return_only else None) if search_all_years else url_for('index', year=y, a_restituer=1 if to_return_only else None, q=client_search or None) }}">{{ y }}</a>
   {% endfor %}
 </div>
 
@@ -65,12 +65,15 @@
     <input type="hidden" name="year" value="{{ selected_year }}">
     {% if to_return_only %}<input type="hidden" name="a_restituer" value="1">{% endif %}
     <input type="search" name="q" value="{{ client_search or '' }}"
-           placeholder="🔎 Rechercher un client…" aria-label="Rechercher un client dans le suivi" autocomplete="off">
+           placeholder="🔎 Client, facture, dossier, panne…" aria-label="Rechercher dans tout le suivi" autocomplete="off">
     <button class="button" type="submit">Rechercher</button>
     {% if client_search %}
       <a class="button" href="{{ url_for('index', year=selected_year, a_restituer=1 if to_return_only else None) }}">Effacer</a>
     {% endif %}
   </form>
+  {% if search_all_years %}
+    <span class="workshop-filter-note">🔎 Recherche dans toutes les années, archives comprises.</span>
+  {% endif %}
 
   {% if to_return_only %}
     <span class="workshop-filter-note">Uniquement le matériel réellement encore à restituer.</span>
@@ -139,7 +142,7 @@
 
           <td class="followup-last-name">
             <strong>{{ r['client_last_name'] or r['client_name'] or '' }}</strong>
-            {% if r['legacy_imported'] %}<span class="legacy-mini">HIST</span>{% endif %}
+            {% if r['legacy_imported'] %}<span class="legacy-mini">ODS</span>{% endif %}
             {% if r.get('_virtual_payment') %}
               <span class="payment-mode-badge" title="Encaissement réalisé sur ce mois">Encaissement</span>
             {% elif r['status']=='Terminé' %}
@@ -302,7 +305,7 @@
                     </select>
                   </div>
                   {% if not r['payment_mode'] and r['payment_method'] %}
-                    <small>Historique : {{ r['payment_method'] }}</small>
+                    <small>Historique ODS : {{ r['payment_method'] }}</small>
                   {% endif %}
 
                   <div class="payment-mix-fields" data-payment-mix hidden>

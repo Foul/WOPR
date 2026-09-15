@@ -1703,6 +1703,29 @@ code{background:#eef3f8;padding:2px 5px;border-radius:4px}
   text-align:left;
   border-top:0 !important;
 }
+.ca-current-period-row td{
+  padding:10px 12px;
+  background:#eef6ff;
+  color:#17324d;
+  border-top:1px solid #2f91ff;
+  border-bottom:1px solid #2f91ff;
+  text-align:center;
+}
+.ca-current-period-row span{
+  display:inline-block;
+  margin:2px 14px;
+}
+body.theme-dark .ca-current-period-row td,
+body.theme-terminal .ca-current-period-row td,
+body.theme-8bit .ca-current-period-row td{
+  background:var(--panel,#101820);
+  color:#f2f5f8 !important;
+}
+body.theme-dark .ca-current-period-row strong,
+body.theme-terminal .ca-current-period-row strong,
+body.theme-8bit .ca-current-period-row strong{
+  color:#ffffff !important;
+}
 .ca-save-button{
   font-weight:800;
 }

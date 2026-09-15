@@ -35,6 +35,10 @@
 
   function inlineUrl(url) {
     const u = new URL(url, window.location.href);
+    // Le sélecteur Facture PDF peut contenir download=1. Pour le bouton
+    // d'impression, on force explicitement le comportement inverse.
+    u.searchParams.delete("download");
+    u.searchParams.delete("_wopr_download");
     u.searchParams.set("inline", "1");
     return u.toString();
   }

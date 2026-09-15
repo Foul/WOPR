@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}SumUp - Facture {{ r['invoice_no'] }} - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-top">WOPR</div>
+  <div class="banner-title">💳 SumUp — facture {{ r['invoice_no'] }}</div>
+</div>
+
+<div class="email-preview-card">
+  <p><strong>Client :</strong> {{ r['client_name'] }}</p>
+  <p>Crée un <strong>Payment Link</strong> dédié à cette facture dans SumUp, puis colle-le ici. Tant que l'intégration SumUp est active, WOPR l'ajoutera automatiquement au mail de facture.</p>
+
+  <form method="post" class="grid one">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="sumup_action" value="save">
+    <label>Lien de paiement SumUp
+      <input type="url" name="sumup_payment_url" value="{{ r['sumup_payment_url'] or '' }}"
+             placeholder="https://…" autocomplete="off" required>
+    </label>
+    <div class="footer-actions">
+      <button class="primary" type="submit">💾 Enregistrer le lien</button>
+      <a class="button" href="{{ cancel_url }}">Annuler</a>
+      {% if r['sumup_payment_url'] %}
+        <a class="button" href="{{ r['sumup_payment_url'] }}" target="_blank" rel="noopener">Ouvrir le lien</a>
+      {% endif %}
+    </div>
+  </form>
+
+  {% if r['sumup_payment_url'] %}
+  <form method="post" style="margin-top:14px;" onsubmit="return confirm('Retirer le lien SumUp de cette facture ?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="sumup_action" value="remove">
+    <button type="submit" class="danger-btn">Supprimer le lien SumUp</button>
+  </form>
+  {% endif %}
+
+  <p class="tiny-note" style="margin-top:14px;">Si tu marques ensuite la facture comme payée dans WOPR, le lien SumUp enregistré est retiré automatiquement.</p>
+</div>
+{% endblock %}

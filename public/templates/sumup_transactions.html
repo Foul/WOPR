@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% block title %}Paiements SumUp{% endblock %}
+{% block body %}
+
+<style>
+.sumup-page-head{
+  display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:14px;
+}
+.sumup-page-head h1{margin:0 0 4px}
+.sumup-page-actions{display:flex;gap:8px;flex-wrap:wrap}
+.sumup-info{
+  margin-bottom:14px;padding:10px 12px;border:1px solid #b8c9d8;border-radius:7px;background:rgba(255,255,255,.55)
+}
+.sumup-info p{margin:3px 0}
+.sumup-table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+.sumup-table th{white-space:nowrap}
+.sumup-table th,.sumup-table td{padding:8px 9px;vertical-align:middle}
+.sumup-table tbody tr:nth-child(even){background:rgba(127,127,127,.055)}
+.sumup-table tbody tr:target{outline:2px solid currentColor;outline-offset:-2px}
+.sumup-ref-code{font-weight:700;white-space:nowrap}
+.sumup-ref-id{display:block;margin-top:2px;font-size:10px;opacity:.68;white-space:nowrap}
+.sumup-money{font-weight:800;white-space:nowrap}
+.sumup-pill{
+  display:inline-block;padding:2px 7px;border:1px solid currentColor;border-radius:999px;
+  font-size:11px;font-weight:700;line-height:1.25;white-space:nowrap
+}
+.sumup-status-ok{color:#18743a;background:#e9f8ee}
+.sumup-status-fail{color:#9c2d2d;background:#fdecec}
+.sumup-status-other{color:#705d18;background:#fff8d8}
+.sumup-state-linked{color:#18743a;background:#e9f8ee}
+.sumup-state-pending{color:#705d18;background:#fff8d8}
+.sumup-state-outside{color:#555;background:#f0f0f0}
+.sumup-payment-pill{color:#315f8d;background:#edf6ff}
+.sumup-card-detail{display:block;margin-top:3px;font-size:11px;opacity:.78;white-space:nowrap}
+.sumup-match-select{min-width:285px;max-width:390px;width:100%}
+.sumup-manual{font-size:11px;opacity:.72}
+.sumup-action-cell{white-space:nowrap}
+body.theme-dark .sumup-info,
+body.theme-terminal .sumup-info,
+body.theme-8bit .sumup-info{background:rgba(0,0,0,.12)}
+body.theme-dark .sumup-table tbody tr:nth-child(even),
+body.theme-terminal .sumup-table tbody tr:nth-child(even),
+body.theme-8bit .sumup-table tbody tr:nth-child(even){background:rgba(255,255,255,.035)}
+body.theme-8bit .sumup-info,
+body.theme-8bit .sumup-table,
+body.theme-8bit .sumup-pill,
+body.theme-8bit .sumup-match-select{border-radius:0}
+@media(max-width:1000px){
+  .sumup-table{font-size:12px}
+  .sumup-match-select{min-width:220px}
+}
+
+.sumup-toolbar{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0 0 10px;
+}
+.sumup-month-nav,.sumup-channel-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.sumup-period-form{
+  display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:0 0 12px;
+  padding:8px 10px;border:1px solid #b8c9d8;background:rgba(255,255,255,.35)
+}
+.sumup-period-form label{display:flex;flex-direction:column;gap:2px;font-size:11px;font-weight:700}
+.sumup-period-form input{min-width:145px}
+body.theme-8bit .sumup-period-form{border-radius:0}
+
+</style>
+
+<div class="sumup-page-head">
+  <div>
+    <h1>💳 Paiements SumUp</h1>
+    <div>
+      Merchant <strong>{{ merchant_code }}</strong> ·
+      <strong>{{ period_label }}</strong> ·
+      {{ transactions|length }} transaction(s) affichée(s)
+    </div>
+  </div>
+  <div class="sumup-page-actions">
+    <a class="mini-btn wopr-action-open" href="{{ url_for('invoices_page') }}">← Factures</a>
+    <a class="mini-btn wopr-action-special" href="{{ url_for('security_page') }}#sumup-integration">⚙ SumUp</a>
+  </div>
+</div>
+
+<div class="sumup-toolbar">
+  <div class="sumup-month-nav">
+    <a class="mini-btn wopr-action-open"
+       href="{{ url_for('sumup_transactions_page', year=prev_year, month=prev_month, channel=channel) }}">◀ Mois précédent</a>
+    {% if not current_month %}
+    <a class="mini-btn wopr-action-open"
+       href="{{ url_for('sumup_transactions_page', channel=channel) }}">Mois en cours</a>
+    {% endif %}
+    <a class="mini-btn wopr-action-open"
+       href="{{ url_for('sumup_transactions_page', year=next_year, month=next_month, channel=channel) }}">Mois suivant ▶</a>
+  </div>
+
+  <div class="sumup-channel-tabs">
+    <a class="mini-btn {% if channel == 'ALL' %}wopr-action-save{% else %}wopr-action-open{% endif %}"
+       href="{{ url_for('sumup_transactions_page', from_date=date_from, to_date=date_to, channel='ALL') }}">
+      Tous ({{ counts.all }})
+    </a>
+    <a class="mini-btn {% if channel == 'POS' %}wopr-action-save{% else %}wopr-action-open{% endif %}"
+       href="{{ url_for('sumup_transactions_page', from_date=date_from, to_date=date_to, channel='POS') }}">
+      🏪 Ventes CB ({{ counts.pos }})
+    </a>
+    <a class="mini-btn {% if channel == 'ECOM' %}wopr-action-save{% else %}wopr-action-open{% endif %}"
+       href="{{ url_for('sumup_transactions_page', from_date=date_from, to_date=date_to, channel='ECOM') }}">
+      🔗 Paiements en ligne ({{ counts.ecom }})
+    </a>
+  </div>
+</div>
+
+<form method="get" action="{{ url_for('sumup_transactions_page') }}" class="sumup-period-form">
+  <input type="hidden" name="channel" value="{{ channel }}">
+  <label>Du
+    <input type="date" name="from_date" value="{{ date_from }}">
+  </label>
+  <label>Au
+    <input type="date" name="to_date" value="{{ date_to }}">
+  </label>
+  <button class="mini-btn wopr-action-save" type="submit">Afficher la période</button>
+</form>
+
+<div class="sumup-info">
+  <p><strong>Pré-rapprochement :</strong> WOPR compare montant, date de facture et surtout date d'encaissement déjà connue. Il ne rattache jamais automatiquement : les meilleurs cas affichent simplement <strong>Confirmer</strong>. Le libellé <strong>À rapprocher</strong> concerne uniquement la transaction SumUp, pas l'état du dossier (Terminé / Restitué).</p>
+  <p class="tiny-note">
+    SumUp est récupéré sur <strong>toute la période sélectionnée</strong>, page par page.
+    Ventes CB = POS · Paiements en ligne = ECOM.
+    {{ counts.linked }} rattachée(s) · {{ counts.outside }} classée(s) hors facture WOPR.
+  </p>
+</div>
+
+<div class="table-scroll">
+<table class="sumup-table invoice-list-table">
+  <thead>
+    <tr>
+      <th>Date / heure</th>
+      <th>Référence</th>
+      <th>Montant</th>
+      <th>Paiement</th>
+      <th>Statut</th>
+      <th>Facture WOPR</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for tx in transactions %}
+    {% set form_id = 'sumup-link-' ~ loop.index %}
+    {% set row_anchor = 'sumup-tx-' ~ (tx.transaction_code or loop.index) %}
+    {% set card = tx.card if tx.card is defined and tx.card else {} %}
+    {% set last4 = tx.card_last_4_digits
+                   if tx.card_last_4_digits is defined and tx.card_last_4_digits
+                   else (card.last_4_digits
+                         if card.last_4_digits is defined and card.last_4_digits
+                         else (card.last_four_digits
+                               if card.last_four_digits is defined and card.last_four_digits
+                               else '')) %}
+    {% set brand = tx.card_type
+                 if tx.card_type is defined and tx.card_type
+                 else (card.type
+                       if card.type is defined and card.type
+                       else (card.card_type
+                             if card.card_type is defined and card.card_type
+                             else '')) %}
+    <tr id="{{ row_anchor }}">
+      <td>{{ (tx.timestamp or '')[:19] | replace('T',' ') }}</td>
+
+      <td>
+        <span class="sumup-ref-code">{{ tx.transaction_code or '—' }}</span>
+        {% if tx._id %}
+          <span class="sumup-ref-id" title="{{ tx._id }}">
+            ID {{ tx._id[:8] }}…{{ tx._id[-6:] }}
+          </span>
+        {% endif %}
+      </td>
+
+      <td class="sumup-money">{{ '%.2f'|format(tx._amount) }} {{ tx.currency or 'EUR' }}</td>
+
+      <td>
+        <span class="sumup-pill sumup-payment-pill">{{ tx.payment_type or tx.type or '—' }}</span>
+        {% if brand or last4 %}
+          <span class="sumup-card-detail">{{ brand }}{% if last4 %} •••• {{ last4 }}{% endif %}</span>
+        {% endif %}
+      </td>
+
+      <td>
+        {% if tx.status == 'SUCCESSFUL' %}
+          <span class="sumup-pill sumup-status-ok">✓ SUCCESSFUL</span>
+        {% elif tx.status == 'FAILED' %}
+          <span class="sumup-pill sumup-status-fail">✕ FAILED</span>
+        {% else %}
+          <span class="sumup-pill sumup-status-other">{{ tx.status or '—' }}</span>
+        {% endif %}
+      </td>
+
+      <td>
+        {% if tx._linked %}
+          <span class="sumup-pill sumup-state-linked">Rattaché</span>
+          <br><strong>{{ tx._linked.invoice_no }}</strong>
+        {% elif tx._classification and tx._classification.classification == 'outside_wopr' %}
+          <span class="sumup-pill sumup-state-outside">Hors facture WOPR</span>
+          {% if tx._classification.note %}
+            <br><small>{{ tx._classification.note }}</small>
+          {% endif %}
+        {% elif tx.status == 'SUCCESSFUL' and tx._strong_candidate %}
+          {% set c = tx._strong_candidate %}
+          <span class="sumup-pill sumup-state-pending">Correspondance probable</span>
+          <br><strong>{{ c.invoice_no }} · {{ c.client_name }}</strong>
+          <br><small>
+            {% if c.payment_mode == 'MIXTE' and c.cb_part %}
+                  CB {{ '%.2f'|format(c.cb_part) }} € / facture {{ '%.2f'|format(c.invoice_total) }} €
+                {% else %}
+                  {{ '%.2f'|format(c.invoice_total) }} €
+                {% endif %}
+            {% if c.accounting_date %} · encaissé {{ c.accounting_date }}{% endif %}
+            {% if c.invoice_date %} · facture {{ c.invoice_date }}{% endif %}
+          </small>
+          {% if c._reasons %}
+            <br><small class="sumup-manual">{{ c._reasons|join(' · ') }}</small>
+          {% endif %}
+        {% elif tx.status == 'SUCCESSFUL' and tx._candidates %}
+          <span class="sumup-pill sumup-state-pending">À rapprocher</span>
+          <br>
+          <select class="sumup-match-select"
+                  name="rid"
+                  form="{{ form_id }}"
+                  required>
+            <option value="" selected disabled>— Choisir une facture —</option>
+            {% for c in tx._candidates %}
+              <option value="{{ c.id }}">
+                {{ c.invoice_no }} · {{ c.client_name }} · {% if c.payment_mode == 'MIXTE' and c.cb_part %}
+                  CB {{ '%.2f'|format(c.cb_part) }} € / facture {{ '%.2f'|format(c.invoice_total) }} €
+                {% else %}
+                  {{ '%.2f'|format(c.invoice_total) }} €
+                {% endif %}
+                {% if c.accounting_date %} · encaissé {{ c.accounting_date }}{% endif %}
+                {% if c.invoice_date %} · facture {{ c.invoice_date }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        {% elif tx.status == 'SUCCESSFUL' %}
+          <span class="sumup-pill sumup-state-pending">À rapprocher</span>
+          <br><span class="sumup-manual">Aucune correspondance sûre</span>
+        {% else %}
+          —
+        {% endif %}
+      </td>
+
+      <td class="sumup-action-cell">
+        {% if tx._linked %}
+          <a class="mini-btn wopr-action-open"
+             href="{{ url_for('sumup_receipt', rid=tx._linked.rid) }}"
+             target="_blank">🧾 Ticket CB</a>
+          <details style="margin-top:6px;">
+            <summary class="mini-btn wopr-action-special"
+                     style="cursor:pointer;display:inline-block;">
+              🔁 Changer facture
+            </summary>
+            <form method="post"
+                  action="{{ url_for('sumup_transaction_relink_existing') }}"
+                  style="margin-top:6px;display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="transaction_id" value="{{ tx._id }}">
+              <input type="hidden" name="transaction_code" value="{{ tx.transaction_code or tx.code or '' }}">
+              <input type="hidden" name="return_from_date" value="{{ date_from }}">
+              <input type="hidden" name="return_to_date" value="{{ date_to }}">
+              <input type="hidden" name="return_channel" value="{{ channel }}">
+              <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+              <input type="text"
+                     name="invoice_no"
+                     placeholder="N° facture exact"
+                     inputmode="numeric"
+                     required
+                     style="width:145px;min-width:145px;">
+              <button class="mini-btn wopr-action-save" type="submit">🔁 Remplacer</button>
+            </form>
+          </details>
+          <details style="margin-top:6px;">
+            <summary class="mini-btn wopr-action-special" style="cursor:pointer;display:inline-block;">
+              ↩ Remboursement hors SumUp
+            </summary>
+            <form method="post"
+                  action="{{ url_for('sumup_external_refund', rid=tx._linked.rid) }}"
+                  style="margin-top:6px;display:grid;gap:5px;min-width:220px;">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="return_from_date" value="{{ date_from }}">
+              <input type="hidden" name="return_to_date" value="{{ date_to }}">
+              <input type="hidden" name="return_channel" value="{{ channel }}">
+              <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+              <input type="text" name="refund_amount" placeholder="Montant remboursé, ex. 59,00" required>
+              <input type="date" name="refund_date">
+              <input type="text" name="refund_note" placeholder="Ex. remboursé depuis compte perso">
+              <small>Trace uniquement : ne modifie pas automatiquement le CA.</small>
+              <button class="mini-btn wopr-action-save" type="submit">Enregistrer la trace</button>
+            </form>
+          </details>
+        {% elif tx._classification and tx._classification.classification == 'outside_wopr' %}
+          <form method="post" action="{{ url_for('sumup_transaction_classify') }}" style="margin:0">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="return_from_date" value="{{ date_from }}">
+            <input type="hidden" name="return_to_date" value="{{ date_to }}">
+            <input type="hidden" name="return_channel" value="{{ channel }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="transaction_id" value="{{ tx._id }}">
+            <input type="hidden" name="transaction_code" value="{{ tx.transaction_code or '' }}">
+            <input type="hidden" name="classification_action" value="clear">
+            <button class="mini-btn wopr-action-edit" type="submit">↩ Réouvrir</button>
+          </form>
+        {% elif tx.status == 'SUCCESSFUL' %}
+          {% if tx._strong_candidate %}
+          <form method="post"
+                action="{{ url_for('sumup_transaction_link') }}"
+                style="margin:0 0 6px">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="return_from_date" value="{{ date_from }}">
+            <input type="hidden" name="return_to_date" value="{{ date_to }}">
+            <input type="hidden" name="return_channel" value="{{ channel }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="transaction_id" value="{{ tx._id }}">
+            <input type="hidden" name="rid" value="{{ tx._strong_candidate.id }}">
+            <button class="mini-btn wopr-action-save" type="submit">✓ Confirmer</button>
+          </form>
+          {% elif tx._candidates %}
+          <form id="{{ form_id }}"
+                method="post"
+                action="{{ url_for('sumup_transaction_link') }}"
+                style="margin:0 0 6px">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="return_from_date" value="{{ date_from }}">
+            <input type="hidden" name="return_to_date" value="{{ date_to }}">
+            <input type="hidden" name="return_channel" value="{{ channel }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="transaction_id" value="{{ tx._id }}">
+            <button class="mini-btn wopr-action-save" type="submit">✓ Rattacher</button>
+          </form>
+          {% endif %}
+
+          <form method="post" action="{{ url_for('sumup_transaction_link_existing') }}" style="margin:0 0 6px;display:flex;gap:5px;align-items:center;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="return_from_date" value="{{ date_from }}">
+            <input type="hidden" name="return_to_date" value="{{ date_to }}">
+            <input type="hidden" name="return_channel" value="{{ channel }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="transaction_id" value="{{ tx._id }}">
+            <input type="hidden" name="transaction_code" value="{{ tx.transaction_code or '' }}">
+            <input type="text"
+                   name="invoice_no"
+                   placeholder="N° facture exact"
+                   required
+                   style="width:145px;min-width:145px;">
+            <label style="display:flex;align-items:center;gap:3px;font-size:10px;white-space:nowrap;"
+                   title="À utiliser seulement après vérification du paiement réel.">
+              <input type="checkbox" name="force_amount" value="1"> Forcer
+            </label>
+            <button class="mini-btn wopr-action-save" type="submit">🔗 N° exact</button>
+          </form>
+
+          <form method="post" action="{{ url_for('sumup_transaction_classify') }}" style="margin:0">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="return_from_date" value="{{ date_from }}">
+            <input type="hidden" name="return_to_date" value="{{ date_to }}">
+            <input type="hidden" name="return_channel" value="{{ channel }}">
+            <input type="hidden" name="return_anchor" value="{{ row_anchor }}">
+            <input type="hidden" name="transaction_id" value="{{ tx._id }}">
+            <input type="hidden" name="transaction_code" value="{{ tx.transaction_code or '' }}">
+            <input type="hidden" name="classification_action" value="outside">
+            <button class="mini-btn wopr-action-folder" type="submit">Hors facture WOPR</button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7">Aucune transaction renvoyée par SumUp.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

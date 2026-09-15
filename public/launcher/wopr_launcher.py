@@ -55,7 +55,10 @@ def ensure_dirs():
 def log(msg):
     try:
         ensure_dirs()
-        with LOG.open("a",encoding="utf-8") as f:
+        # Le BOM permet aussi à Windows/Notepad de détecter l'UTF-8 au lieu
+        # d'interpréter les accents comme du Latin-1 (ex. « lancÃ© »).
+        encoding = "utf-8" if LOG.exists() and LOG.stat().st_size else "utf-8-sig"
+        with LOG.open("a",encoding=encoding) as f:
             f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
     except Exception:
         pass

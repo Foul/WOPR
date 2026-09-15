@@ -1,6 +1,6 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.3.286**
+**Version documentée : 2.3.287**
 **Documentation mise à jour : 14 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**

@@ -13,6 +13,39 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='wopr-action-colors.css') }}?v={{ app_version }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='wopr-8bit-release.css') }}?v={{ app_version }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='wopr-8bit-hotfix.css') }}?v={{ app_version }}">
+<style>
+.flash-toast{
+  position:fixed;
+  top:74px;
+  left:50%;
+  transform:translateX(-50%);
+  opacity:1;
+  transition:opacity .22s ease,transform .22s ease;
+  z-index:10000;
+  width:min(900px,calc(100vw - 32px));
+  box-sizing:border-box;
+  box-shadow:0 8px 28px rgba(0,0,0,.28);
+  padding-right:44px;
+}
+.flash-toast.is-hiding{
+  opacity:0;
+  transform:translate(-50%,-8px);
+  pointer-events:none;
+}
+.flash-toast-close{
+  position:absolute;
+  top:50%;
+  right:10px;
+  transform:translateY(-50%);
+  border:0;
+  background:transparent;
+  color:inherit;
+  font-size:22px;
+  line-height:1;
+  cursor:pointer;
+  font-weight:900;
+}
+</style>
 </head>
 <body>
 <script>
@@ -104,7 +137,12 @@
 </header>
 <main class="page">
 {% with messages = get_flashed_messages() %}
-  {% if messages %}<div class="flash">{{ messages[0] }}</div>{% endif %}
+  {% if messages %}
+    <div class="flash flash-toast" id="woprFlash" role="status">
+      {{ messages[0] }}
+      <button type="button" class="flash-toast-close" id="woprFlashClose" aria-label="Fermer">×</button>
+    </div>
+  {% endif %}
 {% endwith %}
 {% block body %}{% endblock %}
 </main>
@@ -571,6 +609,29 @@ document.addEventListener('click', async function (event) {
   });
 
   render();
+})();
+</script>
+
+
+<script>
+(function(){
+  const flash = document.getElementById('woprFlash');
+  const close = document.getElementById('woprFlashClose');
+  if (!flash || !close) return;
+
+  let removeTimer;
+  function dismissFlash(){
+    if (!flash.isConnected || flash.classList.contains('is-hiding')) return;
+    flash.classList.add('is-hiding');
+    removeTimer = window.setTimeout(function(){ flash.remove(); }, 220);
+  }
+
+  close.addEventListener('click', dismissFlash);
+  window.setTimeout(dismissFlash, 5000);
+
+  window.addEventListener('pagehide', function(){
+    if (removeTimer) window.clearTimeout(removeTimer);
+  }, { once:true });
 })();
 </script>
 

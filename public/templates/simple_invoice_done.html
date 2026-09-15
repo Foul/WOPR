@@ -14,7 +14,7 @@
   <div class="simple-done-actions">
     <select class="pdf-lang-select button primary" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
       <option value="">🌐 Voir / télécharger le PDF</option>
-      {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+      {% for code, info in pdf_languages.items() %}<option value="{{ url_for('invoice_archived_pdf', rid=r['id'], lang=code, download=1) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
     </select>
 
     {% if r['client_email'] %}

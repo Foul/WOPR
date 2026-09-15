@@ -9,53 +9,12 @@
 
 <div class="abby-grid">
   <section class="abby-card">
-    <h2>Connexion API</h2>
-    <p class="tiny-note">
-      🔐 La clé API est <strong>chiffrée sur disque</strong>. La clé maître de chiffrement est stockée hors du dossier WOPR.
-      Elle n'est déchiffrée qu'au moment d'un appel Abby ou lorsque tu demandes explicitement à l'afficher.
-    </p>
-
-    <form method="post" action="{{ url_for('abby_settings_save') }}" class="grid one">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-
-      <label class="checkboxline">
-        <input type="checkbox" name="abby_enabled" {% if abby.enabled %}checked{% endif %}>
-        Activer l'intégration Abby
-      </label>
-
-      <label>Clé API Abby
-        <div class="password-field">
-          <input type="password"
-                 name="abby_api_key"
-                 value=""
-                 autocomplete="off"
-                 spellcheck="false"
-                 placeholder="{{ 'Clé API Abby' if api_key_configured else 'suk-…' }}">
-          <button type="button" class="password-toggle abby-key-toggle"
-                  data-reveal-url="{{ url_for('abby_api_key_reveal') }}"
-                  data-csrf="{{ csrf_token() }}"
-                  aria-label="Afficher la clé">👁</button>
-        </div>
-      </label>
-
-      <div class="footer-actions">
-        <button class="primary" type="submit">Enregistrer</button>
-      </div>
-    </form>
-
-    <form method="post" action="{{ url_for('abby_test') }}">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <button class="button" type="submit" {% if not api_key_configured %}disabled{% endif %}>
-        🔌 Tester la connexion
-      </button>
-    </form>
-
-    {% if abby.last_test_at %}
-      <div class="abby-status {% if abby.last_test_ok %}abby-ok{% else %}abby-error{% endif %}">
-        <strong>{{ '✓' if abby.last_test_ok else '✗' }}</strong>
-        {{ abby.last_test_message }}
-      </div>
-    {% endif %}
+    <h2>⚙️ Configuration</h2>
+    <p>La connexion API et la clé Abby sont maintenant gérées dans <strong>Sécurité</strong>.</p>
+    <div class="abby-status {% if abby.enabled and api_key_configured %}abby-ok{% else %}abby-error{% endif %}">
+      {% if abby.enabled and api_key_configured %}✓ Intégration Abby active{% else %}Intégration Abby désactivée ou clé API absente{% endif %}
+    </div>
+    <p><a class="button" href="{{ url_for('security_page') }}#integrations">🔐 Configurer dans Sécurité</a></p>
   </section>
 
   <section class="abby-card">
