@@ -6,25 +6,30 @@
     <div class="banner-title">Contrôle automatique du CA</div>
     <div class="banner-sub">Lecture seule — aucune donnée n’est modifiée</div>
   </div>
-  <a class="button" href="{{ url_for('total_page') }}">← Retour CA / Déclarations</a>
+  <a class="button ca-audit-8bit-button ca-audit-return-button" href="{{ url_for('total_page') }}">← Retour CA / Déclarations</a>
 </div>
 
 <div class="audit-readonly-notice">🔒 Ce contrôle compare les encaissements, les corrections manuelles et les périodes comptables. Les doublons signalés sont neutralisés dans le calcul du CA, mais restent à vérifier dans l’historique.</div>
 
 <h2>Totaux automatiques</h2>
-<div class="table-wrap">
-  <table>
-    <thead><tr><th>Année</th><th>Mois</th><th>BNC</th><th>Prestations</th><th>Marchandises</th><th>Total</th></tr></thead>
+<div class="table-wrap ca-audit-table-wrap">
+  <table class="ca-audit-table">
+    <thead><tr><th>Mois</th><th>BNC</th><th>Prestations</th><th>Marchandises</th><th>Total</th></tr></thead>
     <tbody>
+    {% set ns = namespace(last_year=None) %}
     {% for row in totals %}
+      {% if ns.last_year != row.y %}
+        <tr class="ca-audit-year-row"><th colspan="5">{{ row.y }}</th></tr>
+        {% set ns.last_year = row.y %}
+      {% endif %}
       <tr>
-        <td>{{ row.y }}</td><td>{{ ledger_month_name(row.m)|capitalize }}</td>
+        <td>{{ ledger_month_name(row.m)|capitalize }}</td>
         <td>{{ '%.2f'|format(row.bnc_total or 0)|replace('.', ',') }} €</td>
         <td>{{ '%.2f'|format(row.service_total or 0)|replace('.', ',') }} €</td>
         <td>{{ '%.2f'|format(row.goods_total or 0)|replace('.', ',') }} €</td>
         <td><strong>{{ '%.2f'|format((row.bnc_total or 0) + (row.service_total or 0) + (row.goods_total or 0))|replace('.', ',') }} €</strong></td>
       </tr>
-    {% else %}<tr><td colspan="6">Aucun encaissement trouvé.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="5">Aucun encaissement trouvé.</td></tr>{% endfor %}
     </tbody>
   </table>
 </div>
@@ -48,13 +53,13 @@
 </div>
 
 {% if duplicate_rows %}
-<div class="table-wrap"><table><thead><tr><th>Facture</th><th>Occurrences</th><th>ID suivi</th></tr></thead><tbody>
+<div class="table-wrap ca-audit-table-wrap"><table class="ca-audit-table"><thead><tr><th>Facture</th><th>Occurrences</th><th>ID suivi</th></tr></thead><tbody>
 {% for row in duplicate_rows %}<tr><td><code>{{ row.invoice_no }}</code></td><td>{{ row.occurrences }}</td><td>{{ row.repair_ids }}</td></tr>{% endfor %}
 </tbody></table></div>
 {% endif %}
 
 {% if missing_period_rows %}
-<div class="table-wrap"><table><thead><tr><th>ID</th><th>Facture</th><th>Date comptable</th></tr></thead><tbody>
+<div class="table-wrap ca-audit-table-wrap"><table class="ca-audit-table"><thead><tr><th>ID</th><th>Facture</th><th>Date comptable</th></tr></thead><tbody>
 {% for row in missing_period_rows %}<tr><td>{{ row.id }}</td><td>{{ row.invoice_no or '—' }}</td><td>{{ row.accounting_date or '—' }}</td></tr>{% endfor %}
 </tbody></table></div>
 {% endif %}
