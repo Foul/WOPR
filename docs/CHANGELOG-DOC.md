@@ -2,6 +2,7 @@
 
 ## 2.3.287 - 15 septembre 2026 - fiabilisation CA, encaissements et SumUp
 - Source comptable unique issue du Suivi, avec dédoublonnage des factures historiques.
+- Ajout d’un contrôle CA en lecture seule avec totaux par période, corrections manuelles et anomalies historiques.
 - Périodes comptables validées conservées malgré l’enrichissement ultérieur des preuves de paiement.
 - Rapprochement SumUp historique corrigé sans déplacement silencieux des recettes déjà déclarées.
 - Comparaison visible entre une correction manuelle et sa valeur automatique.

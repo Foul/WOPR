@@ -6,6 +6,8 @@ Cette version fiabilise le suivi des encaissements, le rapprochement SumUp et le
 
 ### CA / déclarations
 - Le CA encaissé repose sur une source comptable unique issue du Suivi.
+- Une page de contrôle en lecture seule récapitule les totaux automatiques par année, mois et catégorie.
+- Le contrôle signale les doublons historiques à vérifier et les encaissements sans période comptable.
 - Les doublons historiques portant la même facture ne sont plus additionnés.
 - Les périodes comptables validées restent figées même lorsqu’une preuve de paiement est enrichie plus tard.
 - Les rattachements SumUp historiques corrigés ne déplacent plus silencieusement les recettes déjà déclarées.

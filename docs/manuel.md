@@ -878,6 +878,8 @@ Parmi les évolutions visibles :
 
 La version 2.3.287 fiabilise les encaissements, le rapprochement SumUp et la préparation des déclarations.
 
+- une page « Contrôle automatique du CA » récapitule les totaux automatiques par année, mois et catégorie ;
+- cette page signale les doublons historiques et les encaissements sans période comptable, sans modifier les données ;
 - le CA encaissé provient d'une source comptable unique issue du Suivi ;
 - les doublons historiques portant la même facture ne sont plus additionnés ;
 - les périodes comptables validées restent stables lorsqu'une preuve de paiement est enrichie ;
