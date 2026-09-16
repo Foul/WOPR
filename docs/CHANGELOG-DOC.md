@@ -1,5 +1,14 @@
 # Changelog de la documentation
 
+## 2.4.0 - 16 septembre 2026 - release stable, mode client et encaissements
+- Mode Client disponible depuis le tableau de bord Atelier, avec masquage des informations confidentielles.
+- Bascule Mode Client / Mode Admin et Nouvelle réparation harmonisées avec le rendu 8-BIT.
+- Logo Foul-Fix affiché dans le bandeau et centré selon le thème actif.
+- Nom d’entreprise affiché sous le client dans la liste des factures.
+- Préparation SumUp avec montant exact de la facture et remarque prête à copier.
+- Contrôles CA, navigation et affichage responsive stabilisés.
+- Documentation, README, manuel HTML/PDF, maintenance et notes de release alignés sur **2.4.0**.
+
 ## 2.3.287 - 15 septembre 2026 - fiabilisation CA, encaissements et SumUp
 - Source comptable unique issue du Suivi, avec dédoublonnage des factures historiques.
 - Ajout d’un contrôle CA en lecture seule avec totaux par période, corrections manuelles et anomalies historiques.

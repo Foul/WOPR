@@ -11,7 +11,15 @@
 
 WOPR est une application locale de gestion d’atelier pour suivre réparations, clients, devis, factures, encaissements, restitutions, achats, justificatifs et tâches administratives.
 
-**Version documentée : 2.3.287**
+**Version documentée : 2.4.0**
+
+## Release 2.4.0 — stable
+- Mode Client pour présenter l’atelier sans exposer les noms, problèmes, factures ni montants.
+- Bascule Mode Client / Mode Admin et bouton Nouvelle réparation conservés dans le thème 8-BIT.
+- Logo Foul-Fix centré dans le bandeau selon le thème actif.
+- Entreprise du client affichée dans la liste des factures.
+- Préparation SumUp avec montant exact de la facture et remarque prête à copier.
+- Contrôles CA, navigation et affichage responsive finalisés.
 
 > Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 

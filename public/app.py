@@ -179,7 +179,7 @@ ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.3.287"
+APP_VERSION = "2.4.0"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR

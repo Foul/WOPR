@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.3.287**
-**Documentation mise à jour : 15 septembre 2026**
+**Version documentée : 2.4.0**
+**Documentation mise à jour : 16 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -888,7 +888,18 @@ La version 2.3.287 fiabilise les encaissements, le rapprochement SumUp et la pr�
 - les factures orphelines, archives, lignes de facture et rattachements SumUp sont contrôlables ;
 - les bandeaux de confirmation se ferment automatiquement après quelques secondes.
 
-## 27. Crédit
+## 27. Nouveautés principales de la release 2.4.0
+
+La version 2.4.0 est la release stable qui ajoute un affichage client sûr et améliore la préparation des encaissements.
+
+- le **Mode Client** masque les noms, problèmes, factures et montants sur le tableau de bord Atelier ;
+- la bascule **Mode Client / Mode Admin** et **Nouvelle réparation** conservent le rendu 8-BIT ;
+- le logo Foul-Fix est affiché dans le bandeau et centré selon le thème actif ;
+- l’entreprise du client apparaît dans la liste des factures lorsqu’elle est renseignée ;
+- la préparation SumUp reprend le montant exact de la facture et génère une remarque copiable ;
+- les contrôles CA, la navigation et les barres de défilement ont été stabilisés.
+
+## 28. Crédit
 
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 
