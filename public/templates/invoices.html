@@ -99,7 +99,10 @@
           {% endif %}
         {% endif %}
       </td>
-      <td><strong>{{ r['client_name'] }}</strong></td>
+      <td>
+        <strong>{{ r['client_name'] }}</strong>
+        {% if r.get('client_company') %}<small class="invoice-client-company">{{ r['client_company'] }}</small>{% endif %}
+      </td>
       <td class="invoice-list-total">{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €</td>
       <td class="invoice-list-mode">
         {% if r['payment_mode_display'] %}<span class="payment-mode-badge">{{ r['payment_mode_display'] }}</span>{% else %}—{% endif %}

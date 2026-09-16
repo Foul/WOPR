@@ -8,6 +8,13 @@
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text)}
+/* La navigation ne doit jamais élargir la page au survol du dernier bouton.
+   Sur Chromium, l'ombre/transformation de « Verrouiller » pouvait créer un
+   débordement horizontal d'un ou deux pixels et afficher une barre parasite. */
+html,body{overflow-x:clip}
+@supports not (overflow:clip){html,body{overflow-x:hidden}}
+.topbar,.topnav,.nav-lock-form{min-width:0}
+.topbar{max-width:100vw;overflow-x:clip}
 .topbar{background:#0f1720;color:#fff;padding:14px 22px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .brand strong{font-size:24px;letter-spacing:.5px}
 .brand span{display:block;color:#d4e0ea;font-size:14px}
@@ -3317,7 +3324,9 @@ body.theme-8bit .atelier-nav-slot{display:none!important}
   body.theme-8bit .topbar .topnav .lock-btn{min-width:94px!important;font-size:10px!important}
   body.theme-8bit .topbar .topnav .navbtn.navbtn-new{min-width:132px!important;font-size:10px!important}
 }
-@media (max-width:1250px){body.theme-8bit .topnav{overflow-x:auto!important;padding-bottom:8px!important}}
+/* À petite largeur le menu se replie déjà en grille : il ne faut pas
+   transformer la navigation en zone scrollable horizontale. */
+@media (max-width:1250px){body.theme-8bit .topnav{overflow-x:visible!important;overflow-y:visible!important;padding-bottom:6px!important}}
 
 
 /* ===== V2.3.133 — CA / Déclarations : en-tête compact et complet ===== */
@@ -4057,6 +4066,50 @@ body.theme-terminal .page select:focus{outline:1px solid #5cff81!important;box-s
 body.theme-terminal .page input::placeholder,
 body.theme-terminal .page textarea::placeholder{color:#477f53!important}
 body.theme-terminal .page a:not(.button):not(.mini-btn):not(.primary):not(.navbtn){color:#70ff8f!important;text-decoration-color:#2acb52!important}
+/* Correctif final navigation : aucune scrollbar horizontale dans la barre haute. */
+html,body{overflow-x:hidden!important}
+.topbar{max-width:100vw!important;overflow:hidden!important}
+.topbar .topnav{min-width:0!important;max-width:100%!important;overflow-x:hidden!important;overflow-y:visible!important;scrollbar-width:none!important}
+.topbar .topnav::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+
+/* Le bouton de bascule doit reprendre exactement le skin pixel du bouton voisin. */
+body.theme-8bit .page .atelier-head .client-mode-toggle{
+  position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  min-height:64px!important;min-width:148px!important;padding:0 8px!important;gap:7px!important;
+  border:0!important;border-radius:0!important;outline:0!important;box-shadow:none!important;clip-path:none!important;
+  background-color:transparent!important;background-image:url("pixel_btn_new_v2.png")!important;background-size:100% 100%!important;
+  background-repeat:no-repeat!important;background-position:center!important;overflow:hidden!important;
+  color:#fff!important;text-shadow:2px 2px 0 #06436a!important;font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;
+  font-size:11px!important;font-weight:900!important;line-height:1.05!important;letter-spacing:0!important;text-transform:uppercase!important;white-space:normal!important
+}
+body.theme-8bit .page .atelier-head .client-mode-toggle:hover{filter:brightness(1.08)!important;transform:translate(1px,1px)!important}
+body.theme-8bit .page .atelier-head .client-mode-toggle:active{filter:brightness(.92)!important;transform:translate(3px,3px)!important}
+
+.sumup-terminal-prep{margin:18px 0 22px;padding:16px 18px;border:1px solid #b9d7ef;border-left:5px solid #3399ff;border-radius:10px;background:#f4faff;color:#1d2b38}
+.sumup-terminal-prep h2{margin:0 0 6px;font-size:1.05rem}
+.sumup-terminal-fields{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:9px 12px;align-items:end;margin-top:12px}
+.sumup-terminal-fields label{display:grid;gap:5px;font-weight:700;font-size:.88rem}
+.sumup-terminal-fields input{width:100%;min-height:38px;padding:8px 10px;border:1px solid #b9c9d8;border-radius:6px;background:#fff;color:#17212b;font-weight:700}
+.sumup-copy-button{white-space:nowrap}
+.sumup-prep-status{min-height:1.2em;margin-top:8px;color:#26713b;font-weight:700;font-size:.88rem}
+@media(max-width:650px){.sumup-terminal-fields{grid-template-columns:1fr}.sumup-copy-button{justify-self:start}}
+.atelier-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.atelier-head-actions form{margin:0}.client-mode-toggle{background:#eef2f6!important;color:#52606d!important;border:1px solid #c8d1db!important}.client-mode-redacted{color:#9aa4af!important;filter:grayscale(1)}
+.invoice-client-company{display:block;margin-top:3px;color:#677789;font-size:.78rem;font-weight:700}
+.client-branding{display:flex;justify-content:center;align-items:center;margin:8px auto 18px;min-height:74px}.client-branding img{display:block;max-width:min(300px,42vw);max-height:86px;width:auto;height:auto;object-fit:contain}.client-branding span{font-size:2rem;font-weight:900;letter-spacing:.08em;color:#182b40;text-transform:uppercase}
+body.theme-8bit .client-branding span{font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace;color:#183b5c;text-shadow:2px 2px 0 #fff}
+.topbar{position:relative}.client-mode-topbar-logo{position:absolute;left:50%;top:50%;z-index:4;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);pointer-events:none}.client-mode-topbar-logo img{display:block;max-width:min(250px,24vw);max-height:70px;width:auto;height:auto;object-fit:contain}
+body.theme-8bit .client-mode-topbar-logo img{max-width:min(280px,24vw);max-height:76px}
+.normal-mode-topbar-logo{display:flex;align-items:center;justify-content:center;flex:0 1 auto;min-width:100px;max-width:190px;margin:0 8px}.normal-mode-topbar-logo img{display:block;max-width:100%;max-height:54px;width:auto;height:auto;object-fit:contain}
+body.theme-8bit .normal-mode-topbar-logo{max-width:210px;min-width:120px}.normal-mode-topbar-logo img{filter:drop-shadow(1px 1px 0 rgba(0,0,0,.18))}
+/* En thème normal comme en 8-bit, le logo occupe et centre l'espace libre
+   entre le sélecteur de thème et le premier bouton de navigation. */
+body:has(.normal-mode-topbar-logo) .topbar{flex-wrap:nowrap!important}
+body:has(.normal-mode-topbar-logo) .normal-mode-topbar-logo{position:static;transform:none;flex:1 1 auto;min-width:150px;max-width:none;height:62px;margin:0 14px}
+body:has(.normal-mode-topbar-logo) .topnav{margin-left:0!important}
+body.theme-8bit:has(.normal-mode-topbar-logo) .normal-mode-topbar-logo{position:relative;left:40px}
+body.theme-8bit .page .client-mode-toggle{display:inline-flex!important;align-items:center!important;justify-content:center!important;min-height:52px!important;min-width:150px!important;padding:0 14px!important;border:0!important;border-radius:0!important;background-color:transparent!important;background-image:url("pixel_btn_std_v2.png")!important;background-size:100% 100%!important;background-repeat:no-repeat!important;color:#fff!important;font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;font-size:11px!important;font-weight:900!important;text-transform:uppercase!important;text-shadow:2px 2px 0 #000!important;box-shadow:none!important}
+body.theme-8bit .page .client-mode-toggle:hover{filter:brightness(1.1)!important;transform:translate(1px,1px)!important}
+body.theme-8bit .page .client-mode-toggle:active{transform:translate(3px,3px)!important}
 body.theme-terminal .page .button,
 body.theme-terminal .page .mini-btn,
 body.theme-terminal .page button:not(.password-toggle):not(.remove-line):not(.lock-btn){
@@ -5077,3 +5130,9 @@ body.theme-8bit .page .invoice-shortcut-btn .invoice-shortcut-icon{
   color:#fff !important;
   text-shadow:2px 2px 0 rgba(0,0,0,.35) !important;
 }
+
+/* Verrouillage final : la barre de navigation ne devient jamais scrollable. */
+html,body{overflow-x:hidden!important}
+.topbar{max-width:100vw!important;overflow:hidden!important}
+.topbar .topnav{min-width:0!important;max-width:100%!important;overflow-x:hidden!important;overflow-y:visible!important;scrollbar-width:none!important}
+.topbar .topnav::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}

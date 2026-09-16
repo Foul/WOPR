@@ -4,11 +4,14 @@
 <div class="atelier-head">
   <div>
     <h1>🛠️ Tableau de bord atelier</h1>
-    <p>Vue rapide de ce qui demande ton attention aujourd'hui.</p>
+    <p>{% if client_mode %}Affichage confidentiel activé devant le client.{% else %}Vue rapide de ce qui demande ton attention aujourd'hui.{% endif %}</p>
   </div>
-  <a class="navbtn navbtn-new" href="{{ url_for('repair_new') }}">
-    <span class="nav-ico">➕</span><span>Nouvelle réparation</span>
-  </a>
+  <div class="atelier-head-actions">
+    <a class="navbtn navbtn-new mode-toggle-pixel" href="{{ url_for('atelier_client_mode_off' if client_mode else 'atelier_client_mode') }}">👤 {{ 'Mode Admin' if client_mode else 'Mode client' }}</a>
+    <a class="navbtn navbtn-new" href="{{ url_for('repair_new') }}">
+      <span class="nav-ico">➕</span><span>Nouvelle réparation</span>
+    </a>
+  </div>
 </div>
 
 <div class="atelier-kpis">
@@ -40,12 +43,12 @@
     <span class="atelier-kpi-icon">💳</span>
     <span class="atelier-kpi-label">Impayés</span>
     <strong>{{ unpaid_count }}</strong>
-    <small>{{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €</small>
+    <small>{% if client_mode %}<span class="client-mode-redacted">••••</span>{% else %}{{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €{% endif %}</small>
   </a>
   <a class="atelier-kpi atelier-kpi-ca" href="{{ url_for('total_page') }}">
     <span class="atelier-kpi-icon">📈</span>
     <span class="atelier-kpi-label">CA {{ month_name }}</span>
-    <strong>{{ '%.2f'|format(ca_month)|replace('.', ',') }} €</strong>
+    <strong>{% if client_mode %}<span class="client-mode-redacted">••••</span>{% else %}{{ '%.2f'|format(ca_month)|replace('.', ',') }} €{% endif %}</strong>
     <small>encaissé</small>
   </a>
   <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
@@ -67,8 +70,7 @@
       {% for r in overdue_rows %}
         <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
           <div>
-            <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong>
-            <span>{{ r['status'] or '' }} · {{ r['problem'] or 'Sans description' }}</span>
+            {% if client_mode %}<strong class="client-mode-redacted">Dossier masqué</strong><span class="client-mode-redacted">Informations confidentielles</span>{% else %}<strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['status'] or '' }} · {{ r['problem'] or 'Sans description' }}</span>{% endif %}
           </div>
           <b class="atelier-days {% if r['days_open'] >= 30 %}critical{% endif %}">{{ r['days_open'] }} j</b>
         </a>
@@ -88,7 +90,7 @@
       <div class="atelier-list">
       {% for r in watch %}
         <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
-          <div><strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['problem'] or '' }}</span></div>
+          <div>{% if client_mode %}<strong class="client-mode-redacted">Dossier masqué</strong><span class="client-mode-redacted">Informations confidentielles</span>{% else %}<strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['problem'] or '' }}</span>{% endif %}</div>
           <b class="atelier-days {% if r['days_waiting'] >= 15 %}critical{% endif %}">{{ r['days_waiting'] }} j</b>
         </a>
       {% endfor %}
@@ -101,14 +103,14 @@
   <section class="atelier-panel">
     <div class="atelier-panel-title">
       <h2>💶 Règlements en attente</h2>
-      <span>{{ unpaid_count }} dossier(s) · {{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €</span>
+      <span>{% if client_mode %}{{ unpaid_count }} dossier(s) · <span class="client-mode-redacted">••••</span>{% else %}{{ unpaid_count }} dossier(s) · {{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €{% endif %}</span>
     </div>
     {% if unpaid_rows %}
       <div class="atelier-list">
       {% for r in unpaid_rows %}
         <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
-          <div><strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['invoice_no'] }} · {{ r['problem'] or '' }}</span></div>
-          <b>{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €</b>
+          <div>{% if client_mode %}<strong class="client-mode-redacted">Dossier masqué</strong><span class="client-mode-redacted">Informations confidentielles</span>{% else %}<strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['invoice_no'] }} · {{ r['problem'] or '' }}</span>{% endif %}</div>
+          <b>{% if client_mode %}<span class="client-mode-redacted">••••</span>{% else %}{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €{% endif %}</b>
         </a>
       {% endfor %}
       </div>
@@ -125,12 +127,25 @@
     <div class="atelier-recent-grid">
       {% for r in recent_rows %}
         <a class="atelier-recent" href="{{ url_for('repair_detail', rid=r['id']) }}">
-          <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong>
-          <span>{{ r['problem'] or 'Sans description' }}</span>
-          <small>{{ r['status'] or '' }}{% if r['received_date'] %} · {{ r['received_date'][8:10] }}/{{ r['received_date'][5:7] }}/{{ r['received_date'][0:4] }}{% endif %}</small>
+          {% if client_mode %}<strong class="client-mode-redacted">Dossier masqué</strong><span class="client-mode-redacted">Informations confidentielles</span><small class="client-mode-redacted">Accès protégé</small>{% else %}<strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['problem'] or 'Sans description' }}</span><small>{{ r['status'] or '' }}{% if r['received_date'] %} · {{ r['received_date'][8:10] }}/{{ r['received_date'][5:7] }}/{{ r['received_date'][0:4] }}{% endif %}</small>{% endif %}
         </a>
       {% endfor %}
     </div>
   </section>
 </div>
+<style>
+body.theme-8bit .atelier-head .mode-toggle-pixel{
+  position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  min-height:64px!important;min-width:148px!important;padding:0 8px!important;gap:7px!important;
+  border:0!important;border-radius:0!important;outline:0!important;box-shadow:none!important;clip-path:none!important;
+  background-color:transparent!important;background-image:url("{{ url_for('static', filename='pixel_btn_new_v2.png') }}")!important;background-size:100% 100%!important;
+  background-repeat:no-repeat!important;background-position:center!important;overflow:hidden!important;
+  color:#fff!important;text-shadow:2px 2px 0 #06436a!important;font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;
+  font-size:11px!important;font-weight:900!important;line-height:1.05!important;letter-spacing:0!important;text-transform:uppercase!important;white-space:normal!important
+}
+body.theme-8bit .atelier-head .mode-toggle-pixel:hover{filter:brightness(1.08)!important;transform:translate(1px,1px)!important}
+body.theme-8bit .atelier-head .mode-toggle-pixel:active{filter:brightness(.92)!important;transform:translate(3px,3px)!important}
+body.theme-8bit .atelier-head .mode-toggle-pixel{filter:hue-rotate(180deg) saturate(1.35)!important}
+body.theme-8bit .atelier-head .mode-toggle-pixel:hover{filter:hue-rotate(180deg) saturate(1.35) brightness(1.08)!important}
+</style>
 {% endblock %}

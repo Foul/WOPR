@@ -80,13 +80,19 @@
       </select>
     </label>
   </div>
+  {% if client_mode and client_logo_configured %}
+  <div class="client-mode-topbar-logo" aria-label="Foul-Fix">
+    <img src="{{ url_for('security_invoice_logo_preview') }}" alt="Foul-Fix">
+  </div>
+  {% endif %}
+  {% if not client_mode and client_logo_configured %}
+  <div class="normal-mode-topbar-logo" aria-label="Foul-Fix">
+    <img src="{{ url_for('security_invoice_logo_preview') }}" alt="Foul-Fix">
+  </div>
+  {% endif %}
   {% if client_mode %}
   <nav class="topnav client-mode-nav">
     <div class="client-mode-badge">👤 Mode Client — confidentialité activée</div>
-    <form class="nav-lock-form" method="post" action="{{ url_for('admin_lock') }}">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <button class="lock-btn" type="submit">🔒 Retour atelier</button>
-    </form>
   </nav>
   {% else %}
   <nav class="topnav">

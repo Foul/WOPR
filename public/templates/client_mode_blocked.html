@@ -5,6 +5,10 @@
   <div class="client-mode-icon">🔒</div>
   <h1>Mode Client actif</h1>
   <p>Les données de l'atelier, des autres clients et la facturation sont masquées.</p>
-  <p>Pour revenir à l'interface complète, utilise <strong>Retour atelier</strong> puis saisis ton PIN.</p>
+  <p>Le tableau de bord Atelier reste accessible avec les informations sensibles masquées.</p>
+  <a class="navbtn navbtn-new mode-toggle-pixel" href="{{ url_for('atelier_client_mode_off') }}">👤 Mode Admin</a>
 </div>
+<style>
+body.theme-8bit .client-mode-screen .mode-toggle-pixel{position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;min-height:64px!important;min-width:148px!important;padding:0 8px!important;border:0!important;border-radius:0!important;background-color:transparent!important;background-image:url("{{ url_for('static', filename='pixel_btn_new_v2.png') }}")!important;background-size:100% 100%!important;background-repeat:no-repeat!important;color:#fff!important;text-shadow:2px 2px 0 #06436a!important;font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;font-size:11px!important;font-weight:900!important;text-transform:uppercase!important;box-shadow:none!important}
+</style>
 {% endblock %}

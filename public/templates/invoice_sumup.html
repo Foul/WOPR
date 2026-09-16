@@ -8,6 +8,22 @@
 
 <div class="email-preview-card">
   <p><strong>Client :</strong> {{ r['client_name'] }}</p>
+  <section class="sumup-terminal-prep" aria-labelledby="sumup-terminal-title">
+    <h2 id="sumup-terminal-title">Préparer le paiement sur le Solo Lite</h2>
+    <p class="tiny-note">Le Solo Lite ne reçoit pas encore la commande directement depuis WOPR. Ces deux boutons préparent les valeurs exactes à saisir dans l’application SumUp.</p>
+    <div class="sumup-terminal-fields">
+      <label>Montant à encaisser
+        <input id="sumupPrepAmount" type="text" value="{{ '%.2f'|format(r['invoice_total'] or 0) }}" readonly>
+      </label>
+      <button type="button" class="button sumup-copy-button" data-copy-target="sumupPrepAmount">📋 Copier le montant</button>
+      <label>Remarque SumUp
+        <input id="sumupPrepNote" type="text" value="{{ r['client_name'] }} — facture {{ r['invoice_no'] }}" readonly>
+      </label>
+      <button type="button" class="button sumup-copy-button" data-copy-target="sumupPrepNote">📋 Copier la remarque</button>
+    </div>
+    <div id="sumupPrepStatus" class="sumup-prep-status" role="status" aria-live="polite"></div>
+  </section>
+
   <p>Crée un <strong>Payment Link</strong> dédié à cette facture dans SumUp, puis colle-le ici. Tant que l'intégration SumUp est active, WOPR l'ajoutera automatiquement au mail de facture.</p>
 
   <form method="post" class="grid one">
@@ -36,4 +52,27 @@
 
   <p class="tiny-note" style="margin-top:14px;">Si tu marques ensuite la facture comme payée dans WOPR, le lien SumUp enregistré est retiré automatiquement.</p>
 </div>
+<script>
+(function(){
+  const status = document.getElementById('sumupPrepStatus');
+  document.querySelectorAll('.sumup-copy-button').forEach(function(button){
+    button.addEventListener('click', async function(){
+      const input = document.getElementById(button.dataset.copyTarget);
+      if (!input) return;
+      try {
+        await navigator.clipboard.writeText(input.value);
+      } catch (error) {
+        input.focus();
+        input.select();
+        document.execCommand('copy');
+      }
+      if (status) {
+        status.textContent = button.textContent.includes('montant') ? 'Montant copié.' : 'Remarque copiée.';
+        window.clearTimeout(status._timer);
+        status._timer = window.setTimeout(function(){ status.textContent = ''; }, 2500);
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

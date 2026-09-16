@@ -54,6 +54,24 @@ body.theme-8bit :is(
   transform:translate(1px,1px) !important;
 }
 
+/* Le bouton Mode client/Admin est un bouton d'action principal de l'Atelier.
+   Cette règle est volontairement dans le hotfix, chargé après app.css. */
+body.theme-8bit .page .atelier-head .client-mode-toggle,
+body.theme-8bit .page .client-mode-screen .client-mode-toggle{
+  position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  min-height:64px!important;min-width:148px!important;padding:0 8px!important;gap:7px!important;
+  border:0!important;border-radius:0!important;outline:0!important;box-shadow:none!important;clip-path:none!important;
+  background-color:transparent!important;background-image:url("pixel_btn_new_v2.png")!important;background-size:100% 100%!important;
+  background-repeat:no-repeat!important;background-position:center!important;overflow:hidden!important;
+  color:#fff!important;text-shadow:2px 2px 0 #06436a!important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;font-size:11px!important;font-weight:900!important;
+  line-height:1.05!important;letter-spacing:0!important;text-transform:uppercase!important;white-space:normal!important
+}
+body.theme-8bit .page .atelier-head .client-mode-toggle:hover,
+body.theme-8bit .page .client-mode-screen .client-mode-toggle:hover{filter:brightness(1.08)!important;transform:translate(1px,1px)!important}
+body.theme-8bit .page .atelier-head .client-mode-toggle:active,
+body.theme-8bit .page .client-mode-screen .client-mode-toggle:active{filter:brightness(.92)!important;transform:translate(3px,3px)!important}
+
 body.theme-8bit :is(
   .invoice-list-actions select.pdf-lang-select.mini-btn.wopr-action-open.wopr-action-invoice-pdf,
   .invoice-list-actions a.mini-btn.wopr-action-open,
@@ -305,3 +323,17 @@ body.theme-8bit :is(.wopr-print-pdf-btn,.ledger-edit-btn,.ledger-normal-actions 
   transform:translate(2px,2px) !important;
   box-shadow:inset 1px 1px 0 rgba(255,255,255,.45) !important;
 }
+
+/* Dernière règle du hotfix : le basculeur reprend le skin pixel bleu. */
+body.theme-8bit .page .atelier-head .client-mode-toggle{
+  position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  min-height:64px!important;min-width:148px!important;padding:0 8px!important;gap:7px!important;
+  border:0!important;border-radius:0!important;outline:0!important;box-shadow:none!important;clip-path:none!important;
+  background-color:transparent!important;background-image:url("pixel_btn_new_v2.png")!important;background-size:100% 100%!important;
+  background-repeat:no-repeat!important;background-position:center!important;overflow:hidden!important;
+  color:#fff!important;text-shadow:2px 2px 0 #06436a!important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;font-size:11px!important;font-weight:900!important;
+  line-height:1.05!important;letter-spacing:0!important;text-transform:uppercase!important;white-space:normal!important
+}
+body.theme-8bit .page .atelier-head .client-mode-toggle:hover{filter:brightness(1.08)!important;transform:translate(1px,1px)!important}
+body.theme-8bit .page .atelier-head .client-mode-toggle:active{filter:brightness(.92)!important;transform:translate(3px,3px)!important}

@@ -124,7 +124,9 @@ body.theme-8bit .sumup-period-form{border-radius:0}
   <p class="tiny-note">
     SumUp est récupéré sur <strong>toute la période sélectionnée</strong>, page par page.
     Ventes CB = POS · Paiements en ligne = ECOM.
-    {{ counts.linked }} rattachée(s) · {{ counts.outside }} classée(s) hors facture WOPR.
+    {{ counts.linked }} rattachée(s) ·
+    <strong>{{ counts.successful_unlinked }}</strong> paiement(s) réussi(s) non rattaché(s) ·
+    {{ counts.outside }} classée(s) hors facture WOPR.
   </p>
 </div>
 

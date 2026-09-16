@@ -1470,7 +1470,19 @@ def sumup_transaction_history(date_from=None, date_to=None, limit_per_page=100):
     # Safety cap only protects against a broken/cyclic API pagination response.
     # 100 pages x 100 items = 10,000 transactions for one requested period.
     for _page in range(100):
-        data = sumup_request("GET", path, query=query)
+        try:
+            data = sumup_request("GET", path, query=query)
+        except Exception as exc:
+            # A malformed `links.next` must not make the whole read-only page
+            # fail after the first valid page. Keep the transactions already
+            # retrieved and stop pagination; the current page remains usable.
+            message = str(exc).lower()
+            if _page > 0 and any(
+                marker in message
+                for marker in ("nonnumeric port", "label too long", "invalid url")
+            ):
+                break
+            raise
         if not isinstance(data, dict):
             break
 
@@ -1488,7 +1500,39 @@ def sumup_transaction_history(date_from=None, date_to=None, limit_per_page=100):
             break
         seen_next.add(next_href)
 
-        parsed = urllib.parse.urlparse(next_href)
+        # Certaines réponses SumUp renvoient occasionnellement le premier
+        # séparateur de query manquant : ``...newest_time=...00Z&order=...``.
+        # Sans normalisation, urllib.parse peut interpréter ``00Z&order=...``
+        # comme un port réseau et lever « nonnumeric port ».
+        raw_next_href = next_href
+        if "?" not in raw_next_href:
+            query_markers = (
+                "oldest_time=", "newest_time=", "order=", "limit=",
+                "skip_tx_result=", "cursor=",
+            )
+            marker_positions = [
+                raw_next_href.find(marker)
+                for marker in query_markers
+                if raw_next_href.find(marker) > 0
+            ]
+            if marker_positions:
+                query_start = min(marker_positions)
+                raw_next_href = (
+                    raw_next_href[:query_start]
+                    + "?"
+                    + raw_next_href[query_start:]
+                )
+
+        try:
+            parsed = urllib.parse.urlparse(raw_next_href)
+        except ValueError:
+            break
+        if parsed.netloc and parsed.netloc.lower() not in {
+            "api.sumup.com", "api.sumup.eu"
+        }:
+            break
+        if not parsed.query:
+            break
         # SumUp commonly returns a query-only relative href. Preserve our path.
         if parsed.path and parsed.path != "/":
             path = parsed.path
@@ -7076,6 +7120,7 @@ def inject_security_globals():
         "csrf_token": csrf_token,
         "admin_authenticated": bool(session.get("admin_authenticated")),
         "client_mode": bool(session.get("client_mode")),
+        "client_logo_configured": bool(invoice_logo_path()),
     }
 
 
@@ -7138,7 +7183,7 @@ def security_gate():
     # même si l'atelier est authentifié, aucune donnée sensible de l'application
     # n'est accessible pendant une prise en charge devant le client.
     if session.get("client_mode"):
-        allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search"}
+        allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search", "atelier_dashboard", "atelier_client_mode", "atelier_client_mode_off", "security_invoice_logo_preview"}
         current_rid = session.get("client_mode_rid")
 
         if endpoint in {"repair_detail", "qr_png", "intake_pdf"}:
@@ -7217,6 +7262,24 @@ def admin_lock():
     audit_event("LOCK", "Verrouillage manuel", request.remote_addr)
     session.clear()
     return redirect(url_for("admin_login", next=url_for("atelier_dashboard")))
+
+
+@app.route("/atelier/mode-client", methods=["GET", "POST"])
+def atelier_client_mode():
+    """Active l'affichage confidentiel du tableau de bord devant un client."""
+    session["client_mode"] = True
+    session.pop("client_mode_rid", None)
+    audit_event("CLIENT_MODE_ON", "Mode client activé depuis le tableau de bord", request.remote_addr)
+    return redirect(url_for("atelier_dashboard"))
+
+
+@app.route("/atelier/mode-client/off", methods=["GET", "POST"])
+def atelier_client_mode_off():
+    """Quitte uniquement le masquage client, sans déconnecter l'atelier."""
+    session.pop("client_mode", None)
+    session.pop("client_mode_rid", None)
+    audit_event("CLIENT_MODE_OFF", "Mode client désactivé depuis le tableau de bord", request.remote_addr)
+    return redirect(url_for("atelier_dashboard"))
 
 
 @app.route("/security", methods=["GET", "POST"])
@@ -8004,6 +8067,7 @@ def atelier_dashboard():
         unpaid_rows=unpaid_rows[:10],
         recent_rows=active_rows[:8],
         business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
+        client_logo_configured=bool(invoice_logo_path()),
     )
 
 
@@ -12661,6 +12725,7 @@ def invoices_page():
         SELECT
             r.*,
             c.name AS client_name,
+            c.company AS client_company,
             c.email AS client_email,
             (
                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
@@ -12680,6 +12745,7 @@ def invoices_page():
         grouped.setdefault(key, {
             "rows": [],
             "client_name": row["client_name"],
+            "client_company": row.get("client_company") or "",
             "client_email": row.get("client_email") or "",
             "invoice_no": row["invoice_no"],
         })["rows"].append(row)
@@ -12778,6 +12844,7 @@ def invoices_page():
             "id": representative["id"],
             "invoice_no": group["invoice_no"],
             "client_name": group["client_name"],
+            "client_company": group.get("client_company") or "",
             "client_email": group.get("client_email") or "",
             "invoice_date": inv_date,
             "invoice_total": invoice_total,
@@ -13598,6 +13665,15 @@ def sumup_transactions_page():
         "pos": sum(1 for tx in transactions_all if str((tx or {}).get("payment_type") or "").upper() == "POS"),
         "ecom": sum(1 for tx in transactions_all if str((tx or {}).get("payment_type") or "").upper() == "ECOM"),
         "linked": sum(1 for tx in prepared if tx.get("_linked")),
+        "successful_unlinked": sum(
+            1 for tx in prepared
+            if str(tx.get("status") or "").upper() == "SUCCESSFUL"
+            and not tx.get("_linked")
+            and not (
+                tx.get("_classification")
+                and tx["_classification"].get("classification") == "outside_wopr"
+            )
+        ),
         "outside": sum(
             1 for tx in prepared
             if tx.get("_classification")
