@@ -12,6 +12,9 @@
       <span class="returned-at-inline">· Restitué le {{ r['returned_at'][8:10] }}/{{ r['returned_at'][5:7] }}/{{ r['returned_at'][0:4] }}</span>
     {% endif %}
   </div>
+  {% if r['public_tracking_code'] %}
+  <div class="tracking-code-inline">Code client : <strong>{{ r['public_tracking_code'] }}</strong></div>
+  {% endif %}
   {% if not client_mode %}
   <div class="dossier-actions">
     <a class="button edit-followup-btn wopr-action-edit" href="{{ url_for('repair_edit', rid=r['id']) }}">MODIFIER LE SUIVI</a>

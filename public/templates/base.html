@@ -25,7 +25,10 @@
   width:min(900px,calc(100vw - 32px));
   box-sizing:border-box;
   box-shadow:0 8px 28px rgba(0,0,0,.28);
-  padding-right:44px;
+  padding-right:12px;
+  display:flex;
+  align-items:center;
+  gap:12px;
 }
 .flash-toast.is-hiding{
   opacity:0;
@@ -33,10 +36,10 @@
   pointer-events:none;
 }
 .flash-toast-close{
-  position:absolute;
-  top:50%;
-  right:10px;
-  transform:translateY(-50%);
+  position:static;
+  margin-left:auto;
+  transform:none;
+  flex:0 0 auto;
   border:0;
   background:transparent;
   color:inherit;
@@ -81,14 +84,14 @@
     </label>
   </div>
   {% if client_mode and client_logo_configured %}
-  <div class="client-mode-topbar-logo" aria-label="Foul-Fix">
+  <a class="client-mode-topbar-logo topbar-foulfix-link" href="{{ foul_fix_home_url }}" target="_blank" rel="noopener" aria-label="Ouvrir le site Foul-Fix" title="Ouvrir le site Foul-Fix">
     <img src="{{ url_for('security_invoice_logo_preview') }}" alt="Foul-Fix">
-  </div>
+  </a>
   {% endif %}
   {% if not client_mode and client_logo_configured %}
-  <div class="normal-mode-topbar-logo" aria-label="Foul-Fix">
+  <a class="normal-mode-topbar-logo topbar-foulfix-link" href="{{ foul_fix_home_url }}" target="_blank" rel="noopener" aria-label="Ouvrir le site Foul-Fix" title="Ouvrir le site Foul-Fix">
     <img src="{{ url_for('security_invoice_logo_preview') }}" alt="Foul-Fix">
-  </div>
+  </a>
   {% endif %}
   {% if client_mode %}
   <nav class="topnav client-mode-nav">

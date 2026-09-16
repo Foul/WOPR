@@ -177,6 +177,7 @@ GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
 SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
+TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
 APP_VERSION = "2.4.0"
@@ -996,6 +997,22 @@ def cfg():
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def read_tracking_settings():
+    defaults = {
+        "enabled": False,
+        "api_url": "https://foul-fix.fr/suivi-api.php",
+        "api_key": "",
+    }
+    try:
+        if TRACKING_SETTINGS_FILE.exists():
+            loaded = json.loads(TRACKING_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                defaults.update({k: loaded.get(k, v) for k, v in defaults.items()})
+    except Exception:
+        pass
+    return defaults
+
+
 def business_identity():
     """Identité de l'entreprise configurée localement, sans valeur personnelle codée en dur."""
     conf = cfg()
@@ -1294,6 +1311,138 @@ def smtp_send_message(msg):
             server.quit()
         except Exception:
             pass
+
+
+def send_tracking_sms(phone, message, device_id=""):
+    """Envoie un SMS de suivi via KDE Connect sans lever d'erreur Flask."""
+    normalized = normalize_sms_phone(phone)
+    if not re.fullmatch(r"\+?[0-9]{6,15}", normalized):
+        return False, "Numéro de téléphone invalide."
+
+    cli = shutil.which("kdeconnect-cli")
+    if not cli:
+        return False, "KDE Connect CLI introuvable."
+
+    devices = kdeconnect_available_devices()
+    available_ids = {d["id"] for d in devices}
+    selected = device_id or (devices[0]["id"] if len(devices) == 1 else "")
+    if not selected or selected not in available_ids:
+        return False, "Aucun téléphone KDE Connect joignable."
+
+    try:
+        proc = subprocess.run(
+            [cli, "--send-sms", message, "--destination", normalized, "--device", selected],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "KDE Connect n'a pas répondu à temps."
+    except Exception as exc:
+        return False, f"Erreur KDE Connect : {exc}"
+
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "Échec de l'envoi SMS.").strip()
+    audit_event("KDECONNECT_SMS", f"SMS de suivi envoyé vers {normalized}")
+    return True, "SMS envoyé."
+
+
+def publish_tracking_snapshot(rid):
+    """Publie le dernier état public sur le portail Foul-Fix si activé."""
+    publish_tracking_snapshot.last_error = ""
+    try:
+        conf = read_tracking_settings()
+        if not bool(conf.get("enabled", False)):
+            return False
+        endpoint = str(conf.get("api_url") or "").strip()
+        api_key = str(conf.get("api_key") or "").strip()
+        if not endpoint or not api_key:
+            publish_tracking_snapshot.last_error = "URL ou clé API manquante"
+            return False
+
+        con = db()
+        row = con.execute("""
+            SELECT r.*, c.name AS client_name
+            FROM repairs r JOIN clients c ON c.id=r.client_id
+            WHERE r.id=?
+        """, (int(rid),)).fetchone()
+        history = con.execute("""
+            SELECT status, changed_at FROM repair_status_history
+            WHERE repair_id=? ORDER BY changed_at DESC, id DESC
+        """, (int(rid),)).fetchall()
+        con.close()
+        if not row or not str(row["public_tracking_code"] or "").strip():
+            publish_tracking_snapshot.last_error = "code de suivi absent dans WOPR"
+            return False
+
+        total = float(row["service_amount"] or 0) + float(row["goods_amount"] or 0)
+        timeline = [{
+            "state": "current" if index == 1 else "done",
+            "icon": str(index), "title": str(item["status"] or "Étape"),
+            "text": "Votre dossier est suivi par Foul-Fix.",
+            "date": str(item["changed_at"] or "")[:16].replace("T", " "),
+        } for index, item in enumerate(history, 1)]
+        if not timeline:
+            timeline.append({
+                "state": "current", "icon": "1", "title": str(row["status"] or "Dossier reçu"),
+                "text": "Votre dossier est suivi par Foul-Fix.",
+                "date": str(row["created_at"] or "")[:16].replace("T", " "),
+            })
+
+        public_parts = []
+        if str(row["diagnosis"] or "").strip():
+            public_parts.append("Diagnostic :\n" + str(row["diagnosis"]).strip())
+        if str(row["work_done"] or "").strip():
+            public_parts.append("Intervention réalisée :\n" + str(row["work_done"]).strip())
+        if str(row["tests_validation"] or "").strip():
+            public_parts.append("Contrôles effectués :\n" + str(row["tests_validation"]).strip())
+        public_message = "\n\n".join(public_parts) or "Votre dossier est suivi par Foul-Fix."
+        title_parts = [str(row["device_type"] or "").strip(), str(row["brand_model"] or "").strip()]
+        payload = {
+            "code": str(row["public_tracking_code"]),
+            "status": str(row["status"] or "Suivi en cours"),
+            "title": " — ".join(x for x in title_parts if x) or "Réparation",
+            "opened_at": str(row["received_date"] or row["created_at"] or "")[:10],
+            "updated_at": now().isoformat(timespec="seconds"),
+            "message": public_message,
+            "amount": f"{total:.2f}".replace(".", ",") + " €" if total > 0 else "",
+            "payment_url": str(row["sumup_payment_url"] or "") if str(row["sumup_payment_url"] or "").startswith("https://") else "",
+            "timeline": timeline,
+        }
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json", "X-WOPR-Key": api_key},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            ok = 200 <= int(response.status) < 300
+            if not ok:
+                publish_tracking_snapshot.last_error = f"HTTP {response.status}"
+            return ok
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            raw_detail = exc.read().decode("utf-8", errors="replace")
+            parsed_detail = json.loads(raw_detail)
+            detail = str(parsed_detail.get("error") or "") if isinstance(parsed_detail, dict) else ""
+        except Exception:
+            pass
+        publish_tracking_snapshot.last_error = f"HTTP {exc.code}" + (f" — {detail}" if detail else "")
+        audit_event("TRACKING_SYNC_ERROR", f"HTTP {exc.code} pendant la publication du dossier {rid}: {detail}".strip())
+        return False
+    except urllib.error.URLError as exc:
+        publish_tracking_snapshot.last_error = f"connexion : {exc.reason}"
+        audit_event("TRACKING_SYNC_ERROR", f"Connexion impossible pendant la publication du dossier {rid}: {exc.reason}")
+        return False
+    except Exception as exc:
+        publish_tracking_snapshot.last_error = type(exc).__name__
+        audit_event("TRACKING_SYNC_ERROR", f"{type(exc).__name__} pendant la publication du dossier {rid}")
+        return False
+
+
+publish_tracking_snapshot.last_error = ""
 
 
 def read_abby_settings():
@@ -3038,6 +3187,25 @@ def init_db():
     ensure_column(con, "repairs", "sumup_external_refund_amount", "REAL DEFAULT 0")
     ensure_column(con, "repairs", "sumup_external_refund_date", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "sumup_external_refund_note", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "public_tracking_code", "TEXT")
+    con.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_public_tracking_code
+        ON repairs(public_tracking_code)
+        WHERE public_tracking_code IS NOT NULL AND TRIM(public_tracking_code) <> ''
+    """)
+
+    # Les dossiers existants reçoivent aussi un code client afin que le futur
+    # portail de suivi puisse fonctionner sans modifier l'historique métier.
+    missing_tracking_rows = con.execute("""
+        SELECT id FROM repairs
+        WHERE public_tracking_code IS NULL OR TRIM(public_tracking_code)=''
+        ORDER BY id
+    """).fetchall()
+    for missing_row in missing_tracking_rows:
+        con.execute(
+            "UPDATE repairs SET public_tracking_code=? WHERE id=?",
+            (make_public_tracking_code(con), int(missing_row["id"])),
+        )
     con.execute("""
         CREATE TABLE IF NOT EXISTS sumup_transaction_classifications (
             transaction_id TEXT PRIMARY KEY,
@@ -5489,6 +5657,23 @@ def parse_quote_lines(form):
     return lines
 
 
+def make_public_tracking_code(con):
+    """Génère un code client court, lisible et unique pour le futur suivi web."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    configured_prefix = re.sub(r"[^A-Za-z0-9]", "", str(cfg().get("tracking_code_prefix") or "WOPR")).upper()
+    prefix = (configured_prefix[:4] or "WOPR")
+    for _ in range(100):
+        suffix = "".join(secrets.choice(alphabet) for _ in range(4))
+        candidate = f"{prefix}-{suffix}"
+        exists = con.execute(
+            "SELECT 1 FROM repairs WHERE public_tracking_code=? LIMIT 1",
+            (candidate,),
+        ).fetchone()
+        if not exists:
+            return candidate
+    raise RuntimeError("Impossible de générer un code de suivi client unique.")
+
+
 def make_invoice_no():
     """
     Numéro standard JJMMYYYYHHMM.
@@ -7107,11 +7292,15 @@ def master_key_setup():
 
 @app.context_processor
 def inject_globals():
+    configured_website = str(cfg().get("website") or "").strip()
     return {
         "config": cfg(),
         "current_year": now().year,
         "app_version": APP_VERSION,
         "pdf_languages": PDF_LANGUAGES,
+        # Le lien du logo reste portable : chaque installation peut définir
+        # son propre site dans private/config.json.
+        "foul_fix_home_url": configured_website or "https://foul-fix.fr/",
     }
 
 @app.context_processor
@@ -10524,6 +10713,7 @@ def repair_new():
             client_id = int(cur.lastrowid)
 
         dossier = make_dossier_no()
+        public_tracking_code = make_public_tracking_code(con)
         token = secrets.token_urlsafe(18)
         received_date = request.form.get("received_date") or now().strftime("%Y-%m-%d")
         try:
@@ -10539,8 +10729,9 @@ def repair_new():
                 dossier_no, client_id, created_at, received_date,
                 device_type, brand_model, serial_no, system_name, system_password,
                 accessories, device_state, problem, remarks, status, signature_token,
-                followup_year, followup_month, accounting_status
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                followup_year, followup_month, accounting_status,
+                public_tracking_code
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             dossier, client_id, created,
             received_date,
@@ -10554,7 +10745,7 @@ def repair_new():
             request.form.get("problem",""),
             request.form.get("remarks",""),
             "Reçu", token,
-            followup_year, followup_month, "normal"
+            followup_year, followup_month, "normal", public_tracking_code
         ))
         rid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
         record_repair_status_change(con, rid, "", "Reçu", "Dossier créé")
@@ -10563,6 +10754,61 @@ def repair_new():
 
         session.pop("client_mode", None)
         session.pop("client_mode_rid", None)
+        # Publie le dossier initial si la synchronisation portail est activée.
+        # Les notifications SMS/e-mail restent indépendantes et désactivées.
+        publish_tracking_snapshot(rid)
+        # Envoi unique du code de suivi : SMS prioritaire, e-mail si aucun
+        # téléphone n'est renseigné. Une panne de transport ne bloque jamais
+        # la création du dossier.
+        ident = business_identity()
+        # L'URL du portail sera activée dans la configuration lorsqu'il sera
+        # réellement publié ; on n'envoie jamais un lien supposé ou cassé.
+        tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+        tracking_url = f"{tracking_site}/suivi" if tracking_site else ""
+        first_name_for_message = (first_name or "").strip() or "Bonjour"
+        contact_line = f"Bonjour {first_name_for_message},"
+        tracking_message = (
+            f"{contact_line}\n\n"
+            f"Votre réparation est bien enregistrée chez {ident['name']}.\n"
+            + (f"Suivez son avancement : {tracking_url}\n" if tracking_url else "")
+            + f"Votre code de suivi : {public_tracking_code}\n\n"
+            f"— {ident['name']}"
+        )
+        # Notifications désactivées par défaut tant que le portail/API n'est
+        # pas finalisé et testé. L'activation devra être explicite dans la
+        # configuration privée avec tracking_notifications_enabled=true.
+        notifications_enabled = bool(cfg().get("tracking_notifications_enabled", False))
+        if notifications_enabled:
+            normalized_phone = normalize_sms_phone(phone)
+            if normalized_phone:
+                sent, detail = send_tracking_sms(normalized_phone, tracking_message)
+                if sent:
+                    flash("Code de suivi envoyé par SMS.")
+                else:
+                    flash(f"Dossier créé, mais SMS non envoyé : {detail}")
+            elif email and "@" in email:
+                smtp_settings = read_smtp_settings()
+                if smtp_settings.get("enabled") and smtp_settings.get("token"):
+                    try:
+                        sender_email = str(smtp_settings.get("sender_email") or smtp_settings.get("username") or "").strip()
+                        sender_name = str(smtp_settings.get("sender_name") or ident["name"]).strip()
+                        msg = EmailMessage()
+                        msg["Subject"] = f"Votre code de suivi {ident['name']}"
+                        msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+                        msg["To"] = email
+                        set_email_content(msg, tracking_message)
+                        smtp_send_message(msg)
+                        audit_event("TRACKING_CODE_EMAIL", f"Code de suivi repair_id={rid} envoyé à {email}")
+                        flash("Code de suivi envoyé par e-mail.")
+                    except Exception as exc:
+                        flash(f"Dossier créé, mais e-mail non envoyé : {exc}")
+                else:
+                    flash("Dossier créé. SMTP non configuré : code de suivi à remettre au client.")
+            else:
+                flash(f"Dossier créé. Code de suivi à remettre au client : {public_tracking_code}")
+        else:
+            flash(f"Dossier créé. Notifications de suivi désactivées : code à remettre au client {public_tracking_code}")
+
         # V2.3.215 : aucune écriture Google automatique.
         return redirect(url_for("repair_detail", rid=rid))
 
@@ -11070,6 +11316,9 @@ def repair_quick_edit(rid):
     con.commit()
     con.close()
 
+    tracking_published = publish_tracking_snapshot(rid)
+    if read_tracking_settings().get("enabled"):
+        flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
     flash("Ligne du suivi enregistrée.")
     return redirect(url_for("index", year=followup_year) + f"#suivi-{rid}")
 
@@ -11246,6 +11495,9 @@ def repair_edit(rid):
         con.commit()
         con.close()
         # V2.3.215 : aucune écriture Google automatique.
+        tracking_published = publish_tracking_snapshot(rid)
+        if read_tracking_settings().get("enabled"):
+            flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
         flash("Suivi modifié.")
         return redirect(url_for("repair_detail", rid=rid))
 
@@ -11502,6 +11754,9 @@ def repair_update(rid):
     record_repair_status_change(con, rid, current["status"], new_status)
     con.commit()
     con.close()
+    tracking_published = publish_tracking_snapshot(rid)
+    if read_tracking_settings().get("enabled"):
+        flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
     flash("Dossier mis à jour.")
     return redirect(url_for("repair_detail", rid=rid))
 
@@ -12673,6 +12928,7 @@ def simple_invoice_new():
         con.commit()
         con.close()
 
+        publish_tracking_snapshot(rid)
         # V2.3.215 : aucune écriture Google automatique.
         audit_event(
             "SIMPLE_INVOICE_CREATE",
@@ -12712,6 +12968,7 @@ def simple_invoice_done(rid):
         "simple_invoice_done.html",
         r=r,
         total=total,
+        sumup_enabled=bool(read_sumup_settings().get("enabled")),
     )
 
 
@@ -13430,7 +13687,8 @@ def _sumup_rank_candidates(tx, candidates):
     Returns candidates sorted by confidence.
     Hard rule: exact amount.
     Strongest signal: existing accounting/payment date equals SumUp date.
-    Then invoice date proximity. No automatic link is ever performed.
+    Then invoice date proximity. Automatic linking is handled separately and
+    only for one unique, exact, same-day CB candidate.
     """
     amount = float(tx.get("amount") or 0)
 
@@ -13539,6 +13797,68 @@ def _sumup_rank_candidates(tx, candidates):
     # Only candidates plausibly close enough should be presented first.
     # Keep max 6 to avoid a giant dropdown on recurring amounts like 30 €.
     return ranked[:6]
+
+
+def _sumup_auto_link_safe(tx, candidate):
+    """Rattache une CB uniquement quand la correspondance est sans ambiguïté.
+
+    Cette routine ne traite pas l'historique différemment : elle est appelée
+    seulement pour une transaction SUCCESSFUL, un montant exact, une date
+    d'encaissement exacte et un candidat unique.
+    """
+    transaction_id = str(tx.get("id") or tx.get("transaction_id") or "").strip()
+    if not transaction_id or not candidate:
+        return False
+    ts = str(tx.get("timestamp") or "").strip()
+    try:
+        pay_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pay_date = pay_dt.date()
+    except Exception:
+        return False
+
+    con = db()
+    already = con.execute(
+        "SELECT 1 FROM repairs WHERE COALESCE(sumup_transaction_id,'')=? LIMIT 1",
+        (transaction_id,),
+    ).fetchone()
+    if already:
+        con.close()
+        return False
+    row = con.execute("SELECT * FROM repairs WHERE id=?", (int(candidate["id"]),)).fetchone()
+    if not row or str(row["invoice_no"] or "").strip() != str(candidate.get("invoice_no") or "").strip():
+        con.close()
+        return False
+
+    if not int(row["paid"] or 0):
+        fy, fm = row["followup_year"], row["followup_month"]
+        acc_status = "yellow" if fy and fm and (int(fy), int(fm)) != (pay_date.year, pay_date.month) else "normal"
+        con.execute("""
+            UPDATE repairs SET
+                paid=1, payment_mode='CB', payment_method='CB',
+                accounting_year=?, accounting_month=?, accounting_date=?,
+                accounting_status=?, accounting_service_amount=COALESCE(service_amount,0),
+                accounting_goods_amount=COALESCE(goods_amount,0)
+            WHERE id=?
+        """, (pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(row["id"])))
+
+    con.execute("""
+        UPDATE repairs SET
+            sumup_payment_url='', sumup_transaction_id=?,
+            sumup_transaction_code=?, sumup_transaction_at=?, sumup_payment_type=?
+        WHERE id=?
+    """, (
+        str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+        str(tx.get("transaction_code") or ""), ts,
+        str(tx.get("payment_type") or tx.get("entry_mode") or ""), int(row["id"]),
+    ))
+    con.execute("DELETE FROM sumup_transaction_classifications WHERE transaction_id=?", (transaction_id,))
+    con.commit()
+    con.close()
+    audit_event(
+        "SUMUP_TRANSACTION_AUTO_LINK",
+        f"repair_id={row['id']}; invoice={row['invoice_no']}; tx={transaction_id}; amount={float(tx.get('amount') or 0):.2f}",
+    )
+    return True
 
 
 
@@ -13657,6 +13977,28 @@ def sumup_transactions_page():
         second_score = int(second.get("_score") or 0) if second else -999
         strong = bool(best and best_score >= 60 and (best_score - second_score) >= 25)
 
+        # À partir de maintenant, rattachement direct des CB sans ambiguïté :
+        # une seule facture, montant exact, date d'encaissement exacte. Les
+        # transactions historiques et les montants concurrents restent manuels.
+        auto_linked = False
+        auto_candidate = best if (strong and len(ranked) == 1) else None
+        if (
+            str(tx.get("status") or "").upper() == "SUCCESSFUL"
+            and not linked.get(tx_id)
+            and not classifications.get(tx_id)
+            and auto_candidate
+            and int(auto_candidate.get("_score") or 0) >= 100
+            and str(auto_candidate.get("payment_mode") or "").upper() in {"CB", "MIXTE"}
+            and str(tx.get("payment_type") or tx.get("entry_mode") or "").upper() in {"POS", "CB"}
+        ):
+            auto_linked = _sumup_auto_link_safe(tx, auto_candidate)
+            if auto_linked:
+                linked[tx_id] = {
+                    "rid": int(auto_candidate["id"]),
+                    "invoice_no": str(auto_candidate.get("invoice_no") or ""),
+                    "transaction_code": str(tx.get("transaction_code") or ""),
+                }
+
         prepared.append({
             **tx,
             "_id": tx_id,
@@ -13664,6 +14006,7 @@ def sumup_transactions_page():
             "_local_datetime": _sumup_local_datetime(tx.get("timestamp")),
             "_channel": str(tx.get("payment_type") or tx.get("entry_mode") or "AUTRE").upper(),
             "_linked": linked.get(tx_id),
+            "_auto_linked": auto_linked,
             "_classification": classifications.get(tx_id),
             "_candidates": ranked,
             "_best_candidate": best,

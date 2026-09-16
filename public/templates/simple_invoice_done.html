@@ -24,6 +24,12 @@
       </a>
     {% endif %}
 
+    {% if sumup_enabled %}
+      <a class="button" href="{{ url_for('invoice_sumup_link', rid=r['id']) }}">
+        💳 Préparer SumUp
+      </a>
+    {% endif %}
+
     <a class="button" href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">✏️ Modifier facture</a>
     <a class="button" href="{{ url_for('invoices_page') }}">← Retour Factures</a>
   </div>
