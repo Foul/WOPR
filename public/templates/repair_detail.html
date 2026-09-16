@@ -113,8 +113,8 @@
 </div>
 <div class="footer-actions">
   <select class="pdf-lang-select button wopr-action-open" aria-label="Langue PDF suivi" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
-    <option value="">🌐 PDF prise en charge</option>
-    {% for code, info in pdf_languages.items() %}<option value="{{ url_for('intake_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+    <option value="">🌐 PDF SUIVI</option>
+    {% for code, info in pdf_languages.items() %}<option value="{{ url_for('intake_pdf', rid=r['id'], lang=code, download=1) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
   </select>
 </div>
 {% else %}
@@ -181,8 +181,8 @@
     <a class="button client-message-btn wopr-action-send" href="{{ url_for('client_message', rid=r['id']) }}">💬 Message client</a>
   {% endif %}
   <select class="pdf-lang-select button wopr-action-open" aria-label="Langue PDF suivi" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
-    <option value="">🌐 PDF prise en charge</option>
-    {% for code, info in pdf_languages.items() %}<option value="{{ url_for('intake_pdf', rid=r['id'], lang=code) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
+    <option value="">🌐 PDF SUIVI</option>
+    {% for code, info in pdf_languages.items() %}<option value="{{ url_for('intake_pdf', rid=r['id'], lang=code, download=1) }}">{{ info[0] }} - {{ info[1] }}</option>{% endfor %}
   </select>
   {% if not r['invoice_no'] %}
     <a class="button primary wopr-action-special" href="{{ url_for('repair_close', rid=r['id']) }}">FACTURER</a>
@@ -198,6 +198,7 @@
     </select>
     {% if r['client_email'] %}
       <a class="button wopr-action-send" href="{{ url_for('invoice_email', rid=r['id']) }}">📧 Envoyer la facture</a>
+      <a class="button primary wopr-action-send" href="{{ url_for('invoice_email', rid=r['id'], with_followup=1) }}">📧 Envoyer facture + suivi</a>
     {% endif %}
     {% if r['client_phone'] %}
 {% endif %}

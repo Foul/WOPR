@@ -180,7 +180,7 @@ SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
 TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.1"
+APP_VERSION = "2.4.2"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -12072,10 +12072,13 @@ def repair_close(rid):
 
         con.commit()
         con.close()
+        tracking_published = publish_tracking_snapshot(rid)
         if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
             flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
         else:
             flash("Facture modifiée." if r["invoice_no"] else "Facture créée.")
+        if read_tracking_settings().get("enabled"):
+            flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
 
         if request.form.get("return_to") == "suivi":
             try:
@@ -12362,6 +12365,7 @@ def wrap_pdf_text(text, font, size, max_width):
 @app.route("/repair/<int:rid>/intake.pdf")
 def intake_pdf(rid):
     lang = pdf_lang(request.values.get("lang", "fr"))
+    force_download = request.args.get("download") == "1" and request.args.get("inline") != "1"
     con = db()
     r = con.execute("""
         SELECT r.*,
@@ -12748,10 +12752,9 @@ def intake_pdf(rid):
     return send_file(
         bio,
         mimetype="application/pdf",
-        # V2.3.239 : le PDF est déjà archivé dans private/documents.
-        # On l'affiche dans le navigateur au lieu d'en créer une 2e copie
-        # dans Téléchargements.
-        as_attachment=False,
+        # Le PDF reste archivé dans private/documents, mais ?download=1
+        # permet aussi de le télécharger directement depuis le suivi.
+        as_attachment=force_download,
         download_name=suivi_filename
     )
 
@@ -16046,6 +16049,7 @@ def invoice_email(rid):
         return redirect(url_for("repair_detail", rid=rid))
 
     from_page = request.values.get("from_page", "detail")
+    with_followup = request.values.get("with_followup", "") in {"1", "true", "on"}
     lang = pdf_lang(request.values.get("lang", "fr"))
     cancel_url = url_for("invoices_page") if from_page == "factures" else url_for("repair_detail", rid=rid)
 
@@ -16059,6 +16063,8 @@ def invoice_email(rid):
 
         ident = business_identity()
         subject = f"{ident['name']} - Facture {r['invoice_no']}"
+        if with_followup:
+            subject += " + suivi de réparation"
         sumup_url = str(r["sumup_payment_url"] or "").strip()
         sumup_block = ""
         if read_sumup_settings().get("enabled") and sumup_url:
@@ -16068,11 +16074,23 @@ def invoice_email(rid):
             )
         body = (
             "Bonjour,\n\n"
-            f"Veuillez trouver ci-joint votre facture {ident['name']}.\n\n"
+            f"Veuillez trouver ci-joint votre facture {ident['name']}"
+            + (" ainsi que le suivi de votre réparation." if with_followup else ".")
+            + "\n\n"
             f"{sumup_block}"
             "Je vous remercie pour votre confiance.\n\n"
             "Cordialement,\n"
             f"{business_signature()}"
+        )
+        followup_filename = (
+            f"{safe_filename(r['client_name'])}_"
+            f"{now().strftime('%d%m%Y')}_"
+            f"{pdf_language_suffix(lang)}_suivi.pdf"
+        ) if with_followup else ""
+        invoice_attachment_filename = (
+            f"{safe_filename(r['client_name'])}_"
+            f"{safe_filename(r['invoice_no'])}_"
+            f"{pdf_language_suffix(lang)}_facture.pdf"
         )
         return render_template(
             "invoice_email_preview.html",
@@ -16085,18 +16103,22 @@ def invoice_email(rid):
             sender=smtp_settings.get("sender_email") or smtp_settings.get("username"),
             pdf_lang=lang,
             pdf_languages=PDF_LANGUAGES,
+            with_followup=with_followup,
+            followup_filename=followup_filename,
+            invoice_attachment_filename=invoice_attachment_filename,
         )
 
     recipient = request.form.get("recipient", "").strip()
     subject = request.form.get("subject", "").strip()
     body = request.form.get("body", "").strip()
+    with_followup = request.form.get("with_followup", "") in {"1", "true", "on"}
 
     if not recipient or "@" not in recipient:
         flash("Adresse destinataire invalide.")
-        return redirect(url_for("invoice_email", rid=rid, from_page=from_page))
+        return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=int(with_followup)))
     if not subject:
         flash("L'objet du message est obligatoire.")
-        return redirect(url_for("invoice_email", rid=rid, from_page=from_page))
+        return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=int(with_followup)))
 
     with app.test_client() as client:
         with client.session_transaction() as sess:
@@ -16115,17 +16137,43 @@ def invoice_email(rid):
     msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     msg["To"] = recipient
     set_email_content(msg, body)
+    invoice_attachment_filename = (
+        f"{safe_filename(r['client_name'])}_"
+        f"{safe_filename(r['invoice_no'])}_"
+        f"{pdf_language_suffix(lang)}_facture.pdf"
+    )
     msg.add_attachment(
         pdf_data,
         maintype="application",
         subtype="pdf",
-        filename=f"{safe_filename(r['client_name'])}_{safe_filename(r['invoice_no'])}_{pdf_language_suffix(lang)}.pdf"
+        filename=invoice_attachment_filename
     )
+
+    if with_followup:
+        followup_response = intake_pdf(rid)
+        if not hasattr(followup_response, "get_data"):
+            flash("Impossible de générer le PDF de suivi.")
+            return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=1))
+        followup_response.direct_passthrough = False
+        followup_data = bytes(followup_response.get_data())
+        if not followup_data.startswith(b"%PDF"):
+            flash("Le PDF de suivi n'a pas pu être généré correctement.")
+            return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=1))
+        msg.add_attachment(
+            followup_data,
+            maintype="application",
+            subtype="pdf",
+            filename=f"{safe_filename(r['client_name'])}_{now().strftime('%d%m%Y')}_{pdf_language_suffix(lang)}_suivi.pdf"
+        )
 
     try:
         smtp_send_message(msg)
         audit_event("INVOICE_EMAIL", f"Facture {r['invoice_no']} envoyée à {recipient}", request.remote_addr)
-        flash(f"Facture {r['invoice_no']} envoyée par e-mail à {recipient}.")
+        flash(
+            f"Facture {r['invoice_no']}"
+            + (" et suivi" if with_followup else "")
+            + f" envoyé(s) par e-mail à {recipient}."
+        )
         return redirect(cancel_url)
     except Exception as e:
         audit_event("INVOICE_EMAIL_ERROR", f"Facture {r['invoice_no']} : {type(e).__name__}", request.remote_addr)
