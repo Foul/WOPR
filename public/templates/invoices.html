@@ -176,8 +176,8 @@
           {% if sumup_enabled and not r['is_paid'] %}
           <a class="mini-btn wopr-action-send"
              href="{{ url_for('invoice_sumup_link', rid=r['id']) }}"
-             title="{{ 'Lien SumUp enregistré' if r['sumup_payment_url'] else 'Ajouter un lien de paiement SumUp' }}">
-            💳 SumUp{% if r['sumup_payment_url'] %} ✓{% endif %}
+             title="Préparer le paiement SumUp pour cette facture{% if r['sumup_payment_url'] %} — lien enregistré{% endif %}">
+            💳 Préparer SumUp{% if r['sumup_payment_url'] %} ✓{% endif %}
           </a>
           {% endif %}
           {% if sumup_enabled and r['sumup_transaction_id'] %}

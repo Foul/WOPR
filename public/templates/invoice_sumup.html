@@ -13,7 +13,7 @@
     <p class="tiny-note">Le Solo Lite ne reçoit pas encore la commande directement depuis WOPR. Ces deux boutons préparent les valeurs exactes à saisir dans l’application SumUp.</p>
     <div class="sumup-terminal-fields">
       <label>Montant à encaisser
-        <input id="sumupPrepAmount" type="text" value="{{ '%.2f'|format(r['invoice_total'] or 0) }}" readonly>
+        <input id="sumupPrepAmount" type="text" value="{{ '%.2f'|format(sumup_amount or 0) }}" readonly>
       </label>
       <button type="button" class="button sumup-copy-button" data-copy-target="sumupPrepAmount">📋 Copier le montant</button>
       <label>Remarque SumUp

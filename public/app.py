@@ -13165,6 +13165,15 @@ def invoice_sumup_link(rid):
         flash("Aucune facture n'est encore créée pour ce dossier.")
         return redirect(url_for("repair_detail", rid=rid))
 
+    # Total réellement affiché/utilisé pour cette facture.
+    line_total = con.execute("""
+        SELECT COALESCE(SUM(COALESCE(quantity,0) * COALESCE(unit_price,0)), 0)
+        FROM invoice_lines WHERE repair_id=?
+    """, (rid,)).fetchone()[0]
+    invoice_total = float(line_total or 0)
+    if invoice_total <= 0:
+        invoice_total = float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+
     cancel_url = url_for("invoices_page")
     if request.method == "POST":
         action = request.form.get("sumup_action", "save")
@@ -13193,6 +13202,7 @@ def invoice_sumup_link(rid):
     return render_template(
         "invoice_sumup.html",
         r=r,
+        sumup_amount=invoice_total,
         cancel_url=cancel_url,
     )
 
