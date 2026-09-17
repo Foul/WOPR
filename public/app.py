@@ -1498,6 +1498,42 @@ def publish_tracking_snapshot(rid):
 publish_tracking_snapshot.last_error = ""
 
 
+def send_tracking_completion_sms(rid):
+    """Envoie au maximum une fois le SMS lorsque le dossier passe à Terminé."""
+    if not bool(cfg().get("tracking_notifications_enabled", False)):
+        return False, "Notifications de suivi désactivées"
+    con = db()
+    row = con.execute("""
+        SELECT r.id, r.status, r.public_tracking_code, r.tracking_completion_sms_sent,
+               c.first_name, c.phone
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (int(rid),)).fetchone()
+    if not row or row["status"] != "Terminé" or int(row["tracking_completion_sms_sent"] or 0):
+        con.close()
+        return False, "Aucun SMS à envoyer"
+    phone = normalize_sms_phone(row["phone"] or "")
+    if not phone:
+        con.close()
+        return False, "Aucun numéro de téléphone"
+    ident = business_identity()
+    tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+    tracking_url = f"{tracking_site}/suivi" if tracking_site else ""
+    greeting = (row["first_name"] or "Bonjour").strip() or "Bonjour"
+    message = (
+        f"Bonjour {greeting},\n\nVotre réparation est terminée et prête à être récupérée chez {ident['name']}.\n"
+        + (f"Suivi : {tracking_url}\n" if tracking_url else "")
+        + f"Code : {row['public_tracking_code']}\n\n— {ident['name']}"
+    )
+    sent, detail = send_tracking_sms(phone, message)
+    if sent:
+        con.execute("UPDATE repairs SET tracking_completion_sms_sent=1 WHERE id=?", (int(rid),))
+        con.commit()
+        audit_event("TRACKING_COMPLETION_SMS", f"SMS fin de réparation envoyé repair_id={rid}")
+    con.close()
+    return sent, detail
+
+
 def read_abby_settings():
     """Configuration Abby locale. La clé API est chiffrée sur disque."""
     defaults = {
@@ -3241,6 +3277,7 @@ def init_db():
     ensure_column(con, "repairs", "sumup_external_refund_date", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "sumup_external_refund_note", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "public_tracking_code", "TEXT")
+    ensure_column(con, "repairs", "tracking_completion_sms_sent", "INTEGER DEFAULT 0")
     con.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_public_tracking_code
         ON repairs(public_tracking_code)
@@ -10995,7 +11032,10 @@ def repair_new():
         # Notifications désactivées par défaut tant que le portail/API n'est
         # pas finalisé et testé. L'activation devra être explicite dans la
         # configuration privée avec tracking_notifications_enabled=true.
-        notifications_enabled = bool(cfg().get("tracking_notifications_enabled", False))
+        # Le code de suivi est remis par l'atelier. Aucun SMS/e-mail n'est
+        # envoyé à la création : la notification part uniquement au passage
+        # du dossier à « Terminé » (voir send_tracking_completion_sms()).
+        notifications_enabled = False
         if notifications_enabled:
             normalized_phone = normalize_sms_phone(phone)
             if normalized_phone:
@@ -11537,6 +11577,9 @@ def repair_quick_edit(rid):
     con.close()
 
     tracking_published = publish_tracking_snapshot(rid)
+    completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
+    if completion_sms_sent:
+        flash("SMS de fin de réparation envoyé au client.")
     if read_tracking_settings().get("enabled"):
         flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
     flash("Ligne du suivi enregistrée.")
@@ -11720,6 +11763,9 @@ def repair_edit(rid):
         con.close()
         # V2.3.215 : aucune écriture Google automatique.
         tracking_published = publish_tracking_snapshot(rid)
+        completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
+        if completion_sms_sent:
+            flash("SMS de fin de réparation envoyé au client.")
         if read_tracking_settings().get("enabled"):
             flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
         flash("Suivi modifié.")
@@ -11979,6 +12025,9 @@ def repair_update(rid):
     con.commit()
     con.close()
     tracking_published = publish_tracking_snapshot(rid)
+    completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
+    if completion_sms_sent:
+        flash("SMS de fin de réparation envoyé au client.")
     if read_tracking_settings().get("enabled"):
         flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
     flash("Dossier mis à jour.")
@@ -12298,6 +12347,9 @@ def repair_close(rid):
         con.commit()
         con.close()
         tracking_published = publish_tracking_snapshot(rid)
+        completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
+        if completion_sms_sent:
+            flash("SMS de fin de réparation envoyé au client.")
         if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
             flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
         else:
