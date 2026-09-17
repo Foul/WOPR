@@ -50,6 +50,23 @@
       Les nouvelles sauvegardes sont compressées en <strong>GZIP</strong>. Les <strong>30 dernières sauvegardes générées par WOPR</strong> sont conservées dans <code>private/data/backups/</code>.
     </p>
     <div class="backup-auto-status">✓ Sauvegarde quotidienne + sauvegarde à l'arrêt actives</div>
+    <div class="smtp-status {% if external_backup.last_ok %}ok{% else %}warn{% endif %}" style="margin-top:10px;">
+      {% if external_backup.last_ok %}
+        ✓ Sauvegarde externe : dernière réussite<br>
+        <small>{{ external_backup.last_ok }}</small>
+      {% elif external_backup.log_exists %}
+        ⚠ Sauvegarde externe : aucune réussite détectée dans le journal
+      {% else %}
+        ⚠ Sauvegarde externe non vérifiée sur cette installation
+      {% endif %}
+      <br><small>Planifiée à {{ external_backup.schedule }} · Freebox : <code>{{ external_backup.freebox_path }}</code> · Proton : <code>{{ external_backup.proton_remote }}</code></small>
+      {% if external_backup.last_error %}<br><small>Dernière erreur : {{ external_backup.last_error }}</small>{% endif %}
+    </div>
+    <form method="post" id="external-backup-test-form" style="margin-top:12px;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="external_backup_test">
+      <button type="submit" class="primary" id="external-backup-test-button">☁ Tester la sauvegarde externe maintenant</button>
+    </form>
     <form method="post" style="margin-top:12px;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="backup">
@@ -224,4 +241,13 @@
     </ul>
   </section>
 </div>
+<script>
+document.getElementById('external-backup-test-form')?.addEventListener('submit', function () {
+  const button = document.getElementById('external-backup-test-button');
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = '⏳ Sauvegarde externe en cours…';
+  button.setAttribute('aria-busy', 'true');
+});
+</script>
 {% endblock %}

@@ -178,6 +178,7 @@ SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
 TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
+EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
 APP_VERSION = "2.4.2"
@@ -1013,6 +1014,57 @@ def read_tracking_settings():
     return defaults
 
 
+def read_external_backup_settings():
+    """Lit la configuration portable du script de sauvegarde externe."""
+    defaults = {
+        "enabled": True,
+        "script_path": "~/.local/bin/foul-fix-backup.sh",
+        "log_file": "~/.local/state/foul-fix-backup.log",
+        "freebox_path": "/mnt/Freebox/Backup/Web/Foul-Fix",
+        "proton_remote": "protondrive:Sauvegardes/Foul-Fix",
+        "schedule": "10:00",
+    }
+    try:
+        if EXTERNAL_BACKUP_SETTINGS_FILE.exists():
+            loaded = json.loads(EXTERNAL_BACKUP_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                defaults.update({key: loaded[key] for key in defaults if key in loaded})
+    except Exception:
+        pass
+    return defaults
+
+
+def external_backup_status():
+    """Retourne l'état de la sauvegarde Freebox/Proton sans dépendance à un chemin fixe."""
+    settings = read_external_backup_settings()
+    log_path = Path(os.path.expanduser(str(settings.get("log_file") or "")))
+    status = {
+        "enabled": bool(settings.get("enabled")),
+        "script_path": str(settings.get("script_path") or ""),
+        "log_file": str(log_path),
+        "freebox_path": str(settings.get("freebox_path") or ""),
+        "proton_remote": str(settings.get("proton_remote") or ""),
+        "schedule": str(settings.get("schedule") or ""),
+        "log_exists": log_path.is_file(),
+        "last_ok": "",
+        "last_error": "",
+    }
+    if not log_path.is_file():
+        return status
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in reversed(lines):
+            if not status["last_ok"] and " OK:" in f" {line}":
+                status["last_ok"] = line.strip()
+            if not status["last_error"] and (" ERREUR:" in f" {line}" or " ERROR:" in f" {line}"):
+                status["last_error"] = line.strip()
+            if status["last_ok"] and status["last_error"]:
+                break
+    except OSError:
+        pass
+    return status
+
+
 def business_identity():
     """Identité de l'entreprise configurée localement, sans valeur personnelle codée en dur."""
     conf = cfg()
@@ -1402,11 +1454,12 @@ def publish_tracking_snapshot(rid):
         payload = {
             "code": str(row["public_tracking_code"]),
             "status": str(row["status"] or "Suivi en cours"),
+            "paid": bool(row["paid"]),
             "title": " — ".join(x for x in title_parts if x) or "Réparation",
             "opened_at": str(row["received_date"] or row["created_at"] or "")[:10],
             "updated_at": now().isoformat(timespec="seconds"),
             "message": public_message,
-            "amount": f"{total:.2f}".replace(".", ",") + " €" if total > 0 else "",
+            "amount": f"{total:.2f}".replace(".", ",") + " €" if total > 0 and not bool(row["paid"]) else "",
             "payment_url": str(row["sumup_payment_url"] or "") if str(row["sumup_payment_url"] or "").startswith("https://") else "",
             "timeline": timeline,
         }
@@ -7493,6 +7546,34 @@ def security_page():
             path = backup_database(force=True, tag="manuel")
             audit_event("BACKUP", path.name if path else "", request.remote_addr)
             flash("Sauvegarde locale créée." if path else "Aucune base à sauvegarder.")
+        elif action == "external_backup_test":
+            settings = read_external_backup_settings()
+            script = Path(os.path.expanduser(str(settings.get("script_path") or "")))
+            if not script.is_file():
+                audit_event("EXTERNAL_BACKUP_TEST_ERROR", "script introuvable", request.remote_addr)
+                flash(f"Script de sauvegarde introuvable : {script}")
+            else:
+                try:
+                    completed = subprocess.run(
+                        ["bash", str(script)],
+                        cwd=str(script.parent),
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                    )
+                    if completed.returncode == 0:
+                        audit_event("EXTERNAL_BACKUP_TEST", "OK", request.remote_addr)
+                        flash("Sauvegarde externe exécutée avec succès.")
+                    else:
+                        audit_event("EXTERNAL_BACKUP_TEST_ERROR", f"code={completed.returncode}", request.remote_addr)
+                        flash("Sauvegarde externe échouée : consulte le journal de sauvegarde.")
+                except subprocess.TimeoutExpired:
+                    audit_event("EXTERNAL_BACKUP_TEST_ERROR", "timeout", request.remote_addr)
+                    flash("Sauvegarde externe interrompue : délai dépassé.")
+                except Exception as exc:
+                    audit_event("EXTERNAL_BACKUP_TEST_ERROR", type(exc).__name__, request.remote_addr)
+                    flash(f"Impossible de lancer la sauvegarde externe : {exc}")
         elif action == "restore_backup":
             backup_name = request.form.get("backup_name", "").strip()
             if request.form.get("confirm_restore") != "1":
@@ -7607,6 +7688,7 @@ def security_page():
     smtp_settings = read_smtp_settings()
     abby_settings = read_abby_settings()
     sumup_settings = read_sumup_settings()
+    external_backup = external_backup_status()
     business = cfg()
     return render_template(
         "security.html",
@@ -7624,6 +7706,7 @@ def security_page():
         business_email=str(business.get("email") or "").strip(),
         business_name=str(business.get("business_name") or "WOPR").strip() or "WOPR",
         invoice_logo_configured=_PRIVATE_LOGO_INVOICE.is_file(),
+        external_backup=external_backup,
     )
 
 
