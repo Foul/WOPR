@@ -156,12 +156,21 @@
     <p class="sync-error">Bibliothèques Google manquantes : relance <code>pip install -r requirements.txt</code>.</p>
   {% elif google_connected %}
     <p><span class="sync-ok">● Connecté</span> — synchronisation <strong>manuelle et non destructive</strong>. Aucun sens n'est automatique.</p>
+    {% if google_sync_last_result %}<p class="google-sync-last-result">{{ google_sync_last_result }}</p>{% endif %}
     <div class="contacts-toolbar">
       <form method="post" action="{{ url_for('contacts_sync_google') }}"
             onsubmit="return confirm('Envoyer les fiches WOPR en attente vers Google ? Les données Google absentes de WOPR seront conservées.');">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <button class="primary" type="submit">⬆ WOPR → Google</button>
       </form>
+      {% if google_error_count %}
+      <form method="post" action="{{ url_for('contacts_sync_google') }}"
+            onsubmit="return confirm('Relancer uniquement les {{ google_error_count }} fiche(s) Google en erreur ?');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="errors_only" value="1">
+        <button class="wopr-google-errors-sync" type="submit">↻ RESYNCHRONISER LES ERREURS ({{ google_error_count }})</button>
+      </form>
+      {% endif %}
       <form method="post" action="{{ url_for('contacts_import_google_live') }}"
             onsubmit="return confirm('Importer le groupe Google vers WOPR ? Seuls les champs WOPR vides seront complétés.');">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">

@@ -4893,6 +4893,22 @@ body.theme-8bit .page .contacts-toolbar .wopr-client-import-proton{background:#c
 body.theme-8bit .page .contacts-toolbar .wopr-client-export-google{background:#cfe0ff !important;color:#164b91 !important;}
 body.theme-8bit .page .contacts-toolbar .wopr-client-export-proton{background:#d9d1ff !important;color:#44318b !important;}
 body.theme-8bit .page .contacts-toolbar .wopr-client-export-vcard{background:#ffd1e4 !important;color:#8a2450 !important;}
+
+.google-sync-last-result{
+  margin:8px 0 !important;
+  color:#50616f !important;
+  font-size:.9rem !important;
+}
+body.theme-8bit .page .wopr-google-errors-sync{
+  border-radius:0 !important;
+  border:2px solid #08131f !important;
+  background:#ffdede !important;
+  color:#7a1f1f !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.55),2px 2px 0 #08131f !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+  text-transform:uppercase !important;
+}
 /* =====================================================================
    WOPR 2.3.283 — 8-BIT ACTIONS FINAL
    Source de vérité finale : app.css, chargé directement par base.html.

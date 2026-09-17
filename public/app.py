@@ -18052,6 +18052,20 @@ def contacts_page():
     google_pending_count = int(google_sync_stats["pending"] or 0)
     google_error_count = int(google_sync_stats["errors"] or 0)
 
+    try:
+        with _google_sync_progress_lock:
+            sync_snapshot = dict(_google_sync_progress)
+    except NameError:
+        sync_snapshot = {}
+    google_sync_last_result = ""
+    if sync_snapshot.get("finished_at"):
+        scope = "erreurs uniquement" if sync_snapshot.get("errors_only") else "contacts en attente"
+        google_sync_last_result = (
+            f"Dernière synchro : {sync_snapshot.get('ok', 0)} OK · "
+            f"{sync_snapshot.get('errors', 0)} erreur(s) · {scope} · "
+            f"{str(sync_snapshot['finished_at']).replace('T', ' ')}"
+        )
+
     safe_duplicate_groups = len(find_safe_local_duplicate_groups(con))
     con.close()
 
@@ -18071,6 +18085,7 @@ def contacts_page():
         google_synced_count=google_synced_count,
         google_pending_count=google_pending_count,
         google_error_count=google_error_count,
+        google_sync_last_result=google_sync_last_result,
         business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
         google_contact_group=str(
             cfg().get("google_contact_group")
@@ -18960,6 +18975,7 @@ _google_sync_progress = {
     "done": 0,
     "ok": 0,
     "errors": 0,
+    "errors_only": False,
     "finished_at": None,
 }
 _google_sync_progress_lock = threading.Lock()
@@ -18973,18 +18989,20 @@ def contacts_sync_google_status():
 
 @app.route("/contacts/sync-google", methods=["POST"])
 def contacts_sync_google():
+    errors_only = request.form.get("errors_only") == "1"
     con = db()
-    ids = [r[0] for r in con.execute("""
+    status_filter = "AND google_sync_status='Erreur'" if errors_only else "AND COALESCE(google_sync_status, '') != 'Synchronisé'"
+    ids = [r[0] for r in con.execute(f"""
         SELECT id
         FROM clients
         WHERE COALESCE(archived,0)=0
-          AND COALESCE(google_sync_status, '') != 'Synchronisé'
+          {status_filter}
         ORDER BY id
     """).fetchall()]
     con.close()
 
     if not ids:
-        flash("Google : aucun contact en attente de synchronisation.")
+        flash("Google : aucune fiche en erreur à resynchroniser." if errors_only else "Google : aucun contact en attente de synchronisation.")
         return redirect(url_for("contacts_page"))
 
     with _google_sync_progress_lock:
@@ -18994,6 +19012,7 @@ def contacts_sync_google():
             "done": 0,
             "ok": 0,
             "errors": 0,
+            "errors_only": errors_only,
             "finished_at": None,
         })
 
