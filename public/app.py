@@ -3296,6 +3296,9 @@ def init_db():
     ensure_column(con, "clients", "google_synced_at", "TEXT")
     ensure_column(con, "clients", "google_sync_hash", "TEXT")
     ensure_column(con, "clients", "notes", "TEXT")
+    # V2.4.1 — second contact number (kept separate from the historical primary phone).
+    ensure_column(con, "clients", "phone_secondary", "TEXT")
+    ensure_column(con, "clients", "email_secondary", "TEXT")
     ensure_column(con, "clients", "proton_uid", "TEXT")
     ensure_column(con, "clients", "proton_imported_at", "TEXT")
     ensure_column(con, "clients", "abby_id", "TEXT")
@@ -5841,8 +5844,16 @@ def google_find_group(service, wanted_name=None):
 
 def google_find_existing_contact(service, client):
     """Premier rattachement: cherche un contact Google existant pour éviter les doublons."""
-    wanted_email = (client["email"] or "").strip().casefold()
-    wanted_phone = normalize_phone(client["phone"])
+    wanted_emails = {
+        (client[key] or "").strip().casefold()
+        for key in ("email", "email_secondary")
+        if key in client.keys() and (client[key] or "").strip()
+    }
+    wanted_phones = {
+        normalize_phone(client[key])
+        for key in ("phone", "phone_secondary")
+        if key in client.keys() and normalize_phone(client[key])
+    }
     token = None
     while True:
         res = service.people().connections().list(
@@ -5854,9 +5865,9 @@ def google_find_existing_contact(service, client):
         for person in res.get("connections", []):
             emails = {(x.get("value") or "").strip().casefold() for x in person.get("emailAddresses", [])}
             phones = {normalize_phone(x.get("value")) for x in person.get("phoneNumbers", [])}
-            if wanted_email and wanted_email in emails:
+            if wanted_emails and wanted_emails.intersection(emails):
                 return person.get("resourceName")
-            if wanted_phone and wanted_phone in phones:
+            if wanted_phones and wanted_phones.intersection(phones):
                 return person.get("resourceName")
         token = res.get("nextPageToken")
         if not token:
@@ -5875,6 +5886,7 @@ def google_contact_body(client):
     first_name = (client["first_name"] or "").strip() if "first_name" in client.keys() else ""
     last_name = (client["last_name"] or "").strip() if "last_name" in client.keys() else ""
     fallback_name = (client["name"] or "").strip() if "name" in client.keys() else ""
+    company = (client["company"] or "").strip() if "company" in client.keys() else ""
 
     if first_name or last_name:
         google_name = {}
@@ -5883,16 +5895,30 @@ def google_contact_body(client):
         if last_name:
             google_name["familyName"] = last_name
         body["names"] = [google_name]
-    elif fallback_name:
+    elif fallback_name and not company:
         body["names"] = [{"givenName": fallback_name}]
 
-    email = (client["email"] or "").strip()
-    if email:
-        body["emailAddresses"] = [{"value": email, "type": "home"}]
+    emails = []
+    seen_emails = set()
+    for key, email_type in (("email", "home"), ("email_secondary", "other")):
+        email = (client[key] or "").strip() if key in client.keys() else ""
+        normalized = email.casefold()
+        if email and normalized not in seen_emails:
+            seen_emails.add(normalized)
+            emails.append({"value": email, "type": email_type})
+    if emails:
+        body["emailAddresses"] = emails
 
-    phone = (client["phone"] or "").strip()
-    if phone:
-        body["phoneNumbers"] = [{"value": phone, "type": "mobile"}]
+    phones = []
+    seen_phones = set()
+    for key, phone_type in (("phone", "mobile"), ("phone_secondary", "other")):
+        phone = (client[key] or "").strip() if key in client.keys() else ""
+        normalized = normalize_phone(phone)
+        if phone and normalized and normalized not in seen_phones:
+            seen_phones.add(normalized)
+            phones.append({"value": phone, "type": phone_type})
+    if phones:
+        body["phoneNumbers"] = phones
 
     street = (client["address_street"] or "").strip()
     city = (client["city"] or "").strip()
@@ -5906,7 +5932,6 @@ def google_contact_body(client):
             "type": "home"
         }]
 
-    company = (client["company"] or "").strip() if "company" in client.keys() else ""
     if company:
         body["organizations"] = [{"name": company, "type": "work"}]
 
@@ -5922,7 +5947,26 @@ def google_safe_merge_contact(latest, wopr_body):
     merged = {}
     fields_changed = []
 
-    existing_names = [dict(x) for x in latest.get("names", [])]
+    # Les objets renvoyés par People API contiennent beaucoup de propriétés
+    # en lecture seule (metadata, displayName, formattedType, ...). Elles ne
+    # doivent jamais être recopiées dans updateContact : Google répond sinon
+    # par un HTTP 400 « Request contains an invalid argument ».
+    writable_fields = {
+        "names": {"givenName", "familyName", "middleName", "honorificPrefix", "honorificSuffix"},
+        "emailAddresses": {"value", "type"},
+        "phoneNumbers": {"value", "type"},
+        "addresses": {"streetAddress", "city", "region", "postalCode", "country", "poBox", "neighborhood", "type"},
+        "organizations": {"name", "type", "title", "department"},
+        "biographies": {"value", "contentType"},
+    }
+
+    def writable_item(field, item):
+        allowed = writable_fields[field]
+        return {key: value for key, value in dict(item).items()
+                if key in allowed and value not in (None, "")}
+
+    existing_names = [writable_item("names", x) for x in latest.get("names", [])]
+    existing_names = [x for x in existing_names if x]
     wanted_names = wopr_body.get("names", [])
     if wanted_names:
         wanted = wanted_names[0]
@@ -5937,10 +5981,18 @@ def google_safe_merge_contact(latest, wopr_body):
             existing_names = [dict(wanted)]
         merged["names"] = existing_names
         fields_changed.append("names")
+    elif wopr_body.get("organizations"):
+        # Fiche WOPR "entreprise seule" : nettoie les anciens prénom/nom
+        # recopiés dans Google, sans toucher aux notes ni aux coordonnées.
+        if existing_names:
+            merged["names"] = []
+            fields_changed.append("names")
 
     def merge_multi(field, keyfunc):
-        existing = [dict(x) for x in latest.get(field, [])]
-        wanted = [dict(x) for x in wopr_body.get(field, [])]
+        existing = [writable_item(field, x) for x in latest.get(field, [])]
+        existing = [x for x in existing if x]
+        wanted = [writable_item(field, x) for x in wopr_body.get(field, [])]
+        wanted = [x for x in wanted if x]
         if not wanted:
             return
         seen = {keyfunc(x) for x in existing if keyfunc(x)}
@@ -5962,8 +6014,20 @@ def google_safe_merge_contact(latest, wopr_body):
             (x.get("city") or "").strip().casefold(),
         ])
     )
-    merge_multi("organizations", lambda x: (x.get("name") or "").strip().casefold())
-    merge_multi("biographies", lambda x: (x.get("value") or "").strip().casefold())
+    if wopr_body.get("organizations") and not wopr_body.get("names"):
+        merged["organizations"] = [writable_item("organizations", x) for x in wopr_body["organizations"]]
+        fields_changed.append("organizations")
+    else:
+        merge_multi("organizations", lambda x: (x.get("name") or "").strip().casefold())
+    # Google n'autorise qu'une seule biographie (note) par source. Une
+    # ancienne synchronisation peut en avoir créé plusieurs : on remplace
+    # alors la collection complète par la note WOPR courante au lieu d'en
+    # ajouter une nouvelle.
+    wanted_biographies = [writable_item("biographies", x) for x in wopr_body.get("biographies", [])]
+    wanted_biographies = [x for x in wanted_biographies if x]
+    if wanted_biographies:
+        merged["biographies"] = [wanted_biographies[0]]
+        fields_changed.append("biographies")
 
     if latest.get("etag"):
         merged["etag"] = latest["etag"]
@@ -6228,10 +6292,10 @@ def parse_proton_vcf(raw_text):
 
         # La base WOPR a un email/téléphone/adresse principal.
         # Les coordonnées Proton supplémentaires sont donc conservées dans Notes.
-        if len(email_values) > 1:
-            extra_notes.append("Autres e-mails Proton : " + " / ".join(email_values[1:]))
-        if len(phone_values) > 1:
-            extra_notes.append("Autres téléphones Proton : " + " / ".join(phone_values[1:]))
+        if len(email_values) > 2:
+            extra_notes.append("Autres e-mails Proton : " + " / ".join(email_values[2:]))
+        if len(phone_values) > 2:
+            extra_notes.append("Autres téléphones Proton : " + " / ".join(phone_values[2:]))
         if len(address_values) > 1:
             formatted = []
             for adr in address_values[1:]:
@@ -6248,8 +6312,10 @@ def parse_proton_vcf(raw_text):
             "first_name": given_name,
             "last_name": family_name,
             "email": email_values[0].strip() if email_values else "",
+            "email_secondary": email_values[1].strip() if len(email_values) > 1 else "",
             "emails": email_values,
             "phone": phone_values[0].strip() if phone_values else "",
+            "phone_secondary": phone_values[1].strip() if len(phone_values) > 1 else "",
             "phones": phone_values,
             "address_street": primary_address.get("street", "").strip(),
             "postal_code": primary_address.get("postal_code", "").strip(),
@@ -6369,7 +6435,7 @@ def _merge_manual_local_client(con, master_id, duplicate_id):
 
     # Complète uniquement les champs vides de la fiche conservée.
     for field in (
-        "first_name", "last_name", "company", "phone", "email",
+        "first_name", "last_name", "company", "phone", "phone_secondary", "email", "email_secondary",
         "address_street", "postal_code", "city"
     ):
         mv = str(master.get(field) or "").strip()
@@ -6382,7 +6448,9 @@ def _merge_manual_local_client(con, master_id, duplicate_id):
     extra_notes = []
     for label, field, normalizer in (
         ("Téléphone", "phone", normalize_phone),
+        ("Téléphone secondaire", "phone_secondary", normalize_phone),
         ("E-mail", "email", _email_key),
+        ("E-mail secondaire", "email_secondary", _email_key),
         ("Adresse", "address_street", lambda x: str(x or "").strip().casefold()),
         ("Code postal", "postal_code", lambda x: str(x or "").strip()),
         ("Ville", "city", lambda x: str(x or "").strip().casefold()),
@@ -6478,7 +6546,11 @@ def _merge_one_local_client(con, master_id, duplicate_id):
 
     if _field_conflict([master.get("email"), dup.get("email")], _email_key):
         return {"merged": False, "repairs": 0, "quotes": 0}
+    if _field_conflict([master.get("email_secondary"), dup.get("email_secondary")], _email_key):
+        return {"merged": False, "repairs": 0, "quotes": 0}
     if _field_conflict([master.get("phone"), dup.get("phone")], normalize_phone):
+        return {"merged": False, "repairs": 0, "quotes": 0}
+    if _field_conflict([master.get("phone_secondary"), dup.get("phone_secondary")], normalize_phone):
         return {"merged": False, "repairs": 0, "quotes": 0}
 
     # Les signatures doivent partager au moins une identité normalisée.
@@ -6493,7 +6565,7 @@ def _merge_one_local_client(con, master_id, duplicate_id):
 
     updates = {}
     for field in (
-        "first_name", "last_name", "company", "phone", "email",
+        "first_name", "last_name", "company", "phone", "phone_secondary", "email", "email_secondary",
         "address_street", "postal_code", "city", "notes"
     ):
         if not str(master.get(field) or "").strip() and str(dup.get(field) or "").strip():
@@ -6555,7 +6627,7 @@ def _merge_one_local_client(con, master_id, duplicate_id):
 def _local_client_richness(local, repairs_count=0, quotes_count=0):
     filled = sum(
         1 for field in (
-            "first_name", "last_name", "company", "phone", "email",
+            "first_name", "last_name", "company", "phone", "phone_secondary", "email", "email_secondary",
             "address_street", "postal_code", "city", "notes",
             "google_resource_name"
         )
@@ -6716,7 +6788,9 @@ def parse_google_contacts_csv(raw_text):
         )
 
         email = str(row.get("E-mail 1 - Value") or "").strip()
+        email_secondary = str(row.get("E-mail 2 - Value") or "").strip()
         phone = str(row.get("Phone 1 - Value") or "").strip()
+        phone_secondary = str(row.get("Phone 2 - Value") or "").strip()
 
         street = str(row.get("Address 1 - Street") or "").strip()
         postal = str(row.get("Address 1 - Postal Code") or "").strip()
@@ -6725,7 +6799,7 @@ def parse_google_contacts_csv(raw_text):
         notes = str(row.get("Notes") or "").strip()
 
         display_name = " ".join(x for x in [first_name, last_name] if x).strip() or organization
-        if not display_name and not email and not phone:
+        if not display_name and not email and not email_secondary and not phone and not phone_secondary:
             continue
 
         contacts.append({
@@ -6736,7 +6810,9 @@ def parse_google_contacts_csv(raw_text):
             "organization": organization,
             "display_name": display_name,
             "email": email,
+            "email_secondary": email_secondary,
             "phone": phone,
+            "phone_secondary": phone_secondary,
             "address_street": street,
             "postal_code": postal,
             "city": city,
@@ -6768,13 +6844,15 @@ def analyze_google_csv_contacts(contacts):
     for local in local_rows:
         cid = local["id"]
 
-        ek = _email_key(local.get("email"))
-        if ek:
-            email_index.setdefault(ek, []).append(cid)
+        for email_field in ("email", "email_secondary"):
+            ek = _email_key(local.get(email_field))
+            if ek:
+                email_index.setdefault(ek, []).append(cid)
 
-        pk = normalize_phone(local.get("phone"))
-        if pk:
-            phone_index.setdefault(pk, []).append(cid)
+        for phone_field in ("phone", "phone_secondary"):
+            pk = normalize_phone(local.get(phone_field))
+            if pk:
+                phone_index.setdefault(pk, []).append(cid)
 
         for sig in _contact_name_signature(
             local.get("first_name"),
@@ -6813,6 +6891,12 @@ def analyze_google_csv_contacts(contacts):
             if len(email_ids) == 1:
                 strong_sets.append(email_ids)
                 evidence.append("e-mail")
+        ek_secondary = _email_key(source.get("email_secondary"))
+        if ek_secondary:
+            email_ids = set(email_index.get(ek_secondary, []))
+            if len(email_ids) == 1:
+                strong_sets.append(email_ids)
+                evidence.append("e-mail secondaire")
 
         pk = normalize_phone(source.get("phone"))
         if pk:
@@ -6820,6 +6904,12 @@ def analyze_google_csv_contacts(contacts):
             if len(phone_ids) == 1:
                 strong_sets.append(phone_ids)
                 evidence.append("téléphone")
+        pk_secondary = normalize_phone(source.get("phone_secondary"))
+        if pk_secondary:
+            phone_ids = set(phone_index.get(pk_secondary, []))
+            if len(phone_ids) == 1:
+                strong_sets.append(phone_ids)
+                evidence.append("téléphone secondaire")
 
         strong_ids = set()
         if strong_sets:
@@ -6914,8 +7004,12 @@ def analyze_google_csv_contacts(contacts):
                 fill["last_name"] = source_last
             if not str(local.get("phone") or "").strip() and source.get("phone"):
                 fill["phone"] = str(source.get("phone") or "").strip()
+            if not str(local.get("phone_secondary") or "").strip() and source.get("phone_secondary"):
+                fill["phone_secondary"] = str(source.get("phone_secondary") or "").strip()
             if not str(local.get("email") or "").strip() and source.get("email"):
                 fill["email"] = str(source.get("email") or "").strip()
+            if not str(local.get("email_secondary") or "").strip() and source.get("email_secondary"):
+                fill["email_secondary"] = str(source.get("email_secondary") or "").strip()
             if not str(local.get("address_street") or "").strip() and source.get("address_street"):
                 fill["address_street"] = str(source.get("address_street") or "").strip()
             if not str(local.get("postal_code") or "").strip() and source.get("postal_code"):
@@ -7002,11 +7096,14 @@ def build_local_contact_index(rows):
         item = dict(row)
         rid = item.get("id")
         email = _email_key(item.get("email"))
+        email_secondary = _email_key(item.get("email_secondary"))
         phone = normalize_phone(item.get("phone"))
         name = _name_key(item.get("name"))
         uid = (item.get("proton_uid") or "").strip()
         if email:
             index["email"].setdefault(email, []).append(rid)
+        if email_secondary:
+            index["email"].setdefault(email_secondary, []).append(rid)
         if phone:
             index["phone"].setdefault(phone, []).append(rid)
         if name:
@@ -8194,7 +8291,19 @@ def atelier_dashboard():
     today = now().date()
     current_year = today.year
     current_month = today.month
-    month_prefix = f"{current_year:04d}-{current_month:02d}"
+    try:
+        selected_year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        selected_year = current_year
+    try:
+        selected_month = int(request.args.get("month", current_month))
+    except (TypeError, ValueError):
+        selected_month = current_month
+    if not 2000 <= selected_year <= 2100:
+        selected_year = current_year
+    if not 1 <= selected_month <= 12:
+        selected_month = current_month
+    month_prefix = f"{selected_year:04d}-{selected_month:02d}"
 
     con = db()
 
@@ -8238,10 +8347,18 @@ def atelier_dashboard():
         r for r in active_rows
         if str(r["received_date"] or "")[:7] == month_prefix
     ]
+    # Le KPI mensuel représente toutes les entrées traitées par l'atelier,
+    # y compris les factures simples (qui ne créent volontairement aucun suivi).
+    reparations_mois_count = con.execute("""
+        SELECT COUNT(*)
+        FROM repairs r
+        WHERE substr(COALESCE(r.received_date,''), 1, 7)=?
+          AND lower(trim(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+    """, (month_prefix,)).fetchone()[0]
 
     # CA encaissé du mois : source comptable centralisée.
     ca_row = next(
-        (r for r in accounting_monthly_totals(con, current_year) if int(r["m"]) == current_month),
+        (r for r in accounting_monthly_totals(con, selected_year) if int(r["m"]) == selected_month),
         None,
     )
     ca_month = (
@@ -8319,13 +8436,27 @@ def atelier_dashboard():
             watch.append(item)
     watch.sort(key=lambda x: x["days_waiting"], reverse=True)
 
+    available_years = {current_year}
+    try:
+        available_years.update(
+            int(row[0]) for row in con.execute(
+                "SELECT DISTINCT substr(received_date,1,4) FROM repairs WHERE substr(received_date,1,4) GLOB '[0-9][0-9][0-9][0-9]'"
+            ).fetchall()
+            if str(row[0]).isdigit()
+        )
+    except Exception:
+        pass
     con.close()
 
     return render_template(
         "atelier.html",
         current_year=current_year,
         current_month=current_month,
-        month_name=ledger_month_name(current_month),
+        selected_year=selected_year,
+        selected_month=selected_month,
+        available_years=sorted(available_years, reverse=True),
+        ledger_month_name=ledger_month_name,
+        month_name=ledger_month_name(selected_month),
         en_cours_count=len(en_cours),
         attente_piece_count=len(attente_piece),
         overdue_count=len(overdue),
@@ -8334,7 +8465,7 @@ def atelier_dashboard():
         unpaid_count=len(unpaid_rows),
         unpaid_total=unpaid_total,
         ca_month=ca_month,
-        reparations_mois_count=len(reparations_mois),
+        reparations_mois_count=int(reparations_mois_count or 0),
         watch=watch[:10],
         unpaid_rows=unpaid_rows[:10],
         recent_rows=active_rows[:8],
@@ -10638,7 +10769,7 @@ def repair_client_search():
     if not words:
         return jsonify([])
 
-    searchable = ("first_name", "last_name", "name", "company", "phone", "email")
+    searchable = ("first_name", "last_name", "name", "company", "phone", "phone_secondary", "email")
     clauses = []
     params = []
     for word in words:
@@ -10652,7 +10783,7 @@ def repair_client_search():
         rows = con.execute(
             f"""
             SELECT id, name, first_name, last_name, company,
-                   address_street, postal_code, city, phone, email
+                   address_street, postal_code, city, phone, phone_secondary, email
             FROM clients
             WHERE COALESCE(archived,0)=0
               AND {' AND '.join(clauses)}
@@ -10700,7 +10831,9 @@ def repair_new():
             [x for x in [address_street, (postal_code + " " + city).strip()] if x]
         )
         phone = request.form.get("phone","").strip()
+        phone_secondary = request.form.get("phone_secondary","").strip()
         email = request.form.get("email","").strip()
+        email_secondary = request.form.get("email_secondary","").strip()
         created = now().isoformat(timespec="seconds")
 
         con = db()
@@ -10756,7 +10889,9 @@ def repair_new():
                 "postal_code": postal_code,
                 "city": city,
                 "phone": phone,
+                "phone_secondary": phone_secondary,
                 "email": email,
+                "email_secondary": email_secondary,
             }
             contact_changed = any(
                 str(client[field] or "").strip() != str(value or "").strip()
@@ -10768,14 +10903,14 @@ def repair_new():
                     UPDATE clients
                     SET name=?, last_name=?, first_name=?, company=?,
                         address=?, address_street=?, postal_code=?, city=?,
-                        phone=?, email=?,
+                        phone=?, phone_secondary=?, email=?, email_secondary=?,
                         google_sync_status='À synchroniser',
                         google_sync_error='',
                         updated_at=?
                     WHERE id=?
                 """, (
                     name, last_name, first_name, company,
-                    address, address_street, postal_code, city, phone, email,
+                    address, address_street, postal_code, city, phone, phone_secondary, email, email_secondary,
                     created, client["id"]
                 ))
             client_id = int(client["id"])
@@ -10786,12 +10921,12 @@ def repair_new():
             cur = con.execute("""
                 INSERT INTO clients(
                     name,last_name,first_name,company,
-                    address,address_street,postal_code,city,phone,email,created_at,updated_at
+                    address,address_street,postal_code,city,phone,phone_secondary,email,email_secondary,created_at,updated_at
                 )
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 name,last_name,first_name,company,
-                address,address_street,postal_code,city,phone,email,created,created
+                address,address_street,postal_code,city,phone,phone_secondary,email,email_secondary,created,created
             ))
             client_id = int(cur.lastrowid)
 
@@ -11186,7 +11321,9 @@ def repair_detail(rid):
                c.postal_code client_postal_code,
                c.city client_city,
                c.phone client_phone,
-               c.email client_email
+               c.phone_secondary client_phone_secondary,
+               c.email client_email,
+               c.email_secondary client_email_secondary
         FROM repairs r JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
     """, (rid,)).fetchone()
@@ -11447,6 +11584,8 @@ def repair_edit(rid):
         postal_code = request.form.get("postal_code", "").strip()
         city = request.form.get("city", "").strip()
         address = "\n".join([x for x in [address_street, (postal_code + " " + city).strip()] if x])
+        phone_secondary = request.form.get("phone_secondary", "").strip()
+        email_secondary = request.form.get("email_secondary", "").strip()
 
         received_date = request.form.get("received_date", "").strip() or r["received_date"]
         try:
@@ -11459,14 +11598,16 @@ def repair_edit(rid):
         con.execute("""
             UPDATE clients SET
                 first_name=?, last_name=?, name=?, company=?, address=?, address_street=?,
-                postal_code=?, city=?, phone=?, email=?,
+                postal_code=?, city=?, phone=?, phone_secondary=?, email=?, email_secondary=?,
                 google_sync_status=?, google_sync_error=?, updated_at=?
             WHERE id=?
         """, (
             first_name, last_name, name, company, address, address_street,
             postal_code, city,
             request.form.get("phone", "").strip(),
+            phone_secondary,
             request.form.get("email", "").strip(),
+            email_secondary,
             "À synchroniser", "", now().isoformat(timespec="seconds"),
             r["client_id"]
         ))
@@ -11848,7 +11989,8 @@ def repair_update(rid):
 def repair_close(rid):
     con = db()
     r = con.execute("""
-        SELECT r.*, c.name client_name, c.email client_email, c.phone client_phone,
+        SELECT r.*, c.name client_name, c.email client_email, c.email_secondary client_email_secondary, c.phone client_phone,
+               c.phone_secondary client_phone_secondary,
                c.address_street client_address_street, c.postal_code client_postal_code,
                c.city client_city
         FROM repairs r JOIN clients c ON c.id=r.client_id WHERE r.id=?
@@ -12874,14 +13016,16 @@ def simple_invoice_new():
             postal_code = request.form.get("postal_code", "").strip()
             city = request.form.get("city", "").strip()
             phone = request.form.get("phone", "").strip()
+            phone_secondary = request.form.get("phone_secondary", "").strip()
             email = request.form.get("email", "").strip()
+            email_secondary = request.form.get("email_secondary", "").strip()
             address = "\n".join(
                 x for x in [address_street, (postal_code + " " + city).strip()] if x
             )
 
             existing = None
             if name.casefold() == "client de passage" and not any(
-                [address_street, postal_code, city, phone, email, company]
+                [address_street, postal_code, city, phone, phone_secondary, email, email_secondary, company]
             ):
                 existing = con.execute(
                     "SELECT * FROM clients WHERE lower(trim(name))='client de passage' ORDER BY id LIMIT 1"
@@ -12895,12 +13039,12 @@ def simple_invoice_new():
                     INSERT INTO clients(
                         name,last_name,first_name,company,
                         address,address_street,postal_code,city,
-                        phone,email,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                        phone,phone_secondary,email,email_secondary,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     name,last_name,first_name,company,
                     address,address_street,postal_code,city,
-                    phone,email,stamp_client,stamp_client
+                    phone,phone_secondary,email,email_secondary,stamp_client,stamp_client
                 ))
                 client_id = int(cur.lastrowid)
 
@@ -12909,7 +13053,7 @@ def simple_invoice_new():
                 # "Client de passage" reste local pour éviter de polluer les contacts.
                 is_generic_passage = (
                     name.casefold() == "client de passage"
-                    and not any([address_street, postal_code, city, phone, email, company])
+                    and not any([address_street, postal_code, city, phone, phone_secondary, email, email_secondary, company])
                 )
                 if not is_generic_passage:
                     sync_new_client_id = client_id
@@ -17848,14 +17992,16 @@ def supplier_documents_audit():
 def contacts_page():
     q = " ".join(request.args.get("q", "").split()).strip()
     show_archived = str(request.args.get("archived") or "").strip().lower() in {"1", "true", "yes", "oui"}
+    google_errors_only = (not show_archived) and str(request.args.get("google_errors") or "").strip() in {"1", "true", "yes", "oui"}
     archive_clause = "COALESCE(archived,0)=1" if show_archived else "COALESCE(archived,0)=0"
+    status_clause = " AND google_sync_status='Erreur'" if google_errors_only else ""
     con = db()
 
     if q:
         like = f"%{q}%"
         clients = con.execute(f"""
             SELECT * FROM clients
-            WHERE {archive_clause}
+            WHERE {archive_clause}{status_clause}
               AND (
                    COALESCE(last_name,'') LIKE ? COLLATE NOCASE
                 OR COALESCE(first_name,'') LIKE ? COLLATE NOCASE
@@ -17876,7 +18022,7 @@ def contacts_page():
     else:
         clients = con.execute(f"""
             SELECT * FROM clients
-            WHERE {archive_clause}
+            WHERE {archive_clause}{status_clause}
             ORDER BY
                 COALESCE(first_name,'') COLLATE NOCASE,
                 COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
@@ -17884,7 +18030,7 @@ def contacts_page():
         """).fetchall()
 
     total_clients = con.execute(
-        f"SELECT COUNT(*) FROM clients WHERE {archive_clause}"
+        f"SELECT COUNT(*) FROM clients WHERE {archive_clause}{status_clause}"
     ).fetchone()[0]
     archived_clients_count = con.execute(
         "SELECT COUNT(*) FROM clients WHERE COALESCE(archived,0)=1"
@@ -17920,6 +18066,7 @@ def contacts_page():
         google_libs_ok=GOOGLE_LIBS_OK,
         safe_duplicate_groups=safe_duplicate_groups,
         show_archived=show_archived,
+        google_errors_only=google_errors_only,
         archived_clients_count=archived_clients_count,
         google_synced_count=google_synced_count,
         google_pending_count=google_pending_count,
@@ -18088,7 +18235,9 @@ def client_new():
         postal_code = request.form.get("postal_code", "").strip()
         city = request.form.get("city", "").strip()
         phone = request.form.get("phone", "").strip()
+        phone_secondary = request.form.get("phone_secondary", "").strip()
         email = request.form.get("email", "").strip()
+        email_secondary = request.form.get("email_secondary", "").strip()
         notes = request.form.get("notes", "").strip()
 
         form_client = {
@@ -18100,7 +18249,9 @@ def client_new():
             "postal_code": postal_code,
             "city": city,
             "phone": phone,
+            "phone_secondary": phone_secondary,
             "email": email,
+            "email_secondary": email_secondary,
             "notes": notes,
         }
 
@@ -18118,15 +18269,15 @@ def client_new():
             INSERT INTO clients(
                 name,last_name,first_name,company,
                 address,address_street,postal_code,city,
-                phone,email,notes,
+                phone,phone_secondary,email,email_secondary,notes,
                 created_at,updated_at,
                 google_sync_status,google_sync_error,
                 archived
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
         """, (
             name,last_name,first_name,company,
             address,address_street,postal_code,city,
-            phone,email,notes,
+            phone,phone_secondary,email,email_secondary,notes,
             stamp,stamp,
             "À synchroniser",""
         ))
@@ -18151,7 +18302,9 @@ def client_new():
         "postal_code": "",
         "city": "",
         "phone": "",
+        "phone_secondary": "",
         "email": "",
+        "email_secondary": "",
         "notes": "",
     }
     return render_template("client_edit.html", client=empty_client, is_new=True)
@@ -18177,7 +18330,9 @@ def client_edit(client_id):
         postal_code = request.form.get("postal_code", "").strip()
         city = request.form.get("city", "").strip()
         phone = request.form.get("phone", "").strip()
+        phone_secondary = request.form.get("phone_secondary", "").strip()
         email = request.form.get("email", "").strip()
+        email_secondary = request.form.get("email_secondary", "").strip()
         notes = request.form.get("notes", "").strip()
 
         if not name:
@@ -18193,13 +18348,13 @@ def client_edit(client_id):
             UPDATE clients
             SET name=?, last_name=?, first_name=?, company=?,
                 address=?, address_street=?, postal_code=?, city=?,
-                phone=?, email=?, notes=?, updated_at=?,
+                phone=?, phone_secondary=?, email=?, email_secondary=?, notes=?, updated_at=?,
                 google_sync_status='À synchroniser', google_sync_error=''
             WHERE id=?
         """, (
             name, last_name, first_name, company,
             address, address_street, postal_code, city,
-            phone, email, notes, now().isoformat(timespec="seconds"), client_id
+            phone, phone_secondary, email, email_secondary, notes, now().isoformat(timespec="seconds"), client_id
         ))
         con.commit()
         con.close()
@@ -18675,6 +18830,7 @@ def import_google_group_to_wopr():
         biographies = person.get("biographies", [])
 
         email = emails[0] if emails else ""
+        email_secondary = emails[1] if len(emails) > 1 else ""
         phone = phones[0] if phones else ""
         adr = addresses[0] if addresses else {}
         street = (adr.get("streetAddress") or "").strip()
@@ -18698,6 +18854,14 @@ def import_google_group_to_wopr():
             if len(rows) == 1:
                 local = rows[0]
 
+        if local is None and email_secondary:
+            rows = con.execute(
+                "SELECT * FROM clients WHERE lower(trim(COALESCE(email,'')))=? OR lower(trim(COALESCE(email_secondary,'')))=?",
+                (email_secondary.casefold(), email_secondary.casefold())
+            ).fetchall()
+            if len(rows) == 1:
+                local = rows[0]
+
         if local is None and phone:
             wanted_phone = normalize_phone(phone)
             rows = con.execute(
@@ -18716,15 +18880,15 @@ def import_google_group_to_wopr():
                 INSERT INTO clients(
                     name,last_name,first_name,company,
                     address,address_street,postal_code,city,
-                    phone,email,notes,
+                    phone,email,email_secondary,notes,
                     google_resource_name,google_sync_status,google_sync_error,
                     google_synced_at,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 composed,last_name,first_name,company,
                 address,street,postal,city,
-                phone,email,notes,
-                resource,"Synchronisé","",stamp,stamp,stamp
+                    phone,email,email_secondary,notes,
+                    resource,"Synchronisé","",stamp,stamp,stamp
             ))
             created += 1
             continue
@@ -18742,6 +18906,7 @@ def import_google_group_to_wopr():
             "city": city,
             "phone": phone,
             "email": email,
+            "email_secondary": email_secondary,
             "notes": notes,
         }
 
@@ -18885,10 +19050,10 @@ def contact_sync_google(client_id):
 @app.route("/contacts/export/google.csv")
 def export_google_contacts():
     con=db(); clients=con.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall(); con.close()
-    rows=[["First Name","Email 1 - Label","Email 1 - Value","Phone 1 - Label","Phone 1 - Value",
+    rows=[["First Name","Email 1 - Label","Email 1 - Value","Email 2 - Label","Email 2 - Value","Phone 1 - Label","Phone 1 - Value","Phone 2 - Label","Phone 2 - Value",
            "Address 1 - Label","Address 1 - Street","Address 1 - City","Address 1 - Postal Code","Address 1 - Country","Labels","Notes"]]
     for c in clients:
-        rows.append([c["name"],"Home",c["email"] or "","Mobile",c["phone"] or "","Home",
+        rows.append([c["name"],"Home",c["email"] or "","Other",c["email_secondary"] or "","Mobile",c["phone"] or "","Other",c["phone_secondary"] or "","Home",
                      c["address_street"] or "",c["city"] or "",c["postal_code"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
     return csv_response("WOPR_Contacts_Google.csv", rows)
 
@@ -18910,7 +19075,9 @@ def export_vcard_contacts():
     for c in clients:
         lines=["BEGIN:VCARD","VERSION:3.0",f"FN:{vcard_escape(c['name'])}",f"N:;{vcard_escape(c['name'])};;;" ]
         if c["email"]: lines.append(f"EMAIL;TYPE=INTERNET:{vcard_escape(c['email'])}")
+        if c["email_secondary"]: lines.append(f"EMAIL;TYPE=OTHER:{vcard_escape(c['email_secondary'])}")
         if c["phone"]: lines.append(f"TEL;TYPE=CELL:{vcard_escape(c['phone'])}")
+        if c["phone_secondary"]: lines.append(f"TEL;TYPE=OTHER:{vcard_escape(c['phone_secondary'])}")
         street=c["address_street"] or ""
         if street or c["city"] or c["postal_code"]:
             lines.append(f"ADR;TYPE=HOME:;;{vcard_escape(street)};{vcard_escape(c['city'])};;{vcard_escape(c['postal_code'])};France")

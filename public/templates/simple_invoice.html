@@ -30,7 +30,9 @@
     <label>Nom<input id="simple-last-name" name="last_name"></label>
     <label>Entreprise / Société<input id="simple-company" name="company"></label>
     <label>Téléphone<input id="simple-phone" name="phone"></label>
+    <label>Téléphone secondaire<input id="simple-phone-secondary" name="phone_secondary"></label>
     <label>E-mail<input id="simple-email" type="email" name="email"></label>
+    <label>E-mail secondaire<input id="simple-email-secondary" type="email" name="email_secondary"></label>
     <label>Adresse<input id="simple-address" name="address_street"></label>
     <label>Code postal
       <input id="simple-postal-code"
@@ -145,7 +147,9 @@ const clientFields={
   postal_code:document.getElementById('simple-postal-code'),
   city:document.getElementById('simple-city'),
   phone:document.getElementById('simple-phone'),
+  phone_secondary:document.getElementById('simple-phone-secondary'),
   email:document.getElementById('simple-email')
+  ,email_secondary:document.getElementById('simple-email-secondary')
 };
 let foundClients=[];
 let clientSearchTimer=null;

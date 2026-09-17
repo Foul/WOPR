@@ -15,6 +15,18 @@
 </div>
 
 <div class="atelier-kpis">
+  <form class="atelier-period-picker" method="get">
+    <label>Année
+      <select name="year" onchange="this.form.submit()">
+        {% for year in available_years %}<option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Mois
+      <select name="month" onchange="this.form.submit()">
+        {% for month_number in range(1, 13) %}<option value="{{ month_number }}" {% if month_number == selected_month %}selected{% endif %}>{{ ledger_month_name(month_number) }}</option>{% endfor %}
+      </select>
+    </label>
+  </form>
   <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
     <span class="atelier-kpi-icon">🔧</span>
     <span class="atelier-kpi-label">En cours</span>
@@ -51,12 +63,12 @@
     <strong>{% if client_mode %}<span class="client-mode-redacted">••••</span>{% else %}{{ '%.2f'|format(ca_month)|replace('.', ',') }} €{% endif %}</strong>
     <small>encaissé</small>
   </a>
-  <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
+  <div class="atelier-kpi">
     <span class="atelier-kpi-icon">🧰</span>
     <span class="atelier-kpi-label">Réparations {{ month_name }}</span>
     <strong>{{ reparations_mois_count }}</strong>
-    <small>entrées atelier</small>
-  </a>
+    <small>réparations / ventes atelier</small>
+  </div>
 </div>
 
 <div class="atelier-panels">

@@ -45,9 +45,15 @@
     <label>Téléphone
       <input name="phone" value="{{ r['client_phone'] or '' }}">
     </label>
+    <label>Téléphone secondaire
+      <input name="phone_secondary" value="{{ r['client_phone_secondary'] or '' }}">
+    </label>
 
     <label>Courriel
       <input type="email" name="email" value="{{ r['client_email'] or '' }}">
+    </label>
+    <label>Courriel secondaire
+      <input type="email" name="email_secondary" value="{{ r['client_email_secondary'] or '' }}">
     </label>
   </div>
 

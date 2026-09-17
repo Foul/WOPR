@@ -54,8 +54,16 @@
         <input name="phone" value="{{ client['phone'] or '' }}">
       </label>
 
+      <label>Téléphone secondaire (pro ou perso)
+        <input name="phone_secondary" value="{{ client['phone_secondary'] or '' }}" placeholder="Professionnel ou personnel">
+      </label>
+
       <label>Courriel
         <input type="email" name="email" value="{{ client['email'] or '' }}">
+      </label>
+
+      <label>Courriel secondaire
+        <input type="email" name="email_secondary" value="{{ client['email_secondary'] or '' }}">
       </label>
     </div>
   </section>

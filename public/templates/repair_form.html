@@ -37,7 +37,9 @@
     </label>
     <label>Ville<input id="client-city" name="city"></label>
     <label>Téléphone<input id="client-phone" name="phone"></label>
+    <label>Téléphone secondaire<input id="client-phone-secondary" name="phone_secondary"></label>
     <label>Courriel<input id="client-email" type="email" name="email"></label>
+    <label>Courriel secondaire<input id="client-email-secondary" type="email" name="email_secondary"></label>
   </div>
 
   <div class="section-title">Détails de l'Appareil</div>
@@ -83,7 +85,9 @@
     postal_code: document.getElementById('client-postal-code'),
     city: document.getElementById('client-city'),
     phone: document.getElementById('client-phone'),
+    phone_secondary: document.getElementById('client-phone-secondary'),
     email: document.getElementById('client-email')
+    ,email_secondary: document.getElementById('client-email-secondary')
   };
   let foundClients = [];
   let searchTimer = null;

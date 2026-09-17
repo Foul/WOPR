@@ -102,6 +102,7 @@
         <span class="sync-ok">{{ google_synced_count }} synchronisé(s)</span>
         · <span class="sync-wait">{{ google_pending_count }} à synchroniser</span>
         · <span class="sync-error">{{ google_error_count }} erreur(s)</span>
+        {% if google_error_count %}<a href="{{ url_for('contacts_page', google_errors=1) }}">Afficher les erreurs</a>{% endif %}
       {% endif %}
     </span>
   {% else %}
@@ -112,6 +113,7 @@
         <span class="sync-ok">{{ google_synced_count }} synchronisé(s)</span>
         · <span class="sync-wait">{{ google_pending_count }} à synchroniser</span>
         · <span class="sync-error">{{ google_error_count }} erreur(s)</span>
+        {% if google_error_count %}<a href="{{ url_for('contacts_page', google_errors=1) }}">Afficher les erreurs</a>{% endif %}
       {% endif %}
     </span>
   {% endif %}
@@ -119,27 +121,31 @@
 
 <div class="contacts-toolbar">
   {% if show_archived %}
-    <a class="button primary" href="{{ url_for('contacts_page') }}">← RETOUR AUX CLIENTS ACTIFS</a>
+    <a class="button primary wopr-client-back" href="{{ url_for('contacts_page') }}">← RETOUR AUX CLIENTS ACTIFS</a>
   {% else %}
-    <a class="button" href="{{ url_for('contacts_page', archived=1) }}">
+    <a class="button wopr-client-archive" href="{{ url_for('contacts_page', archived=1) }}">
       CLIENTS ARCHIVÉS{% if archived_clients_count %} ({{ archived_clients_count }}){% endif %}
     </a>
   {% endif %}
 
+  {% if google_errors_only %}
+    <a class="button primary wopr-client-back" href="{{ url_for('contacts_page') }}">← TOUS LES CLIENTS</a>
+  {% endif %}
+
   {% if not show_archived %}
-    <a class="button primary" href="{{ url_for('client_new') }}">＋ NOUVEAU CLIENT</a>
-    <a class="button primary" href="{{ url_for('import_google_csv_contacts') }}">Importer Google CSV</a>
+    <a class="button primary wopr-client-new" href="{{ url_for('client_new') }}">＋ NOUVEAU CLIENT</a>
+    <a class="button wopr-client-import-google" href="{{ url_for('import_google_csv_contacts') }}">Importer Google CSV</a>
     {% if safe_duplicate_groups %}
       <form method="post" action="{{ url_for('contacts_merge_safe_duplicates') }}" class="inline-form"
             onsubmit="return confirm('Fusionner uniquement les doublons exacts sans téléphone/e-mail contradictoires ?');">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <button class="button" type="submit">Fusionner doublons sûrs ({{ safe_duplicate_groups }})</button>
+        <button class="button wopr-client-merge" type="submit">Fusionner doublons sûrs ({{ safe_duplicate_groups }})</button>
       </form>
     {% endif %}
-    <a class="button" href="{{ url_for('import_proton_contacts') }}">Importer Proton VCF</a>
-    <a class="button" href="{{ url_for('export_google_contacts') }}">Exporter Google CSV</a>
-    <a class="button" href="{{ url_for('export_proton_contacts') }}">Exporter Proton CSV</a>
-    <a class="button" href="{{ url_for('export_vcard_contacts') }}">Exporter VCard universel</a>
+    <a class="button wopr-client-import-proton" href="{{ url_for('import_proton_contacts') }}">Importer Proton VCF</a>
+    <a class="button wopr-client-export-google" href="{{ url_for('export_google_contacts') }}">Exporter Google CSV</a>
+    <a class="button wopr-client-export-proton" href="{{ url_for('export_proton_contacts') }}">Exporter Proton CSV</a>
+    <a class="button wopr-client-export-vcard" href="{{ url_for('export_vcard_contacts') }}">Exporter VCard universel</a>
   {% endif %}
 </div>
 
@@ -190,10 +196,10 @@
     <col class="contact-col-phone"><col class="contact-col-email">
     <col class="contact-col-address"><col class="contact-col-notes"><col class="contact-col-google"><col class="contact-col-actions">
   </colgroup>
-  <thead><tr><th>Prénom</th><th>Nom</th><th>Entreprise / Société</th><th>Téléphone</th><th>E-mail</th><th>Adresse</th><th>Notes</th><th>Google</th><th>Actions</th></tr></thead>
+  <thead><tr><th>Prénom</th><th>Nom</th><th>Entreprise / Société</th><th>Téléphones</th><th>E-mail</th><th>Adresse</th><th>Notes</th><th>Google</th><th>Actions</th></tr></thead>
   <tbody>
   {% for c in clients %}
-  <tr id="client-{{ c['id'] }}" class="contact-row" data-client-row="{{ c['id'] }}">
+  <tr id="client-{{ c['id'] }}" class="contact-row" data-client-row="{{ c['id'] }}" data-google-status="{{ c['google_sync_status'] or '' }}">
     <td>
       <div class="contact-display"><strong>{{ c['first_name'] or '' }}</strong></div>
       <div class="contact-edit">
@@ -214,12 +220,18 @@
       </div>
     </td>
     <td>
-      <div class="contact-display contact-break">{{ c['phone'] or '' }}</div>
-      <div class="contact-edit"><input form="edit-client-{{ c['id'] }}" name="phone" value="{{ c['phone'] or '' }}"></div>
+      <div class="contact-display contact-break">{{ c['phone'] or '' }}{% if c['phone_secondary'] %}<br>{{ c['phone_secondary'] }}{% endif %}</div>
+      <div class="contact-edit">
+        <input form="edit-client-{{ c['id'] }}" name="phone" value="{{ c['phone'] or '' }}" placeholder="Principal">
+        <input form="edit-client-{{ c['id'] }}" name="phone_secondary" value="{{ c['phone_secondary'] or '' }}" placeholder="Secondaire">
+      </div>
     </td>
     <td>
-      <div class="contact-display contact-break">{{ c['email'] or '' }}</div>
-      <div class="contact-edit"><input form="edit-client-{{ c['id'] }}" type="email" name="email" value="{{ c['email'] or '' }}"></div>
+      <div class="contact-display contact-break">{{ c['email'] or '' }}{% if c['email_secondary'] %}<br>{{ c['email_secondary'] }}{% endif %}</div>
+      <div class="contact-edit">
+        <input form="edit-client-{{ c['id'] }}" type="email" name="email" value="{{ c['email'] or '' }}" placeholder="Principal">
+        <input form="edit-client-{{ c['id'] }}" type="email" name="email_secondary" value="{{ c['email_secondary'] or '' }}" placeholder="Secondaire">
+      </div>
     </td>
     <td>
       <div class="contact-display compact-address">
@@ -261,6 +273,7 @@
         <span class="sync-ok">● Synchronisé</span>
       {% elif c['google_sync_status']=='Erreur' %}
         <span class="sync-error" title="{{ c['google_sync_error'] or '' }}">● Erreur</span>
+        {% if c['google_sync_error'] %}<small class="sync-error google-error-detail" style="display:block;margin-top:4px;font-size:10px;line-height:1.2;max-width:180px;overflow-wrap:anywhere">{{ c['google_sync_error'] }}</small>{% endif %}
       {% else %}
         <span class="sync-wait">● {{ c['google_sync_status'] or 'À synchroniser' }}</span>
       {% endif %}
@@ -300,10 +313,28 @@
         Aucun client.
       {% endif %}
     </td></tr>
-  {% endfor %}
+{% endfor %}
   </tbody>
 </table>
 </div>
+
+<script>
+// Compatibilité avec les anciennes fiches : replace la pastille Google
+// dans sa colonne dédiée si elle a été rendue dans la cellule Téléphones.
+document.querySelectorAll('.contacts-table tbody tr').forEach(row => {
+  const googleCell = row.querySelector('.contact-cell-google');
+  const status = row.querySelector('.sync-ok, .sync-wait, .sync-error');
+  if (googleCell && status && !googleCell.contains(status)) {
+    googleCell.appendChild(status);
+  }
+});
+
+if (new URLSearchParams(location.search).get('google_errors') === '1') {
+  document.querySelectorAll('.contacts-table tbody tr[data-client-row]').forEach(row => {
+    row.hidden = row.dataset.googleStatus !== 'Erreur';
+  });
+}
+</script>
 
 <script>
 (() => {

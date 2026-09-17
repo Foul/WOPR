@@ -4073,6 +4073,11 @@ html,body{overflow-x:hidden!important}
 .topbar .topnav{min-width:0!important;max-width:100%!important;overflow-x:hidden!important;overflow-y:visible!important;scrollbar-width:none!important}
 .topbar .topnav::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
 
+/* Sélecteur de période du tableau de bord atelier. */
+.atelier-period-picker{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f5faff;border:1px solid #aad3f5;border-radius:10px}
+.atelier-period-picker label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#53657a}
+.atelier-period-picker select{min-width:130px;padding:7px 9px}
+
 /* Le bouton de bascule doit reprendre exactement le skin pixel du bouton voisin. */
 body.theme-8bit .page .atelier-head .client-mode-toggle{
   position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
@@ -4839,6 +4844,55 @@ body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-ch
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(3){background:#ffefc9 !important;color:#6a4500 !important;border-color:#08131f !important;}
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(4){background:#eadcff !important;color:#4e2478 !important;border-color:#08131f !important;}
 body.theme-8bit .page .contacts-table .contact-normal-actions > .mini-btn:nth-child(5){background:#ffdede !important;color:#7a1f1f !important;border-color:#08131f !important;}
+
+/* Clients : distinguer immédiatement la création d'une fiche et l'import. */
+body.theme-8bit .page :is(a,button).wopr-client-new,
+body.theme-8bit .page :is(a,button).wopr-client-import-google{
+  border-radius:0 !important;
+  border:2px solid #08131f !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.55),2px 2px 0 #08131f !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+  text-transform:uppercase !important;
+  text-shadow:1px 1px 0 rgba(255,255,255,.35) !important;
+}
+body.theme-8bit .page :is(a,button).wopr-client-new{
+  background:#b9f6c9 !important;
+  color:#075b27 !important;
+}
+body.theme-8bit .page :is(a,button).wopr-client-import-google{
+  background:#ffe1a8 !important;
+  color:#784300 !important;
+}
+body.theme-8bit .page :is(a,button).wopr-client-new:hover,
+body.theme-8bit .page :is(a,button).wopr-client-import-google:hover{
+  filter:brightness(1.05) !important;
+  transform:translate(1px,1px) !important;
+}
+
+/* Tous les boutons de la barre Clients gardent le même rendu 8-bit. */
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-back,
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-archive,
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-merge,
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-import-proton,
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-export-google,
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-export-proton,
+body.theme-8bit .page .contacts-toolbar :is(a,button).wopr-client-export-vcard{
+  border-radius:0 !important;
+  border:2px solid #08131f !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.55),2px 2px 0 #08131f !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+  text-transform:uppercase !important;
+  text-shadow:1px 1px 0 rgba(255,255,255,.35) !important;
+}
+body.theme-8bit .page .contacts-toolbar .wopr-client-back{background:#cfe3f6 !important;color:#18466e !important;}
+body.theme-8bit .page .contacts-toolbar .wopr-client-archive{background:#dce4ec !important;color:#354657 !important;}
+body.theme-8bit .page .contacts-toolbar .wopr-client-merge{background:#e5d5ff !important;color:#52217d !important;}
+body.theme-8bit .page .contacts-toolbar .wopr-client-import-proton{background:#c9f1ee !important;color:#075e5a !important;}
+body.theme-8bit .page .contacts-toolbar .wopr-client-export-google{background:#cfe0ff !important;color:#164b91 !important;}
+body.theme-8bit .page .contacts-toolbar .wopr-client-export-proton{background:#d9d1ff !important;color:#44318b !important;}
+body.theme-8bit .page .contacts-toolbar .wopr-client-export-vcard{background:#ffd1e4 !important;color:#8a2450 !important;}
 /* =====================================================================
    WOPR 2.3.283 — 8-BIT ACTIONS FINAL
    Source de vérité finale : app.css, chargé directement par base.html.
