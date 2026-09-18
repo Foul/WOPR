@@ -1,5 +1,11 @@
 # Changelog de la documentation
 
+## 2.4.3 - 18 septembre 2026 - notifications de suivi et signature client
+- Envoi automatique du premier code de suivi par SMS, ou par e-mail en l’absence de téléphone.
+- Notification de fin soumise à confirmation manuelle depuis la fiche de suivi.
+- Affichage de la signature client directement dans la fiche WOPR.
+- Création de dossier sécurisée même si un service de notification est indisponible.
+
 ## 2.4.0 - 16 septembre 2026 - release stable, mode client et encaissements
 - Mode Client disponible depuis le tableau de bord Atelier, avec masquage des informations confidentielles.
 - Bascule Mode Client / Mode Admin et Nouvelle réparation harmonisées avec le rendu 8-BIT.

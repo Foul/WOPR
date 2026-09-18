@@ -157,6 +157,7 @@ code{background:#eef3f8;padding:2px 5px;border-radius:4px}
 .brand-link:hover strong{text-decoration:underline}
 .inline-form{display:inline-block;margin:0}
 .inline-form button{height:100%}
+.client-signature-image{display:block;max-width:100%;width:auto;height:auto;max-height:180px;margin:12px auto 14px;object-fit:contain}
 
 .postal-address,.postal-preview{line-height:1.5}
 .invoice-entry-table th:nth-child(1){width:130px}

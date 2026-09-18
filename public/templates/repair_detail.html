@@ -72,6 +72,7 @@
     <div class="signature-box">
       {% if r['signature_path'] %}
         <div class="ok">✓ Signature enregistrée</div>
+        <img class="client-signature-image" src="{{ url_for('repair_signature', rid=r['id']) }}" alt="Signature du client">
         <div><strong>Client :</strong> {{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</div>
         <div><strong>Date :</strong> {{ r['signature_at'] }}</div>
       {% else %}
@@ -177,6 +178,14 @@
 
 <div class="footer-actions">
   <a class="button edit-followup-btn wopr-action-edit" href="{{ url_for('repair_edit', rid=r['id']) }}">Modifier le suivi</a>
+  {% if r['status'] in ['Terminé', 'Restitué'] and not (r['tracking_completion_notification_sent'] or r['tracking_completion_sms_sent']) %}
+    <form method="post" action="{{ url_for('repair_notify_completion', rid=r['id']) }}" class="inline-form" onsubmit="return confirm('Envoyer la confirmation de fin au client ?');">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button primary wopr-action-send">📩 Prévenir le client</button>
+    </form>
+  {% elif r['status'] in ['Terminé', 'Restitué'] and (r['tracking_completion_notification_sent'] or r['tracking_completion_sms_sent']) %}
+    <span class="client-notification-sent">✓ Client prévenu{% if r['tracking_notification_channel'] %} par {{ 'SMS' if r['tracking_notification_channel'] == 'sms' else 'e-mail' }}{% endif %}</span>
+  {% endif %}
   {% if r['client_phone'] %}
     <a class="button client-message-btn wopr-action-send" href="{{ url_for('client_message', rid=r['id']) }}">💬 Message client</a>
   {% endif %}

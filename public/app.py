@@ -181,7 +181,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.2"
+APP_VERSION = "2.4.3"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1020,7 +1020,7 @@ def read_external_backup_settings():
         "enabled": True,
         "script_path": "~/.local/bin/foul-fix-backup.sh",
         "log_file": "~/.local/state/foul-fix-backup.log",
-        "freebox_path": "/mnt/Freebox/Backup/Web/Foul-Fix",
+        "freebox_path": "/mnt/Freebox/Backup/Web/Foul-Fix/backups",
         "proton_remote": "protondrive:Sauvegardes/Foul-Fix",
         "schedule": "10:00",
     }
@@ -1498,40 +1498,95 @@ def publish_tracking_snapshot(rid):
 publish_tracking_snapshot.last_error = ""
 
 
-def send_tracking_completion_sms(rid):
-    """Envoie au maximum une fois le SMS lorsque le dossier passe à Terminé."""
+def _tracking_message(rid, phase, row, ident):
+    """Construit un message autonome, volontairement neutre et professionnel."""
+    tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+    tracking_url = f"{tracking_site}/suivi.html" if tracking_site else ""
+    if phase == "initial":
+        intro = f"Votre appareil a bien été pris en charge par {ident['name']}."
+    else:
+        intro = "Votre réparation est terminée. Vous pouvez venir la récupérer aux horaires d’ouverture habituels."
+    lines = ["Bonjour,", "", intro]
+    if tracking_url:
+        lines.append(f"Suivi : {tracking_url}")
+    lines.append(f"Code : {row['public_tracking_code']}")
+    lines.extend(["", "Cordialement,", f"— {ident['name']}"])
+    return "\n".join(lines)
+
+
+def _send_tracking_email(recipient, subject, message):
+    try:
+        settings = read_smtp_settings()
+        if not settings.get("enabled") or not settings.get("token"):
+            return False, "SMTP Proton non configuré"
+        sender_email = str(settings.get("sender_email") or settings.get("username") or "").strip()
+        sender_name = str(settings.get("sender_name") or business_identity()["name"]).strip()
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+        msg["To"] = recipient
+        set_email_content(msg, message)
+        smtp_send_message(msg)
+        return True, "E-mail envoyé."
+    except Exception as exc:
+        return False, f"E-mail non envoyé : {exc}"
+
+
+def send_tracking_notification(rid, phase):
+    """Envoie une notification unique sur un seul canal (SMS ou e-mail)."""
     if not bool(cfg().get("tracking_notifications_enabled", False)):
-        return False, "Notifications de suivi désactivées"
+        return False, "Notifications de suivi désactivées", ""
     con = db()
     row = con.execute("""
-        SELECT r.id, r.status, r.public_tracking_code, r.tracking_completion_sms_sent,
-               c.first_name, c.phone
+        SELECT r.id, r.status, r.public_tracking_code,
+               r.tracking_notification_channel, r.tracking_initial_notification_sent,
+               r.tracking_completion_notification_sent, r.tracking_completion_sms_sent,
+               c.phone, c.phone_secondary, c.email, c.email_secondary
         FROM repairs r JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
     """, (int(rid),)).fetchone()
-    if not row or row["status"] != "Terminé" or int(row["tracking_completion_sms_sent"] or 0):
+    if not row:
         con.close()
-        return False, "Aucun SMS à envoyer"
-    phone = normalize_sms_phone(row["phone"] or "")
-    if not phone:
+        return False, "Dossier introuvable", ""
+    if phase == "completion" and row["status"] not in {"Terminé", "Restitué"}:
         con.close()
-        return False, "Aucun numéro de téléphone"
-    ident = business_identity()
-    tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
-    tracking_url = f"{tracking_site}/suivi" if tracking_site else ""
-    greeting = (row["first_name"] or "Bonjour").strip() or "Bonjour"
-    message = (
-        f"Bonjour {greeting},\n\nVotre réparation est terminée et prête à être récupérée chez {ident['name']}.\n"
-        + (f"Suivi : {tracking_url}\n" if tracking_url else "")
-        + f"Code : {row['public_tracking_code']}\n\n— {ident['name']}"
+        return False, "Le dossier n'est pas encore terminé", ""
+    already_sent = (
+        int(row["tracking_initial_notification_sent"] or 0)
+        if phase == "initial"
+        else int(row["tracking_completion_notification_sent"] or 0) or int(row["tracking_completion_sms_sent"] or 0)
     )
-    sent, detail = send_tracking_sms(phone, message)
+    if already_sent:
+        con.close()
+        return False, "Notification déjà envoyée", str(row["tracking_notification_channel"] or "")
+
+    channel = str(row["tracking_notification_channel"] or "").strip().lower()
+    phone = normalize_sms_phone(row["phone"] or "") or normalize_sms_phone(row["phone_secondary"] or "")
+    email = str(row["email"] or row["email_secondary"] or "").strip()
+    if channel not in {"sms", "email"}:
+        channel = "sms" if phone else "email" if email and "@" in email else ""
+    if not channel:
+        con.close()
+        return False, "Aucun téléphone ou e-mail disponible", ""
+
+    ident = business_identity()
+    message = _tracking_message(rid, phase, row, ident)
+    if channel == "sms":
+        sent, detail = send_tracking_sms(phone, message)
+    else:
+        subject = "Votre prise en charge Foul-Fix" if phase == "initial" else "Votre réparation est terminée — Foul-Fix"
+        sent, detail = _send_tracking_email(email, subject, message)
     if sent:
-        con.execute("UPDATE repairs SET tracking_completion_sms_sent=1 WHERE id=?", (int(rid),))
+        if phase == "initial":
+            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_initial_notification_sent=1 WHERE id=?""", (channel, int(rid)))
+            event = "TRACKING_INITIAL_SMS" if channel == "sms" else "TRACKING_INITIAL_EMAIL"
+        else:
+            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_completion_notification_sent=1, tracking_completion_sms_sent=? WHERE id=?""", (channel, 1 if channel == "sms" else 0, int(rid)))
+            event = "TRACKING_COMPLETION_SMS" if channel == "sms" else "TRACKING_COMPLETION_EMAIL"
         con.commit()
-        audit_event("TRACKING_COMPLETION_SMS", f"SMS fin de réparation envoyé repair_id={rid}")
+        audit_event(event, f"Notification {phase} envoyée repair_id={rid}")
     con.close()
-    return sent, detail
+    return sent, detail, channel
 
 
 def read_abby_settings():
@@ -3277,6 +3332,9 @@ def init_db():
     ensure_column(con, "repairs", "sumup_external_refund_date", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "sumup_external_refund_note", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "public_tracking_code", "TEXT")
+    ensure_column(con, "repairs", "tracking_notification_channel", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "tracking_initial_notification_sent", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "tracking_completion_notification_sent", "INTEGER DEFAULT 0")
     ensure_column(con, "repairs", "tracking_completion_sms_sent", "INTEGER DEFAULT 0")
     con.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_public_tracking_code
@@ -7562,7 +7620,7 @@ def security_gate():
         allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search", "atelier_dashboard", "atelier_client_mode", "atelier_client_mode_off", "security_invoice_logo_preview"}
         current_rid = session.get("client_mode_rid")
 
-        if endpoint in {"repair_detail", "qr_png", "intake_pdf"}:
+        if endpoint in {"repair_detail", "repair_signature", "qr_png", "intake_pdf"}:
             try:
                 rid = int((request.view_args or {}).get("rid"))
             except Exception:
@@ -10960,7 +11018,7 @@ def repair_new():
                     name,last_name,first_name,company,
                     address,address_street,postal_code,city,phone,phone_secondary,email,email_secondary,created_at,updated_at
                 )
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 name,last_name,first_name,company,
                 address,address_street,postal_code,city,phone,phone_secondary,email,email_secondary,created,created
@@ -11010,62 +11068,16 @@ def repair_new():
         session.pop("client_mode", None)
         session.pop("client_mode_rid", None)
         # Publie le dossier initial si la synchronisation portail est activée.
-        # Les notifications SMS/e-mail restent indépendantes et désactivées.
         publish_tracking_snapshot(rid)
-        # Envoi unique du code de suivi : SMS prioritaire, e-mail si aucun
-        # téléphone n'est renseigné. Une panne de transport ne bloque jamais
-        # la création du dossier.
-        ident = business_identity()
-        # L'URL du portail sera activée dans la configuration lorsqu'il sera
-        # réellement publié ; on n'envoie jamais un lien supposé ou cassé.
-        tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
-        tracking_url = f"{tracking_site}/suivi" if tracking_site else ""
-        first_name_for_message = (first_name or "").strip() or "Bonjour"
-        contact_line = f"Bonjour {first_name_for_message},"
-        tracking_message = (
-            f"{contact_line}\n\n"
-            f"Votre réparation est bien enregistrée chez {ident['name']}.\n"
-            + (f"Suivez son avancement : {tracking_url}\n" if tracking_url else "")
-            + f"Votre code de suivi : {public_tracking_code}\n\n"
-            f"— {ident['name']}"
-        )
-        # Notifications désactivées par défaut tant que le portail/API n'est
-        # pas finalisé et testé. L'activation devra être explicite dans la
-        # configuration privée avec tracking_notifications_enabled=true.
-        # Le code de suivi est remis par l'atelier. Aucun SMS/e-mail n'est
-        # envoyé à la création : la notification part uniquement au passage
-        # du dossier à « Terminé » (voir send_tracking_completion_sms()).
-        notifications_enabled = False
-        if notifications_enabled:
-            normalized_phone = normalize_sms_phone(phone)
-            if normalized_phone:
-                sent, detail = send_tracking_sms(normalized_phone, tracking_message)
-                if sent:
-                    flash("Code de suivi envoyé par SMS.")
-                else:
-                    flash(f"Dossier créé, mais SMS non envoyé : {detail}")
-            elif email and "@" in email:
-                smtp_settings = read_smtp_settings()
-                if smtp_settings.get("enabled") and smtp_settings.get("token"):
-                    try:
-                        sender_email = str(smtp_settings.get("sender_email") or smtp_settings.get("username") or "").strip()
-                        sender_name = str(smtp_settings.get("sender_name") or ident["name"]).strip()
-                        msg = EmailMessage()
-                        msg["Subject"] = f"Votre code de suivi {ident['name']}"
-                        msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
-                        msg["To"] = email
-                        set_email_content(msg, tracking_message)
-                        smtp_send_message(msg)
-                        audit_event("TRACKING_CODE_EMAIL", f"Code de suivi repair_id={rid} envoyé à {email}")
-                        flash("Code de suivi envoyé par e-mail.")
-                    except Exception as exc:
-                        flash(f"Dossier créé, mais e-mail non envoyé : {exc}")
-                else:
-                    flash("Dossier créé. SMTP non configuré : code de suivi à remettre au client.")
-            else:
-                flash(f"Dossier créé. Code de suivi à remettre au client : {public_tracking_code}")
+        try:
+            sent, detail, channel = send_tracking_notification(rid, "initial")
+        except Exception as exc:
+            audit_event("TRACKING_INITIAL_NOTIFICATION_ERROR", f"repair_id={rid}: {type(exc).__name__}")
+            sent, detail, channel = False, f"notification indisponible ({type(exc).__name__})", ""
+        if sent:
+            flash(f"Code de suivi envoyé par {'SMS' if channel == 'sms' else 'e-mail'}.")
         else:
-            flash(f"Dossier créé. Notifications de suivi désactivées : code à remettre au client {public_tracking_code}")
+            flash(f"Dossier créé, mais notification non envoyée : {detail}. Code : {public_tracking_code}")
 
         # V2.3.215 : aucune écriture Google automatique.
         return redirect(url_for("repair_detail", rid=rid))
@@ -11363,7 +11375,11 @@ def repair_detail(rid):
                c.phone client_phone,
                c.phone_secondary client_phone_secondary,
                c.email client_email,
-               c.email_secondary client_email_secondary
+               c.email_secondary client_email_secondary,
+               r.tracking_notification_channel,
+               r.tracking_initial_notification_sent,
+               r.tracking_completion_notification_sent,
+               r.tracking_completion_sms_sent
         FROM repairs r JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
     """, (rid,)).fetchone()
@@ -11375,6 +11391,35 @@ def repair_detail(rid):
     r["system_password"] = ""  # jamais injecté en clair dans le HTML initial
     sign_url = f"http://{local_ip()}:5000/sign/{r['signature_token']}"
     return render_template("repair_detail.html", r=r, sign_url=sign_url)
+
+
+@app.route("/repair/<int:rid>/signature.png")
+def repair_signature(rid):
+    """Sert la signature client uniquement à l'atelier authentifié."""
+    con = db()
+    row = con.execute("SELECT signature_path FROM repairs WHERE id=?", (rid,)).fetchone()
+    con.close()
+    if not row:
+        return "Dossier introuvable", 404
+    signature_file = resolve_signature_path(row["signature_path"])
+    if not signature_file:
+        return "Signature introuvable", 404
+    return send_file(signature_file, mimetype="image/png", max_age=0)
+
+
+@app.route("/repair/<int:rid>/notify-completion", methods=["POST"])
+def repair_notify_completion(rid):
+    """Envoie manuellement la notification de fin, après validation atelier."""
+    try:
+        sent, detail, channel = send_tracking_notification(rid, "completion")
+    except Exception as exc:
+        audit_event("TRACKING_COMPLETION_NOTIFICATION_ERROR", f"repair_id={rid}: {type(exc).__name__}")
+        sent, detail, channel = False, f"notification indisponible ({type(exc).__name__})", ""
+    if sent:
+        flash(f"Client prévenu par {'SMS' if channel == 'sms' else 'e-mail'}.")
+    else:
+        flash(f"Notification non envoyée : {detail}.")
+    return redirect(url_for("repair_detail", rid=rid))
 
 
 @app.route("/repair/<int:rid>/reveal-system-password", methods=["POST"])
@@ -11577,9 +11622,6 @@ def repair_quick_edit(rid):
     con.close()
 
     tracking_published = publish_tracking_snapshot(rid)
-    completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
-    if completion_sms_sent:
-        flash("SMS de fin de réparation envoyé au client.")
     if read_tracking_settings().get("enabled"):
         flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
     flash("Ligne du suivi enregistrée.")
@@ -11763,9 +11805,6 @@ def repair_edit(rid):
         con.close()
         # V2.3.215 : aucune écriture Google automatique.
         tracking_published = publish_tracking_snapshot(rid)
-        completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
-        if completion_sms_sent:
-            flash("SMS de fin de réparation envoyé au client.")
         if read_tracking_settings().get("enabled"):
             flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
         flash("Suivi modifié.")
@@ -12025,9 +12064,6 @@ def repair_update(rid):
     con.commit()
     con.close()
     tracking_published = publish_tracking_snapshot(rid)
-    completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
-    if completion_sms_sent:
-        flash("SMS de fin de réparation envoyé au client.")
     if read_tracking_settings().get("enabled"):
         flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
     flash("Dossier mis à jour.")
@@ -12347,9 +12383,6 @@ def repair_close(rid):
         con.commit()
         con.close()
         tracking_published = publish_tracking_snapshot(rid)
-        completion_sms_sent, completion_sms_detail = send_tracking_completion_sms(rid)
-        if completion_sms_sent:
-            flash("SMS de fin de réparation envoyé au client.")
         if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
             flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
         else:
