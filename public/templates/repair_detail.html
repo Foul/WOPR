@@ -93,12 +93,15 @@
         <tr><th>Pièce / marchandise</th><td>{{ r['goods_description'] or '—' }}</td></tr>
         <tr><th>Prestation</th><td>{% if r['service_amount'] %}{{ '%.2f'|format(r['service_amount']) }} €{% else %}—{% endif %}</td></tr>
         <tr><th>Marchandise</th><td>{% if r['goods_amount'] %}{{ '%.2f'|format(r['goods_amount']) }} €{% else %}—{% endif %}</td></tr>
+        {% if r['deposit_amount'] %}
+        <tr><th>Acompte</th><td>{{ '%.2f'|format(r['deposit_amount'])|replace('.', ',') }} € · {{ r['deposit_payment_mode'] or '—' }}{% if r['deposit_date'] %} · {{ r['deposit_date'][:10] }}{% endif %}</td></tr>
+        {% endif %}
         <tr>
           <th>Total / Mode</th>
           <td>
             {{ '%.2f'|format((r['service_amount'] or 0) + (r['goods_amount'] or 0))|replace('.', ',') }} €
             · {% if r['payment_mode'] == 'MIXTE' %}Mixte · {{ r['payment_method'] or '—' }}{% else %}{{ r['payment_mode'] or r['payment_method'] or '—' }}{% endif %}
-            · {{ 'Payé' if r['paid'] else 'À régler' }}
+            · {% if r['paid'] %}Payé{% elif r['deposit_amount'] %}Acompte reçu · reste {{ '%.2f'|format(((r['service_amount'] or 0) + (r['goods_amount'] or 0) - r['deposit_amount']) if ((r['service_amount'] or 0) + (r['goods_amount'] or 0)) > r['deposit_amount'] else 0) |replace('.', ',') }} €{% else %}À régler{% endif %}
           </td>
         </tr>
       </tbody>

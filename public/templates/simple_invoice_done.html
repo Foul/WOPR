@@ -9,6 +9,9 @@
     <div><strong>Client :</strong> {{ r['client_name'] }}</div>
     <div><strong>N° facture :</strong> {{ r['invoice_no'] }}</div>
     <div><strong>Total :</strong> {{ '%.2f'|format(total)|replace('.', ',') }} €</div>
+    {% if payment_summary and payment_summary['deposit_amount'] %}
+      <div><strong>Acompte :</strong> {{ '%.2f'|format(payment_summary['deposit_amount'])|replace('.', ',') }} € · <strong>Reste dû :</strong> {{ '%.2f'|format(payment_summary['remaining_amount'])|replace('.', ',') }} €</div>
+    {% endif %}
   </div>
 
   <div class="simple-done-actions">

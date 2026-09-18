@@ -88,6 +88,23 @@
       <input type="checkbox" name="paid" checked>
       Paiement reçu
     </label>
+
+    <div class="deposit-payment-box">
+      <div class="payment-mix-title">Acompte (facultatif)</div>
+      <label>Montant de l'acompte
+        <input type="text" name="deposit_amount" inputmode="decimal" placeholder="0,00">
+        <small>Décoche « Paiement reçu » si seul l'acompte est encaissé.</small>
+      </label>
+      <label>Date de l'acompte
+        <input type="date" name="deposit_date">
+      </label>
+      <label>Mode de règlement de l'acompte
+        <select name="deposit_payment_mode" class="payment-mode-select">
+          <option value="">— aucun acompte —</option>
+          {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ'] %}<option value="{{ mode }}">{{ mode }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
   </div>
 
   <div class="footer-actions">

@@ -194,7 +194,10 @@
   function refreshPaymentMix(select){
     const form = select.closest('form');
     if (!form) return;
-    const box = form.querySelector('[data-payment-mix]');
+    const group = select.getAttribute('data-payment-mix-select');
+    const box = group
+      ? form.querySelector(`[data-payment-mix="${group}"]`)
+      : form.querySelector('[data-payment-mix]');
     if (!box) return;
     box.hidden = select.value !== 'MIXTE';
   }

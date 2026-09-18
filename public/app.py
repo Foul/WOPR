@@ -181,7 +181,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.4"
+APP_VERSION = "2.4.5"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1429,6 +1429,8 @@ def publish_tracking_snapshot(rid):
             return False
 
         total = float(row["service_amount"] or 0) + float(row["goods_amount"] or 0)
+        deposit = max(0.0, min(total, float(row["deposit_amount"] or 0)))
+        remaining = max(0.0, total - (total if bool(row["paid"]) else deposit))
         timeline = [{
             "state": "current" if index == 1 else "done",
             "icon": str(index), "title": str(item["status"] or "Étape"),
@@ -1459,8 +1461,8 @@ def publish_tracking_snapshot(rid):
             "opened_at": str(row["received_date"] or row["created_at"] or "")[:10],
             "updated_at": now().isoformat(timespec="seconds"),
             "message": public_message,
-            "amount": f"{total:.2f}".replace(".", ",") + " €" if total > 0 and not bool(row["paid"]) else "",
-            "payment_url": str(row["sumup_payment_url"] or "") if str(row["sumup_payment_url"] or "").startswith("https://") else "",
+            "amount": f"{remaining:.2f}".replace(".", ",") + " €" if remaining > 0 else "",
+            "payment_url": str(row["sumup_payment_url"] or "") if remaining > 0 and str(row["sumup_payment_url"] or "").startswith("https://") else "",
             "timeline": timeline,
         }
         req = urllib.request.Request(
@@ -2304,7 +2306,10 @@ def accounting_monthly_totals(con, year=None):
         SELECT id, client_id, invoice_no, paid,
                accounting_year, accounting_month, accounting_date,
                accounting_service_amount, accounting_goods_amount,
-               service_amount, goods_amount, legacy_imported
+               service_amount, goods_amount, legacy_imported,
+               deposit_amount, deposit_date, deposit_accounting_year,
+               deposit_accounting_month, deposit_service_amount,
+               deposit_goods_amount
         FROM repairs
         ORDER BY id
     """).fetchall()]
@@ -2345,6 +2350,33 @@ def accounting_monthly_totals(con, year=None):
 
     contributions = []
     active_invoice_nos = set()
+
+    # Les acomptes sont des encaissements distincts du solde final.
+    for row in repair_rows:
+        deposit = max(0.0, float(row.get("deposit_amount") or 0))
+        if deposit <= 0:
+            continue
+        try:
+            deposit_year = int(row.get("deposit_accounting_year") or 0)
+            deposit_month = int(row.get("deposit_accounting_month") or 0)
+        except (TypeError, ValueError):
+            deposit_year = deposit_month = 0
+        raw_date = str(row.get("deposit_date") or "").strip()[:10]
+        if not (deposit_year >= 2000 and 1 <= deposit_month <= 12):
+            try:
+                deposit_day = datetime.strptime(raw_date, "%Y-%m-%d").date()
+                deposit_year, deposit_month = deposit_day.year, deposit_day.month
+            except ValueError:
+                continue
+        if requested_year is not None and deposit_year != requested_year:
+            continue
+        service = max(0.0, float(row.get("deposit_service_amount") or 0))
+        goods = max(0.0, float(row.get("deposit_goods_amount") or 0))
+        if service + goods <= 0:
+            service, goods = allocate_payment_amount(
+                deposit, row.get("service_amount"), row.get("goods_amount")
+            )
+        contributions.append((deposit_year, deposit_month, service, goods))
 
     def valid_period(row):
         # accounting_year/month représentent la période comptable validée.
@@ -3345,6 +3377,16 @@ def init_db():
     ensure_column(con, "repairs", "tracking_completion_notification_sent", "INTEGER DEFAULT 0")
     ensure_column(con, "repairs", "tracking_completion_notification_error", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "tracking_completion_sms_sent", "INTEGER DEFAULT 0")
+    # Paiement partiel / acompte : l'acompte reste séparé du solde final
+    # afin de comptabiliser chaque encaissement dans son propre mois.
+    ensure_column(con, "repairs", "deposit_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "deposit_payment_mode", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "deposit_payment_detail", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "deposit_date", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "deposit_accounting_year", "INTEGER")
+    ensure_column(con, "repairs", "deposit_accounting_month", "INTEGER")
+    ensure_column(con, "repairs", "deposit_service_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "deposit_goods_amount", "REAL DEFAULT 0")
     con.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_public_tracking_code
         ON repairs(public_tracking_code)
@@ -4379,6 +4421,78 @@ def payment_data_from_form(total_expected=None, fallback_mode="", fallback_metho
         str(fallback_detail or ""),
         None,
     )
+
+
+def payment_data_from_prefixed_form(prefix, total_expected=None):
+    """Même lecture qu'un paiement normal, avec des champs préfixés."""
+    mode = normalize_payment_mode(request.form.get(f"{prefix}payment_mode", ""))
+    if mode == "MIXTE":
+        parts = []
+        for part_mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ"):
+            raw = request.form.get(f"{prefix}payment_{part_mode}", "").strip()
+            if not raw:
+                continue
+            try:
+                amount = parse_money_input(raw)
+            except Exception:
+                return "", "", "", f"Montant {PAYMENT_MODE_LABELS[part_mode]} invalide."
+            if amount < 0:
+                return "", "", "", "Un montant de règlement ne peut pas être négatif."
+            if amount > 0:
+                parts.append((part_mode, round(float(amount), 2)))
+        if len(parts) < 2:
+            return "", "", "", "Un paiement mixte doit contenir au moins deux modes de règlement."
+        total_split = round(sum(amount for _, amount in parts), 2)
+        if total_expected is not None and abs(total_split - round(float(total_expected), 2)) > 0.009:
+            return "", "", "", f"La ventilation du paiement fait {total_split:.2f} € alors que le montant attendu est {float(total_expected):.2f} €."
+        return "MIXTE", payment_split_text(parts), payment_split_json(parts), None
+    if mode:
+        return mode, mode, "", None
+    return "", "", "", None
+
+
+def allocate_payment_amount(amount, service_total, goods_total):
+    """Répartit un encaissement entre prestation et marchandise."""
+    amount = max(0.0, round(float(amount or 0), 2))
+    service_total = max(0.0, float(service_total or 0))
+    goods_total = max(0.0, float(goods_total or 0))
+    total = service_total + goods_total
+    if total <= 0 or amount <= 0:
+        return 0.0, 0.0
+    service = round(amount * service_total / total, 2)
+    return service, round(amount - service, 2)
+
+
+def payment_summary_for_repair(con, repair_id, invoice_total=None):
+    """Retourne l'acompte, le solde encaissé et le reste dû d'un dossier."""
+    row = con.execute("""
+        SELECT deposit_amount, deposit_payment_mode, deposit_payment_detail,
+               deposit_date, paid, service_amount, goods_amount
+        FROM repairs WHERE id=?
+    """, (repair_id,)).fetchone()
+    if not row:
+        return {
+            "invoice_total": 0.0, "deposit_amount": 0.0,
+            "balance_amount": 0.0, "amount_paid": 0.0,
+            "remaining_amount": 0.0, "deposit_mode": "", "deposit_date": "",
+        }
+    total = float(invoice_total if invoice_total is not None else 0.0)
+    if total <= 0:
+        total = float(row["service_amount"] or 0) + float(row["goods_amount"] or 0)
+    deposit = max(0.0, min(total, float(row["deposit_amount"] or 0)))
+    balance = max(0.0, total - deposit)
+    final_paid = bool(row["paid"])
+    amount_paid = total if final_paid else deposit
+    return {
+        "invoice_total": round(total, 2),
+        "deposit_amount": round(deposit, 2),
+        "balance_amount": round(balance, 2),
+        "amount_paid": round(amount_paid, 2),
+        "remaining_amount": round(max(0.0, total - amount_paid), 2),
+        "deposit_mode": str(row["deposit_payment_mode"] or ""),
+        "deposit_date": str(row["deposit_date"] or ""),
+        "deposit_detail": str(row["deposit_payment_detail"] or ""),
+    }
 
 
 def infer_payment_mode(text):
@@ -8495,10 +8609,6 @@ def atelier_dashboard():
 
     unpaid_rows = []
     for members in unpaid_groups.values():
-        # La page Factures considère la facture payée dès qu'une des lignes du groupe est payée.
-        if any(bool(x.get("paid")) for x in members):
-            continue
-
         representative = next((x for x in members if not x.get("legacy_imported")), None) or max(
             members, key=lambda x: (str(x.get("received_date") or ""), int(x.get("id") or 0))
         )
@@ -8517,12 +8627,19 @@ def atelier_dashboard():
             ])
 
         invoice_total = max(edited_line_totals) if edited_line_totals else max(total_candidates or [0.0])
+        paid = any(bool(x.get("paid")) for x in members)
+        deposit_amount = max([max(0.0, float(x.get("deposit_amount") or 0)) for x in members] or [0.0])
+        remaining_amount = max(0.0, invoice_total - (invoice_total if paid else min(invoice_total, deposit_amount)))
+        if remaining_amount <= 0 and invoice_total > 0:
+            continue
         item = dict(representative)
         item["invoice_total"] = invoice_total
+        item["deposit_amount"] = deposit_amount
+        item["remaining_amount"] = remaining_amount
         unpaid_rows.append(item)
 
     unpaid_rows.sort(key=lambda r: (str(r.get("received_date") or ""), int(r.get("id") or 0)))
-    unpaid_total = sum(float(r.get("invoice_total") or 0) for r in unpaid_rows)
+    unpaid_total = sum(float(r.get("remaining_amount") or r.get("invoice_total") or 0) for r in unpaid_rows)
 
     # À surveiller : terminé depuis >= 7 jours. La date de fin est privilégiée,
     # sinon la date de réception sert de filet pour l'ancien historique importé.
@@ -11870,8 +11987,8 @@ def repair_return_now(rid):
             "payment_mode=?", "payment_method=?", "paid=1",
             "accounting_year=?", "accounting_month=?", "accounting_date=?",
             "accounting_status=?",
-            "accounting_service_amount=COALESCE(service_amount,0)",
-            "accounting_goods_amount=COALESCE(goods_amount,0)",
+            "accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0))",
+            "accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))",
         ])
         params.extend([pay_mode, pay_mode, stamp.year, stamp.month, stamp.strftime("%Y-%m-%d"), acc_status])
 
@@ -11923,8 +12040,8 @@ def repair_cash_now(rid):
             payment_detail=?,
             accounting_year=?, accounting_month=?, accounting_date=?,
             accounting_status=?,
-            accounting_service_amount=COALESCE(service_amount,0),
-            accounting_goods_amount=COALESCE(goods_amount,0)
+            accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+            accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
         WHERE id=?
     """, (
         pay_mode, pay_method, pay_detail,
@@ -12010,8 +12127,8 @@ def repair_update(rid):
                 diagnosis=?, work_done=?, tests_validation=?, remarks=?, status=?, finished_at=?, returned_at=?,
                 payment_mode=?, payment_method=?, payment_detail=?, paid=1,
                 accounting_year=?, accounting_month=?, accounting_date=?, accounting_status=?,
-                accounting_service_amount=COALESCE(service_amount,0),
-                accounting_goods_amount=COALESCE(goods_amount,0)
+                accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
             WHERE id=?
         """, (
             request.form.get("diagnosis",""), "",
@@ -12159,6 +12276,9 @@ def repair_close(rid):
                     accounting_year=NULL, accounting_month=NULL, accounting_date='',
                     accounting_status='normal',
                     accounting_service_amount=0, accounting_goods_amount=0,
+                    deposit_amount=0, deposit_payment_mode='', deposit_payment_detail='',
+                    deposit_date='', deposit_accounting_year=NULL, deposit_accounting_month=NULL,
+                    deposit_service_amount=0, deposit_goods_amount=0,
                     followup_year=COALESCE(followup_year, CAST(substr(received_date,1,4) AS INTEGER)),
                     followup_month=COALESCE(followup_month, CAST(substr(received_date,6,2) AS INTEGER))
                 WHERE id=?
@@ -12243,11 +12363,7 @@ def repair_close(rid):
         finished = datetime.combine(invoice_day, invoice_time).isoformat(timespec="seconds")
 
         is_historical_invoice = bool(r["legacy_imported"])
-
-        # V2.3.214 — la date d'encaissement appartient à la facture.
-        # Elle reste éditable, y compris sur une facture historique, sans toucher
-        # aux montants historiques. Si elle est vide, on privilégie la restitution.
-        accounting_date_raw = request.form.get("accounting_date", "").strip()
+        invoice_total = round(service_total + goods_total, 2)
 
         def parsed_accounting_day(raw_value, fallback_value=""):
             value = str(raw_value or fallback_value or "").strip()[:10]
@@ -12257,6 +12373,68 @@ def repair_close(rid):
                 return datetime.strptime(value, "%Y-%m-%d").date()
             except ValueError:
                 return None
+
+        # Acompte : il est enregistré séparément du solde final et reste
+        # comptabilisé à sa propre date d'encaissement.
+        raw_deposit = request.form.get("deposit_amount", "").strip()
+        if raw_deposit == "" and r["invoice_no"]:
+            deposit_amount = max(0.0, float(r["deposit_amount"] or 0))
+        else:
+            try:
+                deposit_amount = parse_money_input(raw_deposit or "0")
+            except Exception:
+                con.close()
+                flash("Montant d'acompte invalide.")
+                return redirect(url_for("repair_close", rid=rid))
+        if deposit_amount < 0 or deposit_amount > invoice_total + 0.009:
+            con.close()
+            flash("L'acompte doit être compris entre 0 € et le total de la facture.")
+            return redirect(url_for("repair_close", rid=rid))
+        deposit_amount = round(min(deposit_amount, invoice_total), 2)
+
+        deposit_mode, deposit_method, deposit_detail, deposit_error = payment_data_from_prefixed_form(
+            "deposit_", deposit_amount
+        )
+        if deposit_amount > 0 and not deposit_mode:
+            con.close()
+            flash("Choisis un mode de règlement pour l'acompte.")
+            return redirect(url_for("repair_close", rid=rid))
+        if deposit_error:
+            con.close()
+            flash(deposit_error)
+            return redirect(url_for("repair_close", rid=rid))
+
+        if deposit_amount > 0:
+            deposit_date_raw = request.form.get("deposit_date", "").strip()
+            deposit_day = parsed_accounting_day(
+                deposit_date_raw,
+                r["deposit_date"] or now().date().isoformat(),
+            )
+            if deposit_day is None:
+                try:
+                    deposit_day = datetime.strptime(
+                        deposit_date_raw or r["deposit_date"] or now().date().isoformat(),
+                        "%Y-%m-%d",
+                    ).date()
+                except ValueError:
+                    con.close()
+                    flash("Date d'acompte invalide.")
+                    return redirect(url_for("repair_close", rid=rid))
+            deposit_date = deposit_day.isoformat()
+            deposit_year, deposit_month = deposit_day.year, deposit_day.month
+            deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
+                deposit_amount, service_total, goods_total
+            )
+        else:
+            deposit_date = ""
+            deposit_year = deposit_month = None
+            deposit_service_amount = deposit_goods_amount = 0.0
+            deposit_mode = deposit_method = deposit_detail = ""
+
+        # V2.3.214 — la date d'encaissement appartient à la facture.
+        # Elle reste éditable, y compris sur une facture historique, sans toucher
+        # aux montants historiques. Si elle est vide, on privilégie la restitution.
+        accounting_date_raw = request.form.get("accounting_date", "").strip()
 
         if is_historical_invoice:
             paid_flag = int(r["paid"] or 0)
@@ -12290,6 +12468,10 @@ def repair_close(rid):
                 accounting_date = r["accounting_date"] or ""
         else:
             paid_flag = 1 if request.form.get("paid") == "on" else 0
+            # Un acompte couvrant 100 % de la facture règle automatiquement
+            # la facture, même si la case « Paiement reçu » n'est pas cochée.
+            if invoice_total > 0 and deposit_amount >= invoice_total - 0.009:
+                paid_flag = 1
 
             if paid_flag:
                 fallback = r["accounting_date"] or r["returned_at"] or now().date().isoformat()
@@ -12302,8 +12484,10 @@ def repair_close(rid):
                 accounting_date = accounting_day.isoformat()
                 accounting_year = accounting_day.year
                 accounting_month = accounting_day.month
-                accounting_service_amount = service_total
-                accounting_goods_amount = goods_total
+                final_amount = max(0.0, invoice_total - deposit_amount)
+                accounting_service_amount, accounting_goods_amount = allocate_payment_amount(
+                    final_amount, service_total, goods_total
+                )
 
                 try:
                     rd = datetime.strptime(r["received_date"], "%Y-%m-%d")
@@ -12329,21 +12513,27 @@ def repair_close(rid):
             close_payment_method = r["payment_method"] or ""
             close_payment_detail = r["payment_detail"] or ""
         elif paid_flag:
-            close_payment_mode, close_payment_method, close_payment_detail, pay_error = payment_data_from_form(
-                service_total + goods_total, r["payment_mode"], r["payment_method"], r["payment_detail"]
-            )
-            if pay_error:
-                con.close()
-                flash(pay_error)
-                return redirect(url_for("repair_close", rid=rid))
-            if not close_payment_mode:
-                con.close()
-                flash("Choisis un mode de règlement avant d'enregistrer le paiement.")
-                return redirect(url_for("repair_close", rid=rid))
+            final_amount = max(0.0, invoice_total - deposit_amount)
+            if final_amount <= 0:
+                close_payment_mode = deposit_mode or ""
+                close_payment_method = deposit_method or close_payment_mode
+                close_payment_detail = deposit_detail or ""
+            else:
+                close_payment_mode, close_payment_method, close_payment_detail, pay_error = payment_data_from_form(
+                    final_amount, r["payment_mode"], r["payment_method"], r["payment_detail"]
+                )
+                if pay_error:
+                    con.close()
+                    flash(pay_error)
+                    return redirect(url_for("repair_close", rid=rid))
+                if not close_payment_mode:
+                    con.close()
+                    flash("Choisis un mode de règlement avant d'enregistrer le solde.")
+                    return redirect(url_for("repair_close", rid=rid))
         else:
-            close_payment_mode = normalize_payment_mode(request.form.get("payment_mode", ""))
-            close_payment_method = close_payment_mode
-            close_payment_detail = ""
+            close_payment_mode = deposit_mode or normalize_payment_mode(request.form.get("payment_mode", ""))
+            close_payment_method = deposit_method or close_payment_mode
+            close_payment_detail = deposit_detail or ""
 
         # V2.3.85 — facture réglée = matériel restitué.
         # Une facture non réglée reste Terminé (sauf dossier déjà explicitement restitué).
@@ -12363,6 +12553,9 @@ def repair_close(rid):
         con.execute("""
             UPDATE repairs SET
                 service_amount=?, goods_amount=?, payment_method=?, payment_mode=?, payment_detail=?,
+                deposit_amount=?, deposit_payment_mode=?, deposit_payment_detail=?, deposit_date=?,
+                deposit_accounting_year=?, deposit_accounting_month=?,
+                deposit_service_amount=?, deposit_goods_amount=?,
                 paid=?, sent_via=?, work_done=?, tests_validation=?,
                 remarks=?, finished_at=?, invoice_no=?, status=?, returned_at=?,
                 service_description=?, goods_description=?,
@@ -12375,6 +12568,8 @@ def repair_close(rid):
         """, (
             service_total, goods_total,
             close_payment_method, close_payment_mode, close_payment_detail,
+            deposit_amount, deposit_mode, deposit_detail, deposit_date,
+            deposit_year, deposit_month, deposit_service_amount, deposit_goods_amount,
             paid_flag,
             close_sent_via,
             r["work_done"] or "",
@@ -12421,9 +12616,12 @@ def repair_close(rid):
 
         return redirect(url_for("repair_detail", rid=rid))
 
-    lines = con.execute("""
+    # Les lignes SQLite sont converties en dictionnaires : le reste de cet
+    # écran manipule volontairement les lignes avec ``.get(...)`` afin de
+    # rester compatible avec les factures reconstruites/historiques.
+    lines = [dict(row) for row in con.execute("""
         SELECT * FROM invoice_lines WHERE repair_id=? ORDER BY position,id
-    """, (rid,)).fetchall()
+    """, (rid,)).fetchall()]
 
     invoice_was_reconstructed = bool(lines)
     original_invoice_pdf = None
@@ -12524,6 +12722,11 @@ def repair_close(rid):
                 "unit_price": 0,
             }]
 
+    current_invoice_total = round(sum(
+        float(line.get("quantity") or 0) * float(line.get("unit_price") or 0)
+        for line in lines
+    ), 2)
+    payment_summary = payment_summary_for_repair(con, rid, current_invoice_total)
     con.close()
     return render_template(
         "close.html",
@@ -12540,7 +12743,8 @@ def repair_close(rid):
         accounting_date_value=(
             (r["accounting_date"] or r["returned_at"] or now().date().isoformat())[:10]
             if r["paid"] else ""
-        )
+        ),
+        payment_summary=payment_summary,
     )
 
 @app.route("/sign/<token>", methods=["GET", "POST"])
@@ -13205,14 +13409,60 @@ def simple_invoice_new():
         paid_flag = 1 if request.form.get("paid") == "on" else 0
         payment_mode = normalize_payment_mode(request.form.get("payment_mode", ""))
         sent_via = request.form.get("sent_via", "").strip()
+        invoice_total = round(service_total + goods_total, 2)
+        try:
+            deposit_amount = parse_money_input(request.form.get("deposit_amount", "0") or "0")
+        except Exception:
+            con.close()
+            flash("Montant d'acompte invalide.")
+            return redirect(url_for("simple_invoice_new"))
+        if deposit_amount < 0 or deposit_amount > invoice_total + 0.009:
+            con.close()
+            flash("L'acompte doit être compris entre 0 € et le total de la facture.")
+            return redirect(url_for("simple_invoice_new"))
+        deposit_amount = round(min(deposit_amount, invoice_total), 2)
+        deposit_mode, deposit_method, deposit_detail, deposit_error = payment_data_from_prefixed_form(
+            "deposit_", deposit_amount
+        )
+        if deposit_amount > 0 and not deposit_mode:
+            con.close()
+            flash("Choisis un mode de règlement pour l'acompte.")
+            return redirect(url_for("simple_invoice_new"))
+        if deposit_error:
+            con.close()
+            flash(deposit_error)
+            return redirect(url_for("simple_invoice_new"))
+        if deposit_amount > 0:
+            try:
+                deposit_day = datetime.strptime(
+                    request.form.get("deposit_date", "").strip() or stamp.date().isoformat(),
+                    "%Y-%m-%d",
+                ).date()
+            except ValueError:
+                con.close()
+                flash("Date d'acompte invalide.")
+                return redirect(url_for("simple_invoice_new"))
+            deposit_date = deposit_day.isoformat()
+            deposit_year, deposit_month = deposit_day.year, deposit_day.month
+            deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
+                deposit_amount, service_total, goods_total
+            )
+        else:
+            deposit_date = ""
+            deposit_year = deposit_month = None
+            deposit_service_amount = deposit_goods_amount = 0.0
+            deposit_mode = deposit_method = deposit_detail = ""
+        if deposit_amount >= invoice_total - 0.009 and invoice_total > 0:
+            paid_flag = 1
 
         if paid_flag:
             accounting_year = stamp.year
             accounting_month = stamp.month
             accounting_date = stamp.strftime("%Y-%m-%d")
             accounting_status = "normal"
-            accounting_service_amount = service_total
-            accounting_goods_amount = goods_total
+            accounting_service_amount, accounting_goods_amount = allocate_payment_amount(
+                max(0.0, invoice_total - deposit_amount), service_total, goods_total
+            )
         else:
             accounting_year = None
             accounting_month = None
@@ -13236,8 +13486,11 @@ def simple_invoice_new():
                 legacy_invoice_text,
                 accounting_year,accounting_month,accounting_date,accounting_status,
                 accounting_service_amount,accounting_goods_amount,
+                deposit_amount,deposit_payment_mode,deposit_payment_detail,deposit_date,
+                deposit_accounting_year,deposit_accounting_month,
+                deposit_service_amount,deposit_goods_amount,
                 simple_invoice
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
         """, (
             dossier_no,client_id,finished,stamp.strftime("%Y-%m-%d"),
             "Facture simple","Terminé",finished,invoice_no,
@@ -13245,7 +13498,9 @@ def simple_invoice_new():
             paid_flag,sent_via,service_desc,goods_desc,
             invoice_no,
             accounting_year,accounting_month,accounting_date,accounting_status,
-            accounting_service_amount,accounting_goods_amount
+            accounting_service_amount,accounting_goods_amount,
+            deposit_amount,deposit_mode,deposit_detail,deposit_date,
+            deposit_year,deposit_month,deposit_service_amount,deposit_goods_amount
         ))
         rid = int(cur.lastrowid)
 
@@ -13298,10 +13553,15 @@ def simple_invoice_done(rid):
         return "Facture simple introuvable", 404
 
     total = float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+    con = db()
+    payment_summary = payment_summary_for_repair(con, rid, total)
+    con.close()
+
     return render_template(
         "simple_invoice_done.html",
         r=r,
         total=total,
+        payment_summary=payment_summary,
         sumup_enabled=bool(read_sumup_settings().get("enabled")),
     )
 
@@ -13388,6 +13648,13 @@ def invoices_page():
         # Si l'ancien groupe est marqué payé mais n'a encore aucune date, dernier filet :
         # date du numéro de facture. Cela reste purement visuel ; aucun CA n'est déplacé.
         is_paid = any(bool(x.get("paid")) for x in members)
+        deposit_amount = max(
+            [max(0.0, float(x.get("deposit_amount") or 0)) for x in members] or [0.0]
+        )
+        amount_paid = invoice_total if is_paid else min(invoice_total, deposit_amount)
+        remaining_amount = max(0.0, invoice_total - amount_paid)
+        if remaining_amount <= 0 and invoice_total > 0:
+            is_paid = True
         if not accounting_date and is_paid:
             accounting_date = inv_date
 
@@ -13397,6 +13664,9 @@ def invoices_page():
             structured = normalize_payment_mode(x.get("payment_mode"))
             if structured and structured != "MIXTE" and structured not in modes:
                 modes.append(structured)
+            deposit_structured = normalize_payment_mode(x.get("deposit_payment_mode"))
+            if deposit_structured and deposit_structured != "MIXTE" and deposit_structured not in modes:
+                modes.append(deposit_structured)
             for detected in payment_modes_from_text(x.get("payment_method")):
                 if detected not in modes:
                     modes.append(detected)
@@ -13439,6 +13709,9 @@ def invoices_page():
             "client_email": group.get("client_email") or "",
             "invoice_date": inv_date,
             "invoice_total": invoice_total,
+            "deposit_amount": deposit_amount,
+            "amount_paid": amount_paid,
+            "remaining_amount": remaining_amount,
             "payment_mode_display": payment_mode_display,
             "accounting_date": accounting_date,
             "accounting_status": "red" if not is_paid else representative.get("accounting_status"),
@@ -14170,8 +14443,8 @@ def _sumup_auto_link_safe(tx, candidate):
             UPDATE repairs SET
                 paid=1, payment_mode='CB', payment_method='CB',
                 accounting_year=?, accounting_month=?, accounting_date=?,
-                accounting_status=?, accounting_service_amount=COALESCE(service_amount,0),
-                accounting_goods_amount=COALESCE(goods_amount,0)
+                accounting_status=?, accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
             WHERE id=?
         """, (pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(row["id"])))
 
@@ -14612,8 +14885,8 @@ def sumup_transaction_link_existing():
                     accounting_month=?,
                     accounting_date=?,
                     accounting_status=?,
-                    accounting_service_amount=COALESCE(service_amount,0),
-                    accounting_goods_amount=COALESCE(goods_amount,0)
+                    accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                    accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
                 WHERE id=?
             """, (
                 pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(r["id"])
@@ -14628,8 +14901,8 @@ def sumup_transaction_link_existing():
                     accounting_month=?,
                     accounting_date=?,
                     accounting_status=?,
-                    accounting_service_amount=COALESCE(service_amount,0),
-                    accounting_goods_amount=COALESCE(goods_amount,0)
+                    accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                    accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
                 WHERE id=?
             """, (
                 pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(r["id"])
@@ -15027,8 +15300,8 @@ def sumup_transaction_link():
                 accounting_month=?,
                 accounting_date=?,
                 accounting_status=?,
-                accounting_service_amount=COALESCE(service_amount,0),
-                accounting_goods_amount=COALESCE(goods_amount,0),
+                accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0)),
                 sumup_payment_url='',
                 sumup_transaction_id=?,
                 sumup_transaction_code=?,
@@ -15053,8 +15326,8 @@ def sumup_transaction_link():
                 accounting_month=?,
                 accounting_date=?,
                 accounting_status=?,
-                accounting_service_amount=COALESCE(service_amount,0),
-                accounting_goods_amount=COALESCE(goods_amount,0),
+                accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0)),
                 sumup_payment_url='',
                 sumup_transaction_id=?,
                 sumup_transaction_code=?,

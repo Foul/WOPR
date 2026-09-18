@@ -183,3 +183,9 @@
 - Le groupe Google Contacts utilise le réglage local avec `WOPR` comme valeur neutre.
 - La clé maître utilise le nouvel emplacement WOPR tout en conservant la compatibilité avec l’ancien emplacement Foul-Fix pour les installations existantes.
 - Foul-Fix reste mentionné uniquement au crédit de développement et pour cette compatibilité historique.
+## 2.4.5 - 18 septembre 2026 - acomptes et reste à payer
+
+- ajout de l'enregistrement d'un acompte sur les factures ;
+- calcul automatique du montant restant dû ;
+- comptabilisation de l'acompte et du solde dans leurs dates d'encaissement ;
+- montant SumUp et montant publié sur le suivi limités au reste à payer.
