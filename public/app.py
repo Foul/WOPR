@@ -4285,7 +4285,7 @@ def init_db():
     con.commit()
     con.close()
 
-PAYMENT_MODES = ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ", "MIXTE")
+PAYMENT_MODES = ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ", "MIXTE", "MULTI")
 
 
 def normalize_payment_mode(value):
@@ -4440,7 +4440,12 @@ def payment_data_from_form(total_expected=None, fallback_mode="", fallback_metho
 
 def payment_data_from_prefixed_form(prefix, total_expected=None):
     """Même lecture qu'un paiement normal, avec des champs préfixés."""
-    mode = normalize_payment_mode(request.form.get(f"{prefix}payment_mode", ""))
+    raw_mode = str(request.form.get(f"{prefix}payment_mode", "") or "").strip().upper()
+    # MULTI décrit un cumul d'anciens règlements : il ne doit pas déclencher
+    # la validation d'une ventilation MIXTE à ressaisir.
+    if raw_mode == "MULTI":
+        return "MULTI", "MULTI", "", None
+    mode = normalize_payment_mode(raw_mode)
     if mode == "MIXTE":
         parts = []
         for part_mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ"):
@@ -4512,12 +4517,41 @@ def payment_summary_for_repair(con, repair_id, invoice_total=None):
 
 def invoice_payment_rows(con, repair_id):
     """Retourne l'historique des règlements fractionnés d'une facture."""
-    return [dict(row) for row in con.execute("""
+    rows = [dict(row) for row in con.execute("""
         SELECT id, amount, payment_date, payment_mode, payment_detail, created_at
         FROM invoice_payments
         WHERE repair_id=?
         ORDER BY payment_date ASC, id ASC
     """, (repair_id,)).fetchall()]
+    # Compatibilité : avant l'historique, le premier acompte était stocké
+    # uniquement comme montant cumulé dans repairs.deposit_amount.
+    legacy = con.execute("""
+        SELECT deposit_amount, deposit_date, deposit_payment_mode,
+               deposit_payment_detail
+        FROM repairs WHERE id=?
+    """, (repair_id,)).fetchone()
+    legacy_amount = float(legacy["deposit_amount"] or 0) if legacy else 0.0
+    recorded_amount = round(sum(float(row.get("amount") or 0) for row in rows), 2)
+    missing_amount = round(legacy_amount - recorded_amount, 2)
+    if missing_amount > 0.009:
+        mode = str(legacy["deposit_payment_mode"] or "").strip()
+        if mode not in PAYMENT_MODES or mode == "MULTI":
+            detail = str(legacy["deposit_payment_detail"] or "")
+            mode = detail if detail in PAYMENT_MODES else "—"
+        legacy_date = str(legacy["deposit_date"] or "")[:10] or now().date().isoformat()
+        legacy_detail = "Acompte existant avant l'historique"
+        con.execute("""
+            INSERT INTO invoice_payments(
+                repair_id, amount, payment_date, payment_mode, payment_detail, created_at
+            ) VALUES(?,?,?,?,?,?)
+        """, (repair_id, missing_amount, legacy_date, mode, legacy_detail,
+              now().isoformat(timespec="seconds")))
+        con.commit()
+        rows = [dict(row) for row in con.execute("""
+            SELECT id, amount, payment_date, payment_mode, payment_detail, created_at
+            FROM invoice_payments WHERE repair_id=? ORDER BY payment_date ASC, id ASC
+        """, (repair_id,)).fetchall()]
+    return rows
 
 
 def infer_payment_mode(text):
@@ -12421,7 +12455,17 @@ def repair_close(rid):
         deposit_mode, deposit_method, deposit_detail, deposit_error = payment_data_from_prefixed_form(
             "deposit_", deposit_amount
         )
-        if deposit_amount > 0 and not deposit_mode:
+        if not deposit_mode and r["deposit_payment_mode"]:
+            # En modification d'une facture existante, conserver le mode de
+            # l'acompte déjà enregistré si le champ n'est pas resélectionné.
+            deposit_mode = normalize_payment_mode(r["deposit_payment_mode"])
+            deposit_method = deposit_mode
+            deposit_detail = r["deposit_payment_detail"] or deposit_mode
+        # Lorsqu'on ajoute un nouveau règlement via payment_add_*, son mode
+        # est validé plus bas ; ne pas exiger à tort de resélectionner le mode
+        # de l'ancien acompte cumulé.
+        adding_payment = bool(request.form.get("payment_add_amount", "").strip())
+        if deposit_amount > 0 and not deposit_mode and not adding_payment:
             con.close()
             flash("Choisis un mode de règlement pour l'acompte.")
             return redirect(url_for("repair_close", rid=rid))
@@ -12495,7 +12539,11 @@ def repair_close(rid):
             deposit_amount = round(deposit_amount + payment_add_amount, 2)
             deposit_date = payment_add_date
             deposit_year, deposit_month = payment_add_day.year, payment_add_day.month
-            deposit_mode = payment_add_mode if not r["deposit_amount"] else "MULTI"
+            # On conserve le mode du premier acompte pour les anciennes
+            # factures ; l'historique détaillé porte le mode de chaque ajout.
+            deposit_mode = payment_add_mode if not r["deposit_amount"] else (
+                r["deposit_payment_mode"] or "MULTI"
+            )
             deposit_method = deposit_mode
             deposit_detail = payment_add_detail or payment_add_mode
             deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
