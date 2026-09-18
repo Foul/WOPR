@@ -1,5 +1,11 @@
 # Changelog de la documentation
 
+## 2.4.6 - 18 septembre 2026 - règlements fractionnés
+
+- ajout de plusieurs règlements sur une même facture ;
+- conservation de la date, du mode et de la référence de chaque versement ;
+- calcul automatique du total réglé et du reste à payer.
+
 ## 2.4.4 - 18 septembre 2026 - visibilité des notifications
 - Ajout des badges `Code envoyé`, `Client prévenu` et `Échec` dans le tableau Suivi.
 - Les erreurs de notification sont conservées pour faciliter le contrôle et la relance.
@@ -188,4 +194,9 @@
 - ajout de l'enregistrement d'un acompte sur les factures ;
 - calcul automatique du montant restant dû ;
 - comptabilisation de l'acompte et du solde dans leurs dates d'encaissement ;
-- montant SumUp et montant publié sur le suivi limités au reste à payer.
+- affichage du montant restant dû sur le dossier et les factures.
+## 2.4.6 - 18 septembre 2026 - règlements fractionnés
+
+- ajout de plusieurs règlements sur une même facture ;
+- conservation de la date, du mode et de la référence de chaque versement ;
+- calcul automatique du total réglé et du reste à payer.

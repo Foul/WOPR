@@ -120,7 +120,7 @@
     </div>
 
     <div class="deposit-payment-box">
-      <div class="payment-mix-title">Acompte (facultatif)</div>
+      <div class="payment-mix-title">Acompte reçu (facultatif)</div>
       <div class="grid two">
         <label>Montant de l'acompte
           <input type="text" name="deposit_amount" inputmode="decimal"
@@ -128,13 +128,13 @@
                  placeholder="0,00">
           <small>Le reste dû sera calculé automatiquement.</small>
         </label>
-        <label>Date de l'acompte
+        <label>Date de réception de l'acompte
           <input type="date" name="deposit_date" value="{{ (r['deposit_date'] or '')[:10] }}">
         </label>
-        <label>Mode de règlement de l'acompte
+        <label>Mode de réception de l'acompte
           <select name="deposit_payment_mode" class="payment-mode-select" data-payment-mix-select="deposit">
             <option value="">— aucun acompte —</option>
-            {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ','MIXTE'] %}
+            {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ','MIXTE','MULTI'] %}
               <option value="{{ mode }}" {% if r['deposit_payment_mode']==mode %}selected{% endif %}>{{ mode }}</option>
             {% endfor %}
           </select>
@@ -153,6 +153,34 @@
       </div>
       {% if payment_summary and payment_summary['deposit_amount'] %}
         <small><strong>Acompte enregistré :</strong> {{ '%.2f'|format(payment_summary['deposit_amount'])|replace('.', ',') }} € · reste dû : {{ '%.2f'|format(payment_summary['remaining_amount'])|replace('.', ',') }} €</small>
+      {% endif %}
+      <div class="payment-add-box">
+        <div class="payment-mix-title">Ajouter un règlement reçu</div>
+        <div class="grid two">
+          <label>Montant reçu
+            <input type="text" name="payment_add_amount" inputmode="decimal" placeholder="0,00">
+          </label>
+          <label>Date de réception
+            <input type="date" name="payment_add_date" value="{{ today_date }}">
+          </label>
+          <label>Mode
+            <select name="payment_add_mode">
+              <option value="">— aucun ajout —</option>
+              {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ'] %}<option value="{{ mode }}">{{ mode }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>Référence / précision
+            <input type="text" name="payment_add_detail" placeholder="Ex. virement du 20/09">
+          </label>
+        </div>
+      </div>
+      {% if payment_rows %}
+        <div class="payment-history">
+          <strong>Historique des règlements</strong>
+          {% for payment in payment_rows %}
+            <div>{{ payment['payment_date'] }} · {{ '%.2f'|format(payment['amount'])|replace('.', ',') }} € · {{ payment['payment_mode'] }}{% if payment['payment_detail'] %} · {{ payment['payment_detail'] }}{% endif %}</div>
+          {% endfor %}
+        </div>
       {% endif %}
     </div>
 

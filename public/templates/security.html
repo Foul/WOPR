@@ -67,7 +67,7 @@
       <input type="hidden" name="action" value="external_backup_test">
       <button type="submit" class="primary" id="external-backup-test-button">☁ Tester la sauvegarde externe maintenant</button>
     </form>
-    <form method="post" style="margin-top:12px;">
+    <form method="post" id="backup-now-form" style="margin-top:12px;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="backup">
       <button class="primary" type="submit">Créer une sauvegarde maintenant</button>
@@ -249,5 +249,29 @@ document.getElementById('external-backup-test-form')?.addEventListener('submit',
   button.textContent = '⏳ Sauvegarde externe en cours…';
   button.setAttribute('aria-busy', 'true');
 });
+
+// Les sauvegardes déclenchent une redirection après le POST. Conserve la
+// position de lecture pour que le bandeau de résultat n'expédie pas la page
+// en haut du tableau de sécurité.
+(function () {
+  const forms = document.querySelectorAll('#external-backup-test-form, #backup-now-form');
+  const key = 'wopr-backup-scroll-y';
+  forms.forEach(function (form) {
+    form.addEventListener('submit', function () {
+      try { sessionStorage.setItem(key, String(window.scrollY || 0)); } catch (e) {}
+    });
+  });
+  try {
+    const saved = sessionStorage.getItem(key);
+    if (saved !== null) {
+      sessionStorage.removeItem(key);
+      const y = Math.max(0, parseInt(saved, 10) || 0);
+      if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+      const restore = function () { window.scrollTo(0, y); };
+      window.requestAnimationFrame(restore);
+      window.setTimeout(restore, 120);
+    }
+  } catch (e) {}
+})();
 </script>
 {% endblock %}

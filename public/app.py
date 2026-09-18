@@ -181,7 +181,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.5"
+APP_VERSION = "2.4.6"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -3515,6 +3515,21 @@ def init_db():
             FOREIGN KEY(repair_id) REFERENCES repairs(id)
         )
     """)
+    # Règlements fractionnés : plusieurs acomptes peuvent être associés à
+    # une même facture, chacun avec sa date, son mode et sa référence.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repair_id INTEGER NOT NULL,
+            amount REAL NOT NULL DEFAULT 0,
+            payment_date TEXT NOT NULL,
+            payment_mode TEXT NOT NULL DEFAULT '',
+            payment_detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(repair_id) REFERENCES repairs(id)
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_invoice_payments_repair ON invoice_payments(repair_id, payment_date, id)")
     # V2.3.223 — Nom / prénom séparés : migration UNIQUEMENT des anciennes
     # fiches personnelles encore vierges.
     #
@@ -4493,6 +4508,16 @@ def payment_summary_for_repair(con, repair_id, invoice_total=None):
         "deposit_date": str(row["deposit_date"] or ""),
         "deposit_detail": str(row["deposit_payment_detail"] or ""),
     }
+
+
+def invoice_payment_rows(con, repair_id):
+    """Retourne l'historique des règlements fractionnés d'une facture."""
+    return [dict(row) for row in con.execute("""
+        SELECT id, amount, payment_date, payment_mode, payment_detail, created_at
+        FROM invoice_payments
+        WHERE repair_id=?
+        ORDER BY payment_date ASC, id ASC
+    """, (repair_id,)).fetchall()]
 
 
 def infer_payment_mode(text):
@@ -12293,6 +12318,7 @@ def repair_close(rid):
                 "Matériel laissé pour pièces — aucune facture"
             )
             con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM invoice_payments WHERE repair_id=?", (rid,))
             con.commit()
             con.close()
             flash("Dossier clôturé : matériel laissé pour pièces. Aucune facture, aucun règlement et aucun CA enregistrés.")
@@ -12430,6 +12456,51 @@ def repair_close(rid):
             deposit_year = deposit_month = None
             deposit_service_amount = deposit_goods_amount = 0.0
             deposit_mode = deposit_method = deposit_detail = ""
+
+        # Ajout optionnel d'un règlement supplémentaire sur la même facture.
+        # Le montant cumulé reste dans les anciennes colonnes pour préserver
+        # les factures existantes ; le détail de chaque versement est conservé
+        # dans invoice_payments.
+        payment_add_amount = 0.0
+        payment_add_mode = ""
+        payment_add_detail = request.form.get("payment_add_detail", "").strip()
+        payment_add_date = request.form.get("payment_add_date", "").strip()
+        raw_payment_add = request.form.get("payment_add_amount", "").strip()
+        if raw_payment_add:
+            try:
+                payment_add_amount = parse_money_input(raw_payment_add)
+            except Exception:
+                con.close()
+                flash("Montant du règlement supplémentaire invalide.")
+                return redirect(url_for("repair_close", rid=rid))
+            if payment_add_amount <= 0:
+                con.close()
+                flash("Le montant du règlement supplémentaire doit être positif.")
+                return redirect(url_for("repair_close", rid=rid))
+            payment_add_mode = normalize_payment_mode(request.form.get("payment_add_mode", ""))
+            if not payment_add_mode:
+                con.close()
+                flash("Choisis un mode pour le règlement supplémentaire.")
+                return redirect(url_for("repair_close", rid=rid))
+            payment_add_day = parsed_accounting_day(payment_add_date, now().date().isoformat())
+            if payment_add_day is None:
+                con.close()
+                flash("Date du règlement supplémentaire invalide.")
+                return redirect(url_for("repair_close", rid=rid))
+            payment_add_date = payment_add_day.isoformat()
+            if deposit_amount + payment_add_amount > invoice_total + 0.009:
+                con.close()
+                flash("Le total des règlements ne peut pas dépasser le total de la facture.")
+                return redirect(url_for("repair_close", rid=rid))
+            deposit_amount = round(deposit_amount + payment_add_amount, 2)
+            deposit_date = payment_add_date
+            deposit_year, deposit_month = payment_add_day.year, payment_add_day.month
+            deposit_mode = payment_add_mode if not r["deposit_amount"] else "MULTI"
+            deposit_method = deposit_mode
+            deposit_detail = payment_add_detail or payment_add_mode
+            deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
+                deposit_amount, service_total, goods_total
+            )
 
         # V2.3.214 — la date d'encaissement appartient à la facture.
         # Elle reste éditable, y compris sur une facture historique, sans toucher
@@ -12582,6 +12653,32 @@ def repair_close(rid):
             rid
         ))
 
+        if payment_add_amount > 0:
+            con.execute("""
+                INSERT INTO invoice_payments(
+                    repair_id, amount, payment_date, payment_mode, payment_detail, created_at
+                ) VALUES(?,?,?,?,?,?)
+            """, (
+                rid, payment_add_amount, payment_add_date, payment_add_mode,
+                payment_add_detail, now().isoformat(timespec="seconds")
+            ))
+
+        # Le règlement final coché sur cette page est lui aussi conservé dans
+        # l'historique, sans le mélanger avec les acomptes déjà enregistrés.
+        if paid_flag and not r["paid"]:
+            final_payment_amount = round(max(0.0, invoice_total - deposit_amount), 2)
+            if final_payment_amount > 0 and close_payment_mode:
+                con.execute("""
+                    INSERT INTO invoice_payments(
+                        repair_id, amount, payment_date, payment_mode, payment_detail, created_at
+                    ) VALUES(?,?,?,?,?,?)
+                """, (
+                    rid, final_payment_amount,
+                    accounting_date or now().date().isoformat(),
+                    close_payment_mode, close_payment_detail,
+                    now().isoformat(timespec="seconds")
+                ))
+
         if paid_flag:
             con.execute("UPDATE repairs SET sumup_payment_url='' WHERE id=?", (rid,))
 
@@ -12727,6 +12824,7 @@ def repair_close(rid):
         for line in lines
     ), 2)
     payment_summary = payment_summary_for_repair(con, rid, current_invoice_total)
+    payment_rows = invoice_payment_rows(con, rid)
     con.close()
     return render_template(
         "close.html",
@@ -12745,6 +12843,8 @@ def repair_close(rid):
             if r["paid"] else ""
         ),
         payment_summary=payment_summary,
+        payment_rows=payment_rows,
+        today_date=now().date().isoformat(),
     )
 
 @app.route("/sign/<token>", methods=["GET", "POST"])
