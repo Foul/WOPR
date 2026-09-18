@@ -119,7 +119,7 @@
       </div>
     </div>
 
-    <div class="deposit-payment-box">
+    <div class="deposit-payment-box legacy-deposit-fields" aria-hidden="true">
       <div class="payment-mix-title">Acompte reçu (facultatif)</div>
       <div class="grid two">
         <label>Montant de l'acompte
@@ -156,6 +156,9 @@
       {% endif %}
       <div class="payment-add-box">
         <div class="payment-mix-title">Ajouter un règlement reçu</div>
+        {% if payment_summary %}
+          <small><strong>Déjà réglé :</strong> {{ '%.2f'|format(payment_summary['amount_paid'])|replace('.', ',') }} € · <strong>reste dû :</strong> {{ '%.2f'|format(payment_summary['remaining_amount'])|replace('.', ',') }} €</small>
+        {% endif %}
         <div class="grid two">
           <label>Montant reçu
             <input type="text" name="payment_add_amount" inputmode="decimal" placeholder="0,00">

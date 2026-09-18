@@ -181,7 +181,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.6"
+APP_VERSION = "2.4.7"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR

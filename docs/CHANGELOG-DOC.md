@@ -1,5 +1,10 @@
 # Changelog de la documentation
 
+## 2.4.7 - 18 septembre 2026 - simplification de l'écran des règlements
+
+- interface allégée : un seul bloc visible pour ajouter un règlement ;
+- conservation des anciens champs d'acompte uniquement pour la compatibilité.
+
 ## 2.4.6 - 18 septembre 2026 - règlements fractionnés
 
 - ajout de plusieurs règlements sur une même facture ;
