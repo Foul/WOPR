@@ -158,6 +158,10 @@ code{background:#eef3f8;padding:2px 5px;border-radius:4px}
 .inline-form{display:inline-block;margin:0}
 .inline-form button{height:100%}
 .client-signature-image{display:block;max-width:100%;width:auto;height:auto;max-height:180px;margin:12px auto 14px;object-fit:contain}
+.notification-status-badge{display:inline-block;margin:.25rem .15rem 0;padding:.12rem .35rem;border:1px solid currentColor;border-radius:3px;font-size:.72em;font-weight:700;white-space:nowrap}
+.notification-status-code{color:#1769aa;background:#e7f3ff}
+.notification-status-client{color:#176f4e;background:#e7f7f0}
+.notification-status-error{color:#a52b22;background:#fff0ee}
 
 .postal-address,.postal-preview{line-height:1.5}
 .invoice-entry-table th:nth-child(1){width:130px}

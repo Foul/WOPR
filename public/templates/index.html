@@ -157,6 +157,13 @@
             {% elif r['status']=='Laissé pour pièces' %}
               <span class="repair-state-badge repair-state-badge-parts" title="Matériel laissé à WOPR pour pièces — dossier clos, sans facture">Laissé pour pièces</span>
             {% endif %}
+            {% if r.get('_notification_status') == 'code' %}
+              <span class="notification-status-badge notification-status-code" title="Code de suivi envoyé">Code envoyé</span>
+            {% elif r.get('_notification_status') == 'client' %}
+              <span class="notification-status-badge notification-status-client" title="Client prévenu de la fin de réparation">Client prévenu</span>
+            {% elif r.get('_notification_status') == 'error' %}
+              <span class="notification-status-badge notification-status-error" title="Échec de la notification">Échec</span>
+            {% endif %}
           </td>
 
           <td class="followup-date">

@@ -1,5 +1,9 @@
 # Changelog de la documentation
 
+## 2.4.4 - 18 septembre 2026 - visibilité des notifications
+- Ajout des badges `Code envoyé`, `Client prévenu` et `Échec` dans le tableau Suivi.
+- Les erreurs de notification sont conservées pour faciliter le contrôle et la relance.
+
 ## 2.4.3 - 18 septembre 2026 - notifications de suivi et signature client
 - Envoi automatique du premier code de suivi par SMS, ou par e-mail en l’absence de téléphone.
 - Notification de fin soumise à confirmation manuelle depuis la fiche de suivi.

@@ -181,7 +181,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.3"
+APP_VERSION = "2.4.4"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -1540,7 +1540,8 @@ def send_tracking_notification(rid, phase):
     row = con.execute("""
         SELECT r.id, r.status, r.public_tracking_code,
                r.tracking_notification_channel, r.tracking_initial_notification_sent,
-               r.tracking_completion_notification_sent, r.tracking_completion_sms_sent,
+               r.tracking_initial_notification_error, r.tracking_completion_notification_sent,
+               r.tracking_completion_notification_error, r.tracking_completion_sms_sent,
                c.phone, c.phone_secondary, c.email, c.email_secondary
         FROM repairs r JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
@@ -1578,13 +1579,19 @@ def send_tracking_notification(rid, phase):
         sent, detail = _send_tracking_email(email, subject, message)
     if sent:
         if phase == "initial":
-            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_initial_notification_sent=1 WHERE id=?""", (channel, int(rid)))
+            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_initial_notification_sent=1, tracking_initial_notification_error='' WHERE id=?""", (channel, int(rid)))
             event = "TRACKING_INITIAL_SMS" if channel == "sms" else "TRACKING_INITIAL_EMAIL"
         else:
-            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_completion_notification_sent=1, tracking_completion_sms_sent=? WHERE id=?""", (channel, 1 if channel == "sms" else 0, int(rid)))
+            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_completion_notification_sent=1, tracking_completion_notification_error='', tracking_completion_sms_sent=? WHERE id=?""", (channel, 1 if channel == "sms" else 0, int(rid)))
             event = "TRACKING_COMPLETION_SMS" if channel == "sms" else "TRACKING_COMPLETION_EMAIL"
+    else:
+        error_column = "tracking_initial_notification_error" if phase == "initial" else "tracking_completion_notification_error"
+        con.execute(f"UPDATE repairs SET {error_column}=? WHERE id=?", (str(detail or "Échec d'envoi")[:500], int(rid)))
+    if sent:
         con.commit()
         audit_event(event, f"Notification {phase} envoyée repair_id={rid}")
+    else:
+        con.commit()
     con.close()
     return sent, detail, channel
 
@@ -3334,7 +3341,9 @@ def init_db():
     ensure_column(con, "repairs", "public_tracking_code", "TEXT")
     ensure_column(con, "repairs", "tracking_notification_channel", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "tracking_initial_notification_sent", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "tracking_initial_notification_error", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "tracking_completion_notification_sent", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "tracking_completion_notification_error", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "tracking_completion_sms_sent", "INTEGER DEFAULT 0")
     con.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_public_tracking_code
@@ -8858,6 +8867,16 @@ def index():
                 continue
 
             item = dict(row)
+            if item.get("tracking_completion_notification_sent") or item.get("tracking_completion_sms_sent"):
+                item["_notification_status"] = "client"
+            elif item.get("status") in {"Terminé", "Restitué"} and item.get("tracking_completion_notification_error"):
+                item["_notification_status"] = "error"
+            elif item.get("tracking_initial_notification_sent"):
+                item["_notification_status"] = "code"
+            elif item.get("tracking_initial_notification_error"):
+                item["_notification_status"] = "error"
+            else:
+                item["_notification_status"] = ""
             if to_return_only and item.get("status") != "Terminé":
                 continue
 

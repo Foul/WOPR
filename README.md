@@ -11,7 +11,7 @@
 
 WOPR est une application locale de gestion d’atelier pour suivre réparations, clients, devis, factures, encaissements, restitutions, achats, justificatifs et tâches administratives.
 
-**Version documentée : 2.4.3**
+**Version documentée : 2.4.4**
 
 ## Release 2.4.0 — stable
 - Mode Client pour présenter l’atelier sans exposer les noms, problèmes, factures ni montants.
