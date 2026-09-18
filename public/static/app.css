@@ -3133,7 +3133,6 @@ select.pdf-lang-select.mini-btn {
 .payment-mix-fields{grid-column:1/-1;background:#f7fbff;border:2px solid var(--line);padding:12px;margin-top:4px}
 .deposit-payment-box{grid-column:1/-1;background:#fff9e8;border:2px solid #d7a62a;padding:12px;margin-top:8px}
 .deposit-payment-box small{display:block;margin-top:4px}
-.legacy-deposit-fields{display:none!important}
 .payment-add-box{margin-top:12px;padding:10px;background:#fff;border:1px dashed #c18b18}
 .payment-history{margin-top:12px;padding:10px;background:#f7fbff;border:1px solid #b9d8ec;line-height:1.7}
 .payment-mix-title{font-weight:800;margin-bottom:10px;color:#173b60}

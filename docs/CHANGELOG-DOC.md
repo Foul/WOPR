@@ -1,5 +1,10 @@
 # Changelog de la documentation
 
+## 2.4.8 - 18 septembre 2026 - nettoyage de l'écran des règlements
+
+- suppression du doublon visuel « Acompte reçu » ;
+- conservation uniquement de l'ajout de règlements et de leur historique.
+
 ## 2.4.7 - 18 septembre 2026 - simplification de l'écran des règlements
 
 - interface allégée : un seul bloc visible pour ajouter un règlement ;

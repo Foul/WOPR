@@ -119,41 +119,7 @@
       </div>
     </div>
 
-    <div class="deposit-payment-box legacy-deposit-fields" aria-hidden="true">
-      <div class="payment-mix-title">Acompte reçu (facultatif)</div>
-      <div class="grid two">
-        <label>Montant de l'acompte
-          <input type="text" name="deposit_amount" inputmode="decimal"
-                 value="{% if r['deposit_amount'] %}{{ '%.2f'|format(r['deposit_amount'])|replace('.', ',') }}{% endif %}"
-                 placeholder="0,00">
-          <small>Le reste dû sera calculé automatiquement.</small>
-        </label>
-        <label>Date de réception de l'acompte
-          <input type="date" name="deposit_date" value="{{ (r['deposit_date'] or '')[:10] }}">
-        </label>
-        <label>Mode de réception de l'acompte
-          <select name="deposit_payment_mode" class="payment-mode-select" data-payment-mix-select="deposit">
-            <option value="">— aucun acompte —</option>
-            {% for mode in ['ESP','CB','VIR','PAY','BTC','CHQ','MIXTE','MULTI'] %}
-              <option value="{{ mode }}" {% if r['deposit_payment_mode']==mode %}selected{% endif %}>{{ mode }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
-      <div class="payment-mix-fields" data-payment-mix="deposit" hidden>
-        <div class="payment-mix-title">Acompte mixte — répartis le montant exact</div>
-        <div class="payment-mix-grid">
-          <label>Espèces €<input inputmode="decimal" name="deposit_payment_ESP" placeholder="0,00"></label>
-          <label>CB €<input inputmode="decimal" name="deposit_payment_CB" placeholder="0,00"></label>
-          <label>Virement €<input inputmode="decimal" name="deposit_payment_VIR" placeholder="0,00"></label>
-          <label>PayPal €<input inputmode="decimal" name="deposit_payment_PAY" placeholder="0,00"></label>
-          <label>Bitcoin €<input inputmode="decimal" name="deposit_payment_BTC" placeholder="0,00"></label>
-          <label>Chèque €<input inputmode="decimal" name="deposit_payment_CHQ" placeholder="0,00"></label>
-        </div>
-      </div>
-      {% if payment_summary and payment_summary['deposit_amount'] %}
-        <small><strong>Acompte enregistré :</strong> {{ '%.2f'|format(payment_summary['deposit_amount'])|replace('.', ',') }} € · reste dû : {{ '%.2f'|format(payment_summary['remaining_amount'])|replace('.', ',') }} €</small>
-      {% endif %}
+    <div class="deposit-payment-box">
       <div class="payment-add-box">
         <div class="payment-mix-title">Ajouter un règlement reçu</div>
         {% if payment_summary %}
