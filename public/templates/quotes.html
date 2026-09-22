@@ -65,7 +65,7 @@
       <td class="invoice-list-date">
         {{ q['quote_date'][8:10] }}/{{ q['quote_date'][5:7] }}/{{ q['quote_date'][0:4] }}
       </td>
-      <td><strong>{{ q['quote_no'] }}</strong></td>
+      <td><strong class="quote-number-value">{{ q['quote_no'] }}</strong></td>
       <td>
         <strong>{{ q['client_name'] }}</strong>
         {% if q['client_address_street'] %}

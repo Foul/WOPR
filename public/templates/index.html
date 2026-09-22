@@ -183,7 +183,7 @@
                    href="{{ url_for('repair_close', rid=r['id'], return='suivi') }}"
                    title="Modifier la facture">{{ invoice_text }}</a>
               {% else %}
-                {{ invoice_text }}
+                <span class="invoice-number-value">{{ invoice_text }}</span>
               {% endif %}
             {% elif r['status']=='Laissé pour pièces' %}
               <span class="no-invoice-label">Sans facture</span>

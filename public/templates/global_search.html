@@ -14,7 +14,7 @@
 </div></section>{% endif %}
 
 {% if results.repairs %}<section class="search-section"><h2>🛠️ Réparations ({{ results.repairs|length }})</h2><div class="search-cards">
-{% for r in results.repairs %}<div class="search-card"><strong>{{ r.received_date }} · {{ r.client_first_name or '' }} {{ r.client_last_name or r.client_name }}</strong><br>{{ r.device_type or '' }} {{ r.brand_model or '' }} · {{ r.status }}{% if r.invoice_no %} · {{ r.invoice_no }}{% endif %}<div><a class="button primary" href="{{ url_for('repair_detail', rid=r.id) }}">Ouvrir le dossier</a></div></div>{% endfor %}
+{% for r in results.repairs %}<div class="search-card"><strong>{{ r.received_date }} · {{ r.client_first_name or '' }} {{ r.client_last_name or r.client_name }}</strong><br>{{ r.device_type or '' }} {{ r.brand_model or '' }} · {{ r.status }}{% if r.invoice_no %} · <span class="invoice-number-value">{{ r.invoice_no }}</span>{% endif %}<div><a class="button primary" href="{{ url_for('repair_detail', rid=r.id) }}">Ouvrir le dossier</a></div></div>{% endfor %}
 </div></section>{% endif %}
 
 {% if results.ledger %}<section class="search-section"><h2>🛍️ Achats / Ventes ({{ results.ledger|length }})</h2><div class="search-cards">
@@ -22,11 +22,11 @@
 </div></section>{% endif %}
 
 {% if results.archived_invoices %}<section class="search-section"><h2>🧾 Factures historiques ({{ results.archived_invoices|length }})</h2><div class="search-cards">
-{% for f in results.archived_invoices %}<div class="search-card"><strong>{{ f.invoice_date }} · {{ f.client_name or '' }}</strong><br>Facture {{ f.invoice_no }} · {{ '%.2f'|format(f.invoice_total or 0) }} €{% if f.payment_mode %} · {{ f.payment_mode }}{% endif %}<div><a class="button primary" href="{{ url_for('archived_historical_invoice_pdf', invoice_no=f.invoice_no) }}">📄 Ouvrir le PDF</a> <a class="button" href="{{ url_for('invoices_page', q=f.invoice_no) }}">Voir dans Factures</a></div></div>{% endfor %}
+{% for f in results.archived_invoices %}<div class="search-card"><strong>{{ f.invoice_date }} · {{ f.client_name or '' }}</strong><br>Facture <span class="invoice-number-value">{{ f.invoice_no }}</span> · {{ '%.2f'|format(f.invoice_total or 0) }} €{% if f.payment_mode %} · {{ f.payment_mode }}{% endif %}<div><a class="button primary" href="{{ url_for('archived_historical_invoice_pdf', invoice_no=f.invoice_no) }}">📄 Ouvrir le PDF</a> <a class="button" href="{{ url_for('invoices_page', q=f.invoice_no) }}">Voir dans Factures</a></div></div>{% endfor %}
 </div></section>{% endif %}
 
 {% if results.quotes %}<section class="search-section"><h2>📝 Devis ({{ results.quotes|length }})</h2><div class="search-cards">
-{% for d in results.quotes %}<div class="search-card"><strong>{{ d.quote_date }} · {{ d.quote_no }} · {{ d.client_name }}</strong><br>{{ d.status }}<div><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">Ouvrir le devis</a></div></div>{% endfor %}
+{% for d in results.quotes %}<div class="search-card"><strong>{{ d.quote_date }} · <span class="quote-number-value">{{ d.quote_no }}</span> · {{ d.client_name }}</strong><br>{{ d.status }}<div><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">Ouvrir le devis</a></div></div>{% endfor %}
 </div></section>{% endif %}
 
 {% if q and total == 0 %}<div class="empty-state">Aucun résultat.</div>{% endif %}

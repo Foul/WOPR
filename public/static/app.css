@@ -4082,6 +4082,15 @@ html,body{overflow-x:hidden!important}
 .topbar .topnav{min-width:0!important;max-width:100%!important;overflow-x:hidden!important;overflow-y:visible!important;scrollbar-width:none!important}
 .topbar .topnav::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
 
+/* Numéros métier : bleu Foul-Fix dans tous les thèmes, y compris 8-bit. */
+.invoice-number-edit-link,
+.invoice-number-value,
+.quote-number-value,
+.repair-number-value{
+  color:#3399FF!important;
+}
+.invoice-number-edit-link{border-bottom-color:#3399FF!important}
+
 /* Sélecteur de période du tableau de bord atelier. */
 .atelier-period-picker{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f5faff;border:1px solid #aad3f5;border-radius:10px}
 .atelier-period-picker label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#53657a}

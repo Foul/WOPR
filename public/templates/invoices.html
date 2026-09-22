@@ -80,10 +80,10 @@
       </td>
       <td>
         {% if r.get('archived_meta') %}
-          <strong>{{ r['invoice_no'] }}</strong>
+          <strong class="invoice-number-value">{{ r['invoice_no'] }}</strong>
           <span class="legacy-mini">HIST.</span>
         {% elif r.get('ledger_only') %}
-          <strong>{{ r['invoice_no'] }}</strong>
+          <strong class="invoice-number-value">{{ r['invoice_no'] }}</strong>
           <span class="legacy-mini">HIST.</span>
         {% else %}
           <a class="invoice-number-edit-link"

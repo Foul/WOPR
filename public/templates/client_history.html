@@ -58,7 +58,7 @@
       <div class="history-quick-card">
         <span class="history-quick-label">Dernière facture</span>
         {% if last_invoice %}
-          <strong>{{ last_invoice.invoice_no }}</strong>
+          <strong class="invoice-number-value">{{ last_invoice.invoice_no }}</strong>
           <small>{{ last_invoice.received_date }} · {{ '%.2f'|format((last_invoice.service_amount or 0)+(last_invoice.goods_amount or 0)) }} €</small>
           <p>{{ last_invoice.device_type or 'Facture client' }}{% if last_invoice.brand_model %} · {{ last_invoice.brand_model }}{% endif %}</p>
           <a class="button" href="{{ url_for('invoice_archived_pdf', rid=last_invoice.id) }}" target="_blank">📄 Ouvrir la facture</a>
@@ -70,7 +70,7 @@
       <div class="history-quick-card">
         <span class="history-quick-label">Dernier devis</span>
         {% if last_quote %}
-          <strong>{{ last_quote.quote_no }}</strong>
+          <strong class="quote-number-value">{{ last_quote.quote_no }}</strong>
           <small>{{ last_quote.quote_date }} · {{ last_quote.status or '—' }}</small>
           <p>{{ last_quote.notes or 'Aucune note' }}</p>
           <a class="button" href="{{ url_for('quote_edit', quote_id=last_quote.id) }}">📝 Ouvrir le devis</a>
@@ -103,7 +103,7 @@
         <td><strong>{{ r.device_type or '—' }}</strong>{% if r.brand_model %}<div class="cell-muted">{{ r.brand_model }}</div>{% endif %}</td>
         <td class="history-problem">{{ r.problem or '—' }}</td>
         <td><span class="history-status status-{{ (r.status or '')|lower|replace(' ', '-')|replace('é','e')|replace('è','e')|replace('à','a') }}">{{ r.status }}</span></td>
-        <td>{% if r.invoice_no %}<strong>{{ r.invoice_no }}</strong>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
+        <td>{% if r.invoice_no %}<strong class="invoice-number-value">{{ r.invoice_no }}</strong>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
         <td class="nowrap"><strong>{{ '%.2f'|format((r.service_amount or 0)+(r.goods_amount or 0)) }} €</strong>{% if r.paid %}<div class="paid-mark">✓ encaissé</div>{% endif %}</td>
         <td class="history-row-actions"><a class="button" href="{{ url_for('repair_detail', rid=r.id) }}">📂 Dossier</a>{% if r.invoice_no %}<a class="button" href="{{ url_for('invoice_archived_pdf', rid=r.id) }}" target="_blank">📄 Facture</a>{% endif %}</td>
       </tr>
@@ -116,7 +116,7 @@
     <div class="history-section-title"><span>📝</span><div><h2>Devis</h2><p>Historique des propositions commerciales.</p></div></div>
     {% if quotes %}
     <div class="table-wrap history-table-wrap"><table class="history-table"><thead><tr><th>Date</th><th>N° devis</th><th>État</th><th>Action</th></tr></thead><tbody>
-      {% for d in quotes %}<tr><td>{{ d.quote_date }}</td><td><strong>{{ d.quote_no }}</strong></td><td><span class="history-status">{{ d.status }}</span></td><td><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">📂 Ouvrir</a></td></tr>{% endfor %}
+      {% for d in quotes %}<tr><td>{{ d.quote_date }}</td><td><strong class="quote-number-value">{{ d.quote_no }}</strong></td><td><span class="history-status">{{ d.status }}</span></td><td><a class="button" href="{{ url_for('quote_edit', quote_id=d.id) }}">📂 Ouvrir</a></td></tr>{% endfor %}
     </tbody></table></div>
     {% else %}<div class="history-empty">Aucun devis pour ce client.</div>{% endif %}
   </section>
