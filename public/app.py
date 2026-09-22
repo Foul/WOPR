@@ -1,5 +1,9 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, jsonify, Response, session, abort
 import sqlite3
+try:
+    from sqlcipher3 import dbapi2 as sqlcipher3
+except Exception:
+    sqlcipher3 = None
 from pathlib import Path
 from datetime import datetime, timedelta, date, timezone
 import secrets
@@ -156,7 +160,15 @@ def _database_path():
 
     if best_score[0] >= 0:
         return best
-    return preferred
+    # Une base SQLCipher ne porte plus l'en-tête SQLite en clair : le sqlite3
+    # standard ne peut donc pas la noter ici. Si wopr.db existe, il reste la
+    # référence prioritaire ; sinon on conserve le candidat existant le plus
+    # plausible au lieu de créer une nouvelle base vide.
+    if preferred.is_file():
+        return preferred
+    if len(candidates) == 1:
+        return candidates[0]
+    return max(candidates, key=lambda p: p.stat().st_size)
 
 
 DB = _database_path()
@@ -187,6 +199,7 @@ GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 # Sécurité locale WOPR
 ADMIN_PIN_FILE = PRIVATE_ROOT / "data" / "admin_pin.json"
 APP_SECRET_FILE = PRIVATE_ROOT / "data" / "app_secret.key"
+SQLCIPHER_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sqlcipher.json"
 
 # Clé maîtresse des secrets : volontairement hors du dossier WOPR.
 def _secret_key_path():
@@ -1053,12 +1066,26 @@ def external_backup_status():
         return status
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        latest_result = ""
         for line in reversed(lines):
-            if not status["last_ok"] and " OK:" in f" {line}":
+            padded = f" {line}"
+            is_ok = " OK:" in padded
+            is_error = " ERREUR:" in padded or " ERROR:" in padded
+
+            # Le journal est chronologique : le premier résultat rencontré en
+            # remontant est donc l'état réellement actuel de la sauvegarde.
+            if not latest_result and (is_ok or is_error):
+                latest_result = "error" if is_error else "ok"
+
+            if not status["last_ok"] and is_ok:
                 status["last_ok"] = line.strip()
-            if not status["last_error"] and (" ERREUR:" in f" {line}" or " ERROR:" in f" {line}"):
+
+            # Une ancienne erreur déjà suivie d'un backup OK est résolue :
+            # elle ne doit plus rester affichée dans la page Sécurité.
+            if latest_result == "error" and not status["last_error"] and is_error:
                 status["last_error"] = line.strip()
-            if status["last_ok"] and status["last_error"]:
+
+            if status["last_ok"] and (latest_result == "ok" or status["last_error"]):
                 break
     except OSError:
         pass
@@ -2275,8 +2302,7 @@ def normalize_global_search(value):
 
 
 def db():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
+    con = _open_database(DB, row_factory=True)
     # Fonction SQLite locale utilisée uniquement dans les recherches.
     con.create_function("WOPR_NORM", 1, normalize_global_search, deterministic=True)
     return con
@@ -2538,6 +2564,297 @@ def valid_pin_format(pin):
     return pin.isdigit() and PIN_MIN_LENGTH <= len(pin) <= PIN_MAX_LENGTH
 
 
+def _sqlcipher_settings_read():
+    try:
+        data = json.loads(SQLCIPHER_SETTINGS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sqlcipher_settings_write(data):
+    SQLCIPHER_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SQLCIPHER_SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, SQLCIPHER_SETTINGS_FILE)
+    try:
+        os.chmod(SQLCIPHER_SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def _database_is_plaintext(path):
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size < 16:
+        return False
+    try:
+        with path.open("rb") as fh:
+            return fh.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return False
+
+
+def _database_encryption_enabled():
+    data = _sqlcipher_settings_read()
+    return bool(data.get("enabled") and data.get("wrapped_db_key") and data.get("salt"))
+
+
+def _require_sqlcipher():
+    if sqlcipher3 is None:
+        raise RuntimeError(
+            "SQLCipher Python est absent. Relance WOPR avec le launcher afin d'installer sqlcipher3-binary."
+        )
+    return sqlcipher3
+
+
+def _pin_wrap_fernet(pin, salt):
+    """Dérive une clé d'enveloppe depuis PIN + master.key sans stocker le PIN."""
+    pin = str(pin or "")
+    if not valid_pin_format(pin):
+        raise RuntimeError("PIN WOPR invalide pour déverrouiller la base chiffrée.")
+    master = load_or_create_master_secret()
+    stretched = hashlib.scrypt(
+        pin.encode("utf-8"),
+        salt=salt,
+        n=2**15,
+        r=8,
+        p=1,
+        dklen=32,
+        maxmem=64 * 1024 * 1024,
+    )
+    wrapping = __import__("hmac").new(
+        master, b"WOPR-SQLCipher-wrap-v1\x00" + stretched, hashlib.sha256
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(wrapping))
+
+
+def _unwrap_database_key(pin=None, settings=None):
+    settings = settings or _sqlcipher_settings_read()
+    if not settings.get("wrapped_db_key") or not settings.get("salt"):
+        raise RuntimeError("Configuration SQLCipher WOPR incomplète.")
+    pin = str(pin if pin is not None else _RUNTIME_DB_PIN or os.environ.get("WOPR_DB_PIN", ""))
+    try:
+        salt = base64.urlsafe_b64decode(str(settings["salt"]).encode("ascii"))
+        wrapped = str(settings["wrapped_db_key"]).encode("ascii")
+        key = _pin_wrap_fernet(pin, salt).decrypt(wrapped)
+    except InvalidToken as exc:
+        raise RuntimeError("PIN incorrect : impossible de déverrouiller la base SQLCipher.") from exc
+    except Exception as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Impossible de déverrouiller la clé SQLCipher : {exc}") from exc
+    if len(key) != 32:
+        raise RuntimeError("Clé SQLCipher WOPR invalide.")
+    return key
+
+
+def _sqlcipher_apply_key(con, key):
+    # Clé brute hexadécimale : pas de transformation supplémentaire par SQLCipher.
+    con.execute(f"PRAGMA key = \"x'{bytes(key).hex()}'\"")
+    con.execute("PRAGMA cipher_memory_security = ON")
+
+
+def _open_database(path, row_factory=False, force_encrypted=None, key=None):
+    path = Path(path)
+    if force_encrypted is None:
+        force_encrypted = _database_encryption_enabled() and not _database_is_plaintext(path)
+    if force_encrypted:
+        cipher = _require_sqlcipher()
+        con = cipher.connect(str(path))
+        _sqlcipher_apply_key(con, key or _unwrap_database_key())
+        # Force la lecture immédiatement : un mauvais PIN échoue ici, pas plus tard.
+        con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        if row_factory:
+            con.row_factory = cipher.Row
+        return con
+    con = sqlite3.connect(str(path))
+    if row_factory:
+        con.row_factory = sqlite3.Row
+    return con
+
+
+def _plaintext_presafety_backup(source):
+    """Copie de secours unique et non gérée par la rétention WOPR."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = now().strftime("%Y%m%d_%H%M%S")
+    dest = BACKUP_DIR / f"PRE-SQLCIPHER-{stamp}-wopr.db.gz"
+    with Path(source).open("rb") as src, dest.open("wb") as raw_dst:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_dst, compresslevel=6, mtime=0) as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    return dest
+
+
+def _sqlcipher_export_copy(source, destination, destination_key):
+    """Copie fiable SQLite/SQLCipher -> SQLCipher via sqlcipher_export()."""
+    cipher = _require_sqlcipher()
+    source = Path(source)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+
+    con = cipher.connect(str(source))
+    attached = False
+    try:
+        if not _database_is_plaintext(source):
+            _sqlcipher_apply_key(con, _unwrap_database_key())
+            con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+
+        user_version = int(con.execute("PRAGMA user_version").fetchone()[0] or 0)
+        application_id = int(con.execute("PRAGMA application_id").fetchone()[0] or 0)
+        auto_vacuum = int(con.execute("PRAGMA auto_vacuum").fetchone()[0] or 0)
+        key_hex = bytes(destination_key).hex()
+        con.execute(
+            f"ATTACH DATABASE ? AS wopr_export KEY \"x'{key_hex}'\"",
+            (str(destination),),
+        )
+        attached = True
+        con.execute(f"PRAGMA wopr_export.auto_vacuum={auto_vacuum}")
+        con.execute("SELECT sqlcipher_export('wopr_export')")
+        con.execute(f"PRAGMA wopr_export.user_version={user_version}")
+        con.execute(f"PRAGMA wopr_export.application_id={application_id}")
+        con.commit()
+        con.execute("DETACH DATABASE wopr_export")
+        attached = False
+    finally:
+        if attached:
+            try:
+                con.execute("DETACH DATABASE wopr_export")
+            except Exception:
+                pass
+        con.close()
+
+
+def _migrate_plaintext_database_to_sqlcipher(pin):
+    cipher = _require_sqlcipher()
+    if not DB.exists() or not _database_is_plaintext(DB):
+        return False
+
+    # Le PIN fourni au launcher doit être le vrai PIN administrateur avant toute migration.
+    pin_hash = read_pin_hash()
+    if not pin_hash or not check_password_hash(pin_hash, str(pin or "")):
+        raise RuntimeError("PIN incorrect : migration SQLCipher refusée.")
+    load_or_create_master_secret()
+
+    safety = _plaintext_presafety_backup(DB)
+    salt = secrets.token_bytes(16)
+    db_key = secrets.token_bytes(32)
+    wrapped = _pin_wrap_fernet(pin, salt).encrypt(db_key).decode("ascii")
+    settings = {
+        "version": 1,
+        "enabled": False,
+        "state": "migrating",
+        "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
+        "wrapped_db_key": wrapped,
+        "created_at": now().isoformat(timespec="seconds"),
+        "pre_migration_backup": safety.name,
+    }
+    _sqlcipher_settings_write(settings)
+
+    tmp = DB.parent / f".wopr_sqlcipher_{secrets.token_hex(5)}.db"
+    tmp.unlink(missing_ok=True)
+    try:
+        _sqlcipher_export_copy(DB, tmp, db_key)
+
+        test = cipher.connect(str(tmp))
+        try:
+            _sqlcipher_apply_key(test, db_key)
+            tables = {str(r[0]) for r in test.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            integrity = str(test.execute("PRAGMA integrity_check").fetchone()[0])
+            if not {"clients", "repairs"}.issubset(tables) or integrity.casefold() != "ok":
+                raise RuntimeError("La copie SQLCipher de contrôle n'est pas une base WOPR valide.")
+        finally:
+            test.close()
+
+        for suffix in ("-wal", "-shm"):
+            Path(str(DB) + suffix).unlink(missing_ok=True)
+        os.replace(tmp, DB)
+        settings["enabled"] = True
+        settings["state"] = "ready"
+        settings["migrated_at"] = now().isoformat(timespec="seconds")
+        _sqlcipher_settings_write(settings)
+        return True
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        # Si la base active est toujours claire, la migration n'a rien détruit.
+        settings["state"] = "failed"
+        settings["enabled"] = False
+        _sqlcipher_settings_write(settings)
+        raise
+
+
+def initialize_database_security(pin_override=None):
+    """Active SQLCipher sur une installation existante sans migration destructive."""
+    global _RUNTIME_DB_PIN
+    env_pin = os.environ.pop("WOPR_DB_PIN", "")
+    pin = str(pin_override if pin_override is not None else env_pin or "")
+    settings = _sqlcipher_settings_read()
+
+    if settings.get("enabled"):
+        if not pin:
+            _RUNTIME_DB_PIN = None
+            return "locked"
+        _RUNTIME_DB_PIN = pin
+        con = _open_database(DB, force_encrypted=True)
+        try:
+            ok = str(con.execute("PRAGMA integrity_check").fetchone()[0]).casefold() == "ok"
+            if not ok:
+                raise RuntimeError("Contrôle d'intégrité SQLCipher en échec.")
+        finally:
+            con.close()
+        return "encrypted"
+
+    # Migration seulement si PIN + master.key + PIN administrateur existent.
+    # Une nouvelle installation peut donc terminer sa configuration normalement,
+    # puis sera chiffrée au redémarrage suivant.
+    if DB.exists() and _database_is_plaintext(DB) and pin and pin_is_configured() and MASTER_SECRET_FILE.exists():
+        _RUNTIME_DB_PIN = pin
+        _migrate_plaintext_database_to_sqlcipher(pin)
+        return "migrated"
+
+    _RUNTIME_DB_PIN = pin or None
+    return "plaintext"
+
+
+def rewrap_database_key_for_new_pin(current_pin, new_pin):
+    """Change le PIN protecteur sans rechiffrer les pages de la base SQLCipher."""
+    global _RUNTIME_DB_PIN
+    if not _database_encryption_enabled():
+        return
+    settings = _sqlcipher_settings_read()
+    key = _unwrap_database_key(current_pin, settings)
+    salt = secrets.token_bytes(16)
+    settings["salt"] = base64.urlsafe_b64encode(salt).decode("ascii")
+    settings["wrapped_db_key"] = _pin_wrap_fernet(new_pin, salt).encrypt(key).decode("ascii")
+    settings["pin_rewrapped_at"] = now().isoformat(timespec="seconds")
+    _sqlcipher_settings_write(settings)
+    _RUNTIME_DB_PIN = str(new_pin)
+
+
+_RUNTIME_DB_PIN = None
+
+
+def database_security_requires_unlock():
+    if _database_encryption_enabled():
+        return not bool(_RUNTIME_DB_PIN)
+    return bool(
+        DB.exists()
+        and _database_is_plaintext(DB)
+        and pin_is_configured()
+        and MASTER_SECRET_FILE.exists()
+        and sqlcipher3 is not None
+    )
+
+
 def csrf_token():
     token = session.get("_csrf_token")
     if not token:
@@ -2571,7 +2888,7 @@ def _backup_stamp():
 
 def _backup_marker_write(path, tag="backup"):
     """Ajoute un marqueur interne à la COPIE de sauvegarde, jamais à la base active."""
-    con = sqlite3.connect(str(path))
+    con = _open_database(path)
     try:
         con.execute("""
             CREATE TABLE IF NOT EXISTS wopr_backup_meta (
@@ -2605,7 +2922,7 @@ def _validate_wopr_database(path):
         return False, f"Contrôle SQLite = {detail}", {}
     con = None
     try:
-        con = sqlite3.connect(str(path))
+        con = _open_database(path)
         tables = {str(r[0]) for r in con.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()}
@@ -2641,9 +2958,7 @@ def _extract_backup_to_sqlite(source, destination):
     destination.unlink(missing_ok=True)
     with source.open("rb") as f:
         magic = f.read(16)
-    if magic.startswith(b"SQLite format 3\x00"):
-        shutil.copyfile(source, destination)
-    elif magic.startswith(b"\x1f\x8b"):
+    if magic.startswith(b"\x1f\x8b"):
         try:
             with gzip.open(source, "rb") as src, destination.open("wb") as dst:
                 shutil.copyfileobj(src, dst, length=1024 * 1024)
@@ -2651,13 +2966,46 @@ def _extract_backup_to_sqlite(source, destination):
             destination.unlink(missing_ok=True)
             raise ValueError(f"Archive GZIP invalide : {exc}") from exc
     else:
-        raise ValueError("Format non reconnu : attendu SQLite ou GZIP contenant une base WOPR.")
+        # SQLite clair historique OU SQLCipher chiffré : la validation ci-dessous
+        # décide selon le contenu et la configuration courante.
+        shutil.copyfile(source, destination)
 
     ok, detail, meta = _validate_wopr_database(destination)
     if not ok:
         destination.unlink(missing_ok=True)
         raise ValueError(detail)
     return meta
+
+
+def _backup_encrypted_raw_without_key(tag="arret", only_if_changed=True):
+    """Sauvegarde post-arrêt sans PIN : copie binaire d'une DB SQLCipher fermée."""
+    if not DB.is_file() or not _database_encryption_enabled():
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if only_if_changed:
+        latest = 0
+        for candidate in BACKUP_DIR.glob("*.db*"):
+            try:
+                if candidate.is_file():
+                    latest = max(latest, candidate.stat().st_mtime_ns)
+            except OSError:
+                pass
+        if latest and DB.stat().st_mtime_ns <= latest:
+            return None
+    safe_tag = re.sub(r"[^A-Za-z0-9_-]+", "_", tag)[:30] or "backup"
+    dest = BACKUP_DIR / f"wopr_{_backup_stamp()}_{safe_tag}.db.gz"
+    with DB.open("rb") as src, dest.open("wb") as raw_dst:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_dst, compresslevel=6, mtime=0) as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+    # Vérifie au minimum l'intégrité de l'archive GZIP sans déchiffrer la base.
+    with gzip.open(dest, "rb") as check:
+        if not check.read(32):
+            raise RuntimeError("Sauvegarde SQLCipher vide après compression.")
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    return dest
 
 
 def backup_database(force=False, tag="auto", only_if_changed=False):
@@ -2754,7 +3102,7 @@ def database_integrity_check(path):
         return False, "Fichier introuvable."
     con = None
     try:
-        con = sqlite3.connect(str(path))
+        con = _open_database(path)
         con.execute("PRAGMA query_only=ON")
         row = con.execute("PRAGMA integrity_check").fetchone()
         result = str(row[0] if row else "").strip()
@@ -2770,15 +3118,19 @@ def database_integrity_check(path):
 
 
 def _sqlite_backup_copy(source, destination):
-    """Copie une base via l'API SQLite, sans simple copie de fichier."""
+    """Copie cohérente de la base ; chiffrée dès que SQLCipher est actif."""
     source = Path(source)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.unlink(missing_ok=True)
+    if _database_encryption_enabled():
+        _sqlcipher_export_copy(source, destination, _unwrap_database_key())
+        return
     src_con = sqlite3.connect(str(source))
     dst_con = sqlite3.connect(str(destination))
     try:
         src_con.backup(dst_con)
+        dst_con.commit()
     finally:
         dst_con.close()
         src_con.close()
@@ -2813,7 +3165,7 @@ def restore_database_backup(backup_name):
     try:
         # Le marqueur appartient à l'archive de sauvegarde, pas à la base active.
         try:
-            marker_con = sqlite3.connect(str(restore_tmp))
+            marker_con = _open_database(restore_tmp)
             marker_con.execute("DROP TABLE IF EXISTS wopr_backup_meta")
             marker_con.commit()
             marker_con.close()
@@ -2823,6 +3175,19 @@ def restore_database_backup(backup_name):
         ok, detail, _ = _validate_wopr_database(restore_tmp)
         if not ok:
             raise RuntimeError(f"Copie de restauration invalide : {detail}")
+
+        # Une ancienne sauvegarde SQLite claire reste restaurable, mais elle est
+        # rechiffrée AVANT de redevenir la base active.
+        if _database_encryption_enabled() and _database_is_plaintext(restore_tmp):
+            encrypted_restore = DB.parent / f".wopr_restore_cipher_{stamp}_{secrets.token_hex(3)}.db"
+            try:
+                _sqlite_backup_copy(restore_tmp, encrypted_restore)
+                ok, detail, _ = _validate_wopr_database(encrypted_restore)
+                if not ok:
+                    raise RuntimeError(f"Rechiffrement de la sauvegarde invalide : {detail}")
+                os.replace(encrypted_restore, restore_tmp)
+            finally:
+                encrypted_restore.unlink(missing_ok=True)
 
         for suffix in ("-wal", "-shm"):
             try:
@@ -2840,7 +3205,7 @@ def restore_database_backup(backup_name):
         except Exception as exc:
             _extract_backup_to_sqlite(safety, safety_tmp)
             try:
-                c = sqlite3.connect(str(safety_tmp))
+                c = _open_database(safety_tmp)
                 c.execute("DROP TABLE IF EXISTS wopr_backup_meta")
                 c.commit(); c.close()
             except Exception:
@@ -2870,7 +3235,7 @@ def harden_local_permissions():
     for directory in (DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR):
         try: os.chmod(directory, 0o700)
         except OSError: pass
-    for file_path in (DB, ADMIN_PIN_FILE, APP_SECRET_FILE, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE, ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, MASTER_SECRET_FILE):
+    for file_path in (DB, ADMIN_PIN_FILE, APP_SECRET_FILE, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE, ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, SQLCIPHER_SETTINGS_FILE, MASTER_SECRET_FILE):
         if file_path.exists():
             try: os.chmod(file_path, 0o600)
             except OSError: pass
@@ -2909,7 +3274,7 @@ def _portability_diagnostics_impl():
     # doivent être contenus dans WOPR/private.
     managed = (
         DB, CONFIG_PATH, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE,
-        ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, ADMIN_PIN_FILE, APP_SECRET_FILE, BACKUP_DIR, IMPORT_DIR,
+        ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, ADMIN_PIN_FILE, APP_SECRET_FILE, SQLCIPHER_SETTINGS_FILE, BACKUP_DIR, IMPORT_DIR,
         SIGNATURES, PRIVATE_ASSETS, PRIVATE_SEEDS, DEVIS_ROOT, FACTURES_ROOT,
         SUIVI_REPARATIONS_ROOT,
     )
@@ -7675,6 +8040,42 @@ def csv_response(filename, rows):
 def vcard_escape(value):
     return str(value or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
+@app.route("/database/unlock", methods=["GET", "POST"])
+def database_unlock():
+    if request.remote_addr not in {"127.0.0.1", "::1"}:
+        return "Déverrouillage SQLCipher autorisé uniquement depuis le PC local.", 403
+
+    if not database_security_requires_unlock():
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        supplied = request.form.get("_csrf_token", "")
+        expected = session.get("_csrf_token", "")
+        if not expected or not supplied or not secrets.compare_digest(str(supplied), str(expected)):
+            abort(400, description="Jeton de sécurité invalide. Recharge la page puis réessaie.")
+        pin = request.form.get("pin", "").strip()
+        if not read_pin_hash() or not check_password_hash(read_pin_hash(), pin):
+            flash("PIN incorrect.")
+        else:
+            try:
+                state = initialize_database_security(pin)
+                init_db()
+                backup_database(force=False, tag="demarrage")
+                harden_local_permissions()
+                session.clear()
+                session["admin_authenticated"] = True
+                session.permanent = True
+                session["_csrf_token"] = secrets.token_urlsafe(32)
+                audit_event("SQLCIPHER_UNLOCK", f"Base SQLCipher : {state}", request.remote_addr)
+                if state == "migrated":
+                    flash("Base WOPR chiffrée avec SQLCipher et vérifiée.")
+                return redirect(url_for("index"))
+            except Exception as exc:
+                flash(str(exc))
+
+    return render_template("database_unlock.html")
+
+
 @app.route("/master-key/setup", methods=["GET", "POST"])
 def master_key_setup():
     """Premier démarrage portable : importer ou créer la clé maître locale."""
@@ -7756,6 +8157,13 @@ def security_gate():
         if request.remote_addr not in {"127.0.0.1", "::1"}:
             return "Clé maître WOPR absente sur la machine hôte.", 503
         return redirect(url_for("master_key_setup"))
+
+    if endpoint == "database_unlock":
+        return None
+    if endpoint != "static" and database_security_requires_unlock():
+        if request.remote_addr not in {"127.0.0.1", "::1"}:
+            return "Base WOPR verrouillée sur la machine hôte.", 503
+        return redirect(url_for("database_unlock"))
 
     # V2.3.52 — vraie sauvegarde quotidienne :
     # si WOPR reste ouvert plusieurs jours, la première requête du nouveau
@@ -7913,9 +8321,20 @@ def security_page():
             elif new_pin != confirm:
                 flash("Les deux nouveaux PIN ne correspondent pas.")
             else:
-                write_pin(new_pin)
-                audit_event("PIN_CHANGED", "PIN administrateur modifié", request.remote_addr)
-                flash("PIN modifié.")
+                rewrapped = False
+                try:
+                    rewrap_database_key_for_new_pin(current, new_pin)
+                    rewrapped = True
+                    write_pin(new_pin)
+                    audit_event("PIN_CHANGED", "PIN administrateur modifié", request.remote_addr)
+                    flash("PIN modifié.")
+                except Exception as exc:
+                    if rewrapped:
+                        try:
+                            rewrap_database_key_for_new_pin(new_pin, current)
+                        except Exception:
+                            pass
+                    flash(f"PIN non modifié : {exc}")
         elif action == "backup":
             path = backup_database(force=True, tag="manuel")
             audit_event("BACKUP", path.name if path else "", request.remote_addr)
@@ -19690,21 +20109,40 @@ def export_ventes():
                     headers={"Content-Disposition":"attachment; filename=Achats_Ventes_Ventes.csv"})
 
 if __name__ == "__main__":
+    if "--check-db-unlock" in sys.argv:
+        try:
+            initialize_database_security()
+            con = db()
+            try:
+                con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            finally:
+                con.close()
+            print("OK")
+            raise SystemExit(0)
+        except Exception as exc:
+            print(f"ERREUR SQLCIPHER: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+
     # Utilisé par les scripts d'arrêt : le serveur est déjà terminé, on capture
     # donc le dernier état SQLite entièrement validé de la session.
     if "--backup-arret" in sys.argv:
         try:
-            path = backup_database(
-                force=False,
-                tag="arret",
-                only_if_changed=True
-            )
+            state = initialize_database_security()
+            if state == "locked" and _database_encryption_enabled():
+                path = _backup_encrypted_raw_without_key(tag="arret", only_if_changed=True)
+            else:
+                path = backup_database(
+                    force=False,
+                    tag="arret",
+                    only_if_changed=True
+                )
             if path:
-                verify_tmp = DB.parent / f".wopr_cli_verify_{secrets.token_hex(4)}.db"
-                try:
-                    _extract_backup_to_sqlite(path, verify_tmp)
-                finally:
-                    verify_tmp.unlink(missing_ok=True)
+                if state != "locked":
+                    verify_tmp = DB.parent / f".wopr_cli_verify_{secrets.token_hex(4)}.db"
+                    try:
+                        _extract_backup_to_sqlite(path, verify_tmp)
+                    finally:
+                        verify_tmp.unlink(missing_ok=True)
                 print(str(path))
             else:
                 # Le launcher sait interpréter ce marqueur : aucune nouvelle
@@ -19715,9 +20153,15 @@ if __name__ == "__main__":
             print(f"ERREUR BACKUP ARRET: {exc}", file=sys.stderr)
             raise SystemExit(1)
 
-    backup_database(force=False, tag="demarrage")
-    init_db()
-    harden_local_permissions()
+    security_state = initialize_database_security()
+    if security_state == "migrated":
+        print("WOPR : migration SQLCipher terminée et vérifiée.")
+    if security_state != "locked":
+        backup_database(force=False, tag="demarrage")
+        init_db()
+        harden_local_permissions()
+    else:
+        print("WOPR : base SQLCipher verrouillée — déverrouillage dans le navigateur.")
     print("WOPR : http://127.0.0.1:5000")
     print("Signature téléphone : http://%s:5000" % local_ip())
     print("Mode sécurité : actif — debug désactivé")

@@ -4,7 +4,7 @@ import hashlib, os, platform, signal, subprocess, sys, threading, time, urllib.r
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 
 APP_URL="http://127.0.0.1:5000"
 IS_WINDOWS=os.name=="nt"
@@ -29,6 +29,8 @@ PID_FILE=DATA_DIR/"wopr.pid"
 LOG=DATA_DIR/"wopr-launcher.log"
 SERVER_OUT=DATA_DIR/"wopr-server.log"
 SERVER_ERR=DATA_DIR/"wopr-server-error.log"
+ADMIN_PIN_FILE=DATA_DIR/"admin_pin.json"
+SQLCIPHER_SETTINGS_FILE=DATA_DIR/"sqlcipher.json"
 def _find_existing_db():
     candidates = [
         p for p in DATA_DIR.glob("*.db")
@@ -51,6 +53,26 @@ def ensure_dirs():
               PRIVATE_DIR/"documents"/"Factures",PRIVATE_DIR/"documents"/"Devis",
               PRIVATE_DIR/"documents"/"Suivi de réparation"):
         p.mkdir(parents=True,exist_ok=True)
+
+def pin_required_for_database():
+    # Dès qu'un PIN admin existe, le launcher le demande : soit pour migrer une
+    # ancienne base claire, soit pour déverrouiller SQLCipher.
+    try:
+        if ADMIN_PIN_FILE.is_file():
+            return True
+        if SQLCIPHER_SETTINGS_FILE.is_file():
+            return True
+    except OSError:
+        pass
+    return False
+
+def db_env(pin=None):
+    env=os.environ.copy()
+    if pin:
+        env["WOPR_DB_PIN"]=str(pin)
+    else:
+        env.pop("WOPR_DB_PIN",None)
+    return env
 
 def log(msg):
     try:
@@ -133,7 +155,7 @@ def ensure_venv(status):
     installed=STAMP.read_text(encoding="ascii").strip() if STAMP.exists() else ""
     if wanted and installed==wanted: return
     status("Vérification des dépendances…")
-    cp=subprocess.run([str(PY),"-c","import flask,reportlab,qrcode"],cwd=PUBLIC_DIR,
+    cp=subprocess.run([str(PY),"-c","import flask,reportlab,qrcode; from sqlcipher3 import dbapi2 as _sqlcipher"],cwd=PUBLIC_DIR,
                       capture_output=True,text=True)
     if cp.returncode==0 and wanted:
         STAMP.write_text(wanted,encoding="ascii"); return
@@ -144,7 +166,7 @@ def ensure_venv(status):
     if cp.returncode: raise RuntimeError(f"Installation des dépendances échouée. Voir {LOG}")
     if wanted: STAMP.write_text(wanted,encoding="ascii")
 
-def start_server(status):
+def start_server(status, db_pin=None):
     if alive(): return read_pid() or 0
     pid=read_pid()
     if pid and not process_exists(pid): PID_FILE.unlink(missing_ok=True)
@@ -152,7 +174,7 @@ def start_server(status):
     status("Lancement du serveur WOPR…")
     out=SERVER_OUT.open("a",encoding="utf-8")
     err=SERVER_ERR.open("a",encoding="utf-8")
-    kwargs=dict(cwd=str(PUBLIC_DIR),stdout=out,stderr=err,stdin=subprocess.DEVNULL)
+    kwargs=dict(cwd=str(PUBLIC_DIR),stdout=out,stderr=err,stdin=subprocess.DEVNULL,env=db_env(db_pin))
     if IS_WINDOWS:
         kwargs["creationflags"]=getattr(subprocess,"CREATE_NO_WINDOW",0)|getattr(subprocess,"CREATE_NEW_PROCESS_GROUP",0)
     else:
@@ -212,7 +234,22 @@ def discover_app_pids():
                     pass
     return sorted(pids)
 
-def create_shutdown_backup(status):
+def validate_database_pin(db_pin):
+    if not pin_required_for_database():
+        return
+    if not PY.exists():
+        raise RuntimeError("Environnement Python WOPR introuvable pour vérifier le PIN.")
+    cp=subprocess.run(
+        [str(PY),str(APP_PATH),"--check-db-unlock"],
+        cwd=str(PUBLIC_DIR),capture_output=True,text=True,timeout=30,
+        env=db_env(db_pin),
+        creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if IS_WINDOWS else 0
+    )
+    if cp.returncode:
+        detail=(cp.stderr or cp.stdout or "PIN incorrect ou base inaccessible.").strip()
+        raise RuntimeError(detail)
+
+def create_shutdown_backup(status, db_pin=None):
     status("Création de la sauvegarde de fermeture…")
     commands=[]
     if PY.exists():
@@ -230,6 +267,7 @@ def create_shutdown_backup(status):
         try:
             cp=subprocess.run(
                 command,cwd=str(PUBLIC_DIR),capture_output=True,text=True,timeout=120,
+                env=db_env(db_pin),
                 creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if IS_WINDOWS else 0
             )
         except Exception as exc:
@@ -256,7 +294,8 @@ def create_shutdown_backup(status):
     detail=" | ".join(x for x in errors if x)
     raise RuntimeError("Sauvegarde de fermeture impossible" + (f" : {detail}" if detail else "."))
 
-def stop_server(status):
+def stop_server(status, db_pin=None):
+    validate_database_pin(db_pin)
     pids=discover_app_pids()
     if not pids:
         PID_FILE.unlink(missing_ok=True)
@@ -301,7 +340,7 @@ def stop_server(status):
 
     PID_FILE.unlink(missing_ok=True)
     log("Serveur arrêté PID="+",".join(map(str,pids)))
-    backup=create_shutdown_backup(status)
+    backup=create_shutdown_backup(status, db_pin)
     if backup:
         status(f"WOPR arrêté • sauvegarde {backup.name}")
     else:
@@ -517,9 +556,30 @@ class Launcher(tk.Tk):
         self.refresh()
         self.after(3000, self.tick)
 
+    def ask_database_pin(self, action="démarrer"):
+        if not pin_required_for_database():
+            return None
+        pin=simpledialog.askstring(
+            "WOPR // SQLCIPHER",
+            f"PIN WOPR pour {action} la base chiffrée :",
+            show="*",
+            parent=self,
+        )
+        if pin is None:
+            return None
+        pin=pin.strip()
+        if not pin:
+            messagebox.showerror("WOPR // SQLCIPHER", "Le PIN ne peut pas être vide.", parent=self)
+            return None
+        return pin
+
     def open_wopr(self):
         if alive():
             webbrowser.open(APP_URL)
+            return
+
+        db_pin=self.ask_database_pin("démarrer")
+        if pin_required_for_database() and db_pin is None:
             return
 
         self.status.set("[~] BOOT SEQUENCE INITIALISÉE…")
@@ -527,7 +587,7 @@ class Launcher(tk.Tk):
 
         def job():
             try:
-                start_server(self.set_status)
+                start_server(self.set_status, db_pin)
                 webbrowser.open(APP_URL)
             except Exception as e:
                 self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
@@ -537,12 +597,16 @@ class Launcher(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def stop_wopr(self):
+        db_pin=self.ask_database_pin("sauvegarder et arrêter")
+        if pin_required_for_database() and db_pin is None:
+            return
+
         self.status.set("[~] SHUTDOWN SEQUENCE…")
         self.status_label.config(fg=self.AMBER)
 
         def job():
             try:
-                stop_server(self.set_status)
+                stop_server(self.set_status, db_pin)
             except Exception as e:
                 self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
             finally:

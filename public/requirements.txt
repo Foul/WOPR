@@ -7,3 +7,6 @@ google-auth>=2.0
 google-auth-oauthlib>=1.2
 
 cryptography>=42.0
+
+# Chiffrement intégral de la base locale WOPR
+sqlcipher3-binary>=0.6.0

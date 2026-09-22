@@ -1,0 +1,18 @@
+{% extends "base_public.html" %}
+{% block title %}SQLCipher — WOPR{% endblock %}
+{% block body %}
+<div class="auth-card">
+  <img src="{{ url_for('static', filename='logo_topbar.png') }}" alt="WOPR" class="auth-logo">
+  <h1>Base chiffrée</h1>
+  <p>Entre ton PIN WOPR pour déverrouiller SQLCipher. Le PIN n'est pas enregistré en clair.</p>
+  {% with messages = get_flashed_messages() %}{% if messages %}<div class="flash auth-error">{{ messages[0] }}</div>{% endif %}{% endwith %}
+  <form method="post" class="auth-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>PIN WOPR
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" name="pin" autocomplete="current-password" autofocus required>
+    </label>
+    <button class="primary big-action" type="submit">DÉVERROUILLER SQLCIPHER</button>
+  </form>
+  <p class="auth-help">Au premier déverrouillage, WOPR sauvegarde la base actuelle puis la chiffre avant de l'utiliser.</p>
+</div>
+{% endblock %}
