@@ -1,5 +1,13 @@
 # Changelog de la documentation
 
+## 2.5.1 - 25 septembre 2026 - alignement final de la documentation 2.5.x
+
+- passage de la version publique de WOPR à **2.5.1** après publication du tag `v2.5.0` ;
+- alignement de `manuel.md`, `documentation.html`, `index.html` et `WOPR-Manuel.pdf` sur **2.5.1** ;
+- correction de la date de documentation au **25 septembre 2026** ;
+- conservation de l'historique 2.5.0 dans le changelog ;
+- remplacement des notes de release courantes par `RELEASE-NOTES-2.5.1.md`.
+
 ## 2.5.0 - 25 septembre 2026 - SQLCipher, launcher et stabilisation 8-BIT
 
 - chiffrement de la base principale `private/data/wopr.db` avec SQLCipher ;

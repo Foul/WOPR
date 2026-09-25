@@ -1,6 +1,6 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.5.0**
+**Version documentée : 2.5.1**
 **Documentation mise à jour : 25 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
@@ -910,7 +910,17 @@ La version 2.5.0 renforce la sécurité locale de WOPR, stabilise son fonctionne
 - le chevauchement entre **Recherche** et **Suivi** est corrigé indépendamment de la résolution brute ;
 - les ressources publiques restent dans `public/static/` et les ressources propres à l’installation dans `private/assets/`.
 
-## 28. Crédit
+## 28. Nouveautés principales de la release 2.5.1
+
+La version 2.5.1 est une release de maintenance qui finalise l'alignement documentaire de la série 2.5.x après la publication du tag `v2.5.0`.
+
+- version publique et documentation alignées sur **2.5.1** ;
+- date de documentation fixée au **25 septembre 2026** ;
+- manuel Markdown, documentation HTML, page de présentation et PDF synchronisés ;
+- historique 2.5.0 conservé dans le changelog ;
+- fonctionnement SQLCipher, launcher et interface 8-BIT de la série 2.5.x conservé.
+
+## 29. Crédit
 
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 
