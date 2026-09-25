@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WOPR - Documentation 2.4.0</title>
-<meta name="description" content="Manuel complet WOPR 2.4.0 : installation, fonctionnement, modules, GPLv3, support et documentation.">
+<title>WOPR - Documentation 2.5.0</title>
+<meta name="description" content="Manuel complet WOPR 2.5.0 : installation, fonctionnement, modules, sécurité SQLCipher, GPLv3, support et documentation.">
 <style>
 :root{--bg:#f4f7fa;--ink:#172532;--blue:#2187d5;--line:#d7e1e9;--muted:#617282}
 *{box-sizing:border-box}
@@ -29,7 +29,7 @@ footer{padding:0 20px 32px;text-align:center;color:var(--muted)}
 <main><pre># WOPR - Manuel utilisateur
 
 **Version documentée : 2.5.0**
-**Documentation mise à jour : 16 septembre 2026**
+**Documentation mise à jour : 25 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -927,11 +927,27 @@ La version 2.4.0 est la release stable qui ajoute un affichage client sûr et am
 - la préparation SumUp reprend le montant exact de la facture et génère une remarque copiable ;
 - les contrôles CA, la navigation et les barres de défilement ont été stabilisés.
 
-## 28. Crédit
+## 28. Nouveautés principales de la release 2.5.0
+
+La version 2.5.0 renforce principalement la sécurité locale, la compatibilité Linux / Windows et la stabilité de l’interface.
+
+- la base principale `private/data/wopr.db` est désormais chiffrée avec SQLCipher ;
+- la clé SQLCipher est aléatoire et distincte du PIN administrateur ;
+- Linux et Windows utilisent la même base de code avec une dépendance SQLCipher adaptée à chaque plateforme ;
+- le crash natif Windows lié à `PRAGMA cipher_memory_security = ON` est corrigé ;
+- le PIN SQLCipher est conservé uniquement en mémoire vive pendant la session du launcher ;
+- une session normale du launcher évite une seconde saisie du PIN à l’arrêt ;
+- les sauvegardes externes sont adaptées à la base chiffrée ;
+- la rétention Proton Drive et Freebox est fixée à 15 jours ;
+- la topbar du thème 8-BIT est stabilisée sur les écrans haute résolution et avec mise à l’échelle ;
+- le chevauchement entre Recherche et Suivi est corrigé indépendamment de la résolution brute ;
+- les ressources publiques restent dans `public/static/` et les ressources propres à l’installation dans `private/assets/`.
+
+## 29. Crédit
 
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 
 WOPR est développé comme un outil métier de terrain, avec une priorité donnée à la simplicité d’utilisation, à la portabilité, à la conservation locale des données sensibles et à la réduction des doubles saisies.
 </pre></main>
-<footer>WOPR - Documentation 2.4.0</footer>
+<footer>WOPR - Documentation 2.5.0</footer>
 </body></html>

@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
 **Version documentée : 2.5.0**
-**Documentation mise à jour : 16 septembre 2026**
+**Documentation mise à jour : 25 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -613,31 +613,37 @@ Le PIN protège l’accès atelier.
 
 Il est stocké sous forme de hash.
 
-### 17.2 Clé maître
+### 17.2 Base SQLCipher
+
+La base principale `private/data/wopr.db` est chiffrée avec SQLCipher. La clé de chiffrement de la base est aléatoire et distincte du PIN administrateur.
+
+Le launcher demande le PIN lorsque le déverrouillage de la base est nécessaire. Ce PIN n’est pas écrit sur disque : il peut être conservé uniquement en mémoire vive pendant la session du launcher afin d’être réutilisé lors de l’arrêt et de la sauvegarde.
+
+### 17.3 Clé maître
 
 Les secrets locaux peuvent être chiffrés.
 
 La clé maître doit être conservée avec soin. Une clé maître perdue ne peut pas être reconstruite à partir de la documentation.
 
-### 17.3 Mots de passe appareil
+### 17.4 Mots de passe appareil
 
 Lorsqu’un mot de passe système est enregistré dans un dossier, il n’est pas affiché directement dans le HTML.
 
 Sa consultation utilise une action protégée.
 
-### 17.4 SMTP
+### 17.5 SMTP
 
 Les réglages SMTP et jetons restent locaux.
 
 La signature e-mail commune est également stockée dans `private/` afin de ne pas intégrer l’identité ou les visuels de l’entreprise dans le code public.
 
-### 17.5 Logo facture
+### 17.6 Logo facture
 
 Le logo choisi par l’utilisateur est enregistré dans `private/assets/`.
 
 Il n’est pas inclus dans le coeur public du projet.
 
-### 17.6 Diagnostic de portabilité
+### 17.7 Diagnostic de portabilité
 
 Le diagnostic vérifie notamment :
 
@@ -888,16 +894,21 @@ La version 2.3.287 fiabilise les encaissements, le rapprochement SumUp et la pr�
 - les factures orphelines, archives, lignes de facture et rattachements SumUp sont contrôlables ;
 - les bandeaux de confirmation se ferment automatiquement après quelques secondes.
 
-## 27. Nouveautés principales de la release 2.4.0
+## 27. Nouveautés principales de la release 2.5.0
 
-La version 2.4.0 est la release stable qui ajoute un affichage client sûr et améliore la préparation des encaissements.
+La version 2.5.0 renforce la sécurité locale de WOPR, stabilise son fonctionnement Linux / Windows et corrige plusieurs défauts d’interface du thème 8-BIT.
 
-- le **Mode Client** masque les noms, problèmes, factures et montants sur le tableau de bord Atelier ;
-- la bascule **Mode Client / Mode Admin** et **Nouvelle réparation** conservent le rendu 8-BIT ;
-- le logo Foul-Fix est affiché dans le bandeau et centré selon le thème actif ;
-- l’entreprise du client apparaît dans la liste des factures lorsqu’elle est renseignée ;
-- la préparation SumUp reprend le montant exact de la facture et génère une remarque copiable ;
-- les contrôles CA, la navigation et les barres de défilement ont été stabilisés.
+- la base principale `private/data/wopr.db` est chiffrée avec **SQLCipher** ;
+- la clé SQLCipher est aléatoire et distincte du PIN administrateur ;
+- Linux et Windows utilisent la même base de code avec des dépendances SQLCipher adaptées à chaque plateforme ;
+- le crash natif Windows lié à `PRAGMA cipher_memory_security = ON` est contourné ;
+- le PIN SQLCipher est conservé uniquement en mémoire vive pendant la session du launcher ;
+- le PIN peut être réutilisé à l’arrêt pour la sauvegarde sans seconde saisie dans une session normale ;
+- les sauvegardes externes sont adaptées à la base chiffrée ;
+- la rétention Proton Drive et Freebox est fixée à 15 jours ;
+- la topbar du thème 8-BIT est stabilisée sur les affichages haute résolution et avec mise à l’échelle ;
+- le chevauchement entre **Recherche** et **Suivi** est corrigé indépendamment de la résolution brute ;
+- les ressources publiques restent dans `public/static/` et les ressources propres à l’installation dans `private/assets/`.
 
 ## 28. Crédit
 
