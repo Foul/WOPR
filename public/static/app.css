@@ -5225,3 +5225,114 @@ html,body{overflow-x:hidden!important}
 .topbar{max-width:100vw!important;overflow:hidden!important}
 .topbar .topnav{min-width:0!important;max-width:100%!important;overflow-x:hidden!important;overflow-y:visible!important;scrollbar-width:none!important}
 .topbar .topnav::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+
+
+/* v2.4.8 — centrage des tableaux Points à vérifier du contrôle CA */
+.ca-audit-check-table {
+  table-layout: fixed;
+}
+.ca-audit-check-table th,
+.ca-audit-check-table td,
+.ca-audit-check-table td:nth-last-child(-n+4) {
+  width: 33.333%;
+  text-align: center !important;
+  vertical-align: middle;
+}
+.ca-audit-check-table code {
+  display: inline-block;
+}
+
+
+/* ===== WOPR 2.4.8 — correctif 8-BIT recherche / Suivi =====
+   En responsive, la recherche gardait min-width:250px et débordait
+   de sa cellule de grille, ce qui chevauchait le bouton Suivi. */
+@media (max-width: 1600px){
+  body.theme-8bit .topnav .topbar-search{
+    width:100%!important;
+    min-width:0!important;
+    max-width:none!important;
+    box-sizing:border-box!important;
+  }
+
+  body.theme-8bit .topnav .topbar-search input{
+    min-width:0!important;
+  }
+}
+
+
+/* ===== WOPR 2.4.8 — correctif 8-BIT recherche / Suivi v2 =====
+   Le chevauchement apparaît aussi entre 1600 et 1900 px.
+   On passe donc la navigation 8-bit en vraie grille dès 1900 px
+   et on force la recherche à respecter strictement sa cellule. */
+@media (max-width: 1900px){
+  body.theme-8bit .topnav{
+    display:grid!important;
+    grid-template-columns:repeat(auto-fit,minmax(118px,1fr))!important;
+    align-items:stretch!important;
+  }
+
+  body.theme-8bit .topnav .topbar-search{
+    width:100%!important;
+    min-width:0!important;
+    max-width:none!important;
+    box-sizing:border-box!important;
+    overflow:hidden!important;
+  }
+
+  body.theme-8bit .topnav .topbar-search input{
+    min-width:0!important;
+    width:100%!important;
+  }
+}
+
+
+/* ===== WOPR 2.4.8 — topbar 8-BIT indépendante de la résolution =====
+   La navigation 8-bit utilise toujours une grille : aucun élément ne peut
+   empiéter sur son voisin, quelle que soit la résolution ou l'échelle DPI. */
+body.theme-8bit .topbar .topnav{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(118px,1fr))!important;
+  align-items:stretch!important;
+  width:100%!important;
+  min-width:0!important;
+  max-width:100%!important;
+  gap:8px!important;
+  overflow:visible!important;
+}
+
+/* La recherche occupe deux cellules quand il y a la place, mais reste
+   strictement contenue dans la grille. */
+body.theme-8bit .topbar .topnav .topbar-search{
+  grid-column:span 2;
+  width:100%!important;
+  min-width:0!important;
+  max-width:none!important;
+  box-sizing:border-box!important;
+  overflow:hidden!important;
+}
+
+body.theme-8bit .topbar .topnav .topbar-search input{
+  width:100%!important;
+  min-width:0!important;
+  max-width:100%!important;
+  box-sizing:border-box!important;
+}
+
+/* Tous les boutons restent eux aussi dans leur cellule. */
+body.theme-8bit .topbar .topnav .nav-btn,
+body.theme-8bit .topbar .topnav .navbtn,
+body.theme-8bit .topbar .topnav .nav-lock-form,
+body.theme-8bit .topbar .topnav .lock-btn{
+  width:100%!important;
+  min-width:0!important;
+  max-width:none!important;
+  box-sizing:border-box!important;
+  margin:0!important;
+}
+
+/* Sur une fenêtre très étroite, la recherche revient sur une seule cellule. */
+@media (max-width:700px){
+  body.theme-8bit .topbar .topnav .topbar-search{
+    grid-column:span 1;
+  }
+}

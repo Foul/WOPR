@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Supprimer le dossier {{ r['dossier_no'] }} - WOPR{% endblock %}
+{% block body %}
+<div class="sheet-banner narrow">
+  <div class="banner-title">Supprimer ce dossier</div>
+</div>
+
+<div class="sheet-note">
+  Cette action supprime <strong>uniquement le dossier {{ r['dossier_no'] }}</strong>.
+  Le client et ses autres réparations ne seront pas supprimés.
+</div>
+
+<div class="section-title">Dossier concerné</div>
+<table class="sheet-table compact">
+  <tbody>
+    <tr><th>ID suivi</th><td>{{ r['id'] }}</td></tr>
+    <tr><th>Dossier</th><td>{{ r['dossier_no'] }}</td></tr>
+    <tr><th>Client</th><td>{{ r['client_company'] or r['client_name'] }}</td></tr>
+    <tr><th>Date</th><td>{{ r['received_date'] }}</td></tr>
+    <tr><th>Panne</th><td>{{ r['problem'] or '—' }}</td></tr>
+    <tr><th>Facture</th><td>{{ r['invoice_no'] or '—' }}</td></tr>
+    <tr><th>Total</th><td>{{ '%.2f'|format((r['service_amount'] or 0) + (r['goods_amount'] or 0))|replace('.', ',') }} €</td></tr>
+  </tbody>
+</table>
+
+<div class="section-title">Ce qui sera supprimé de la base</div>
+<div class="sheet-note">
+  Le dossier lui-même, {{ counts.invoice_lines }} ligne(s) de facture,
+  {{ counts.invoice_payments }} règlement(s) et
+  {{ counts.status_history }} entrée(s) d'historique de statut.
+</div>
+
+<div class="sheet-note">
+  <strong>Conservé par sécurité :</strong> le client, tous ses autres dossiers,
+  ainsi que les PDF, signatures et autres fichiers présents sur disque.
+  Une sauvegarde WOPR est créée automatiquement juste avant la suppression.
+</div>
+
+<form method="post" action="{{ url_for('repair_delete', rid=r['id']) }}" class="sheet-form"
+      onsubmit="return confirm('Supprimer définitivement uniquement ce dossier ?');">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <label>
+    Tape <strong>SUPPRIMER</strong> pour confirmer
+    <input name="confirm_delete" autocomplete="off" required>
+  </label>
+  <div class="footer-actions">
+    <a class="button wopr-action-neutral" href="{{ url_for('repair_detail', rid=r['id']) }}">Annuler</a>
+    <button class="button danger-btn wopr-action-delete" type="submit">🗑 SUPPRIMER DÉFINITIVEMENT CE DOSSIER</button>
+  </div>
+</form>
+{% endblock %}

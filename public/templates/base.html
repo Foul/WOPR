@@ -48,6 +48,55 @@
   cursor:pointer;
   font-weight:900;
 }
+
+/* WOPR 2.4.8 — garde-fou navigation 8-BIT.
+   Les feuilles 8-bit chargées après app.css ne doivent jamais masquer le menu. */
+body.theme-8bit header.topbar{
+  height:auto!important;
+  max-height:none!important;
+  overflow:visible!important;
+}
+body.theme-8bit header.topbar nav.topnav{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(110px,1fr))!important;
+  width:100%!important;
+  height:auto!important;
+  max-height:none!important;
+  overflow:visible!important;
+  visibility:visible!important;
+  opacity:1!important;
+  position:relative!important;
+  z-index:50!important;
+}
+body.theme-8bit header.topbar nav.topnav > .nav-btn,
+body.theme-8bit header.topbar nav.topnav > .topbar-search,
+body.theme-8bit header.topbar nav.topnav > .nav-lock-form{
+  visibility:visible!important;
+  opacity:1!important;
+  position:relative!important;
+  z-index:51!important;
+}
+body.theme-8bit header.topbar nav.topnav > .nav-btn{
+  display:inline-flex!important;
+}
+body.theme-8bit header.topbar nav.topnav > .topbar-search{
+  display:inline-flex!important;
+}
+body.theme-8bit header.topbar nav.topnav > .nav-lock-form{
+  display:block!important;
+}
+body.theme-8bit header.topbar nav.topnav > .nav-lock-form > .lock-btn{
+  display:inline-flex!important;
+  width:100%!important;
+  visibility:visible!important;
+  opacity:1!important;
+}
+body.theme-8bit header.topbar nav.topnav .nav-btn > *,
+body.theme-8bit header.topbar nav.topnav .lock-btn > *{
+  visibility:visible!important;
+  opacity:1!important;
+}
+
 </style>
 </head>
 <body>

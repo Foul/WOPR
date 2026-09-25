@@ -2655,7 +2655,11 @@ def _unwrap_database_key(pin=None, settings=None):
 def _sqlcipher_apply_key(con, key):
     # Clé brute hexadécimale : pas de transformation supplémentaire par SQLCipher.
     con.execute(f"PRAGMA key = \"x'{bytes(key).hex()}'\"")
-    con.execute("PRAGMA cipher_memory_security = ON")
+    # Sous Windows, sqlcipher3 0.6.2 / Python 3.14 peut provoquer un
+    # stack overflow natif dès la première lecture si ce PRAGMA est activé.
+    # On le conserve sur Linux, où il fonctionne normalement.
+    if os.name != "nt":
+        con.execute("PRAGMA cipher_memory_security = ON")
 
 
 def _open_database(path, row_factory=False, force_encrypted=None, key=None):
@@ -12007,6 +12011,104 @@ def repair_detail(rid):
     return render_template("repair_detail.html", r=r, sign_url=sign_url)
 
 
+@app.route("/repair/<int:rid>/delete", methods=["GET", "POST"])
+def repair_delete(rid):
+    """Supprime uniquement un dossier/réparation, jamais le client.
+
+    Sécurité :
+    - sauvegarde forcée avant suppression ;
+    - suppression strictement par repair_id ;
+    - aucun fichier PDF/signature n'est effacé automatiquement ;
+    - le client et ses autres dossiers restent intacts.
+    """
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               c.name AS client_name,
+               c.first_name AS client_first_name,
+               c.last_name AS client_last_name,
+               c.company AS client_company
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+
+    counts = {
+        "invoice_lines": int(con.execute(
+            "SELECT COUNT(*) FROM invoice_lines WHERE repair_id=?", (rid,)
+        ).fetchone()[0] or 0),
+        "invoice_payments": int(con.execute(
+            "SELECT COUNT(*) FROM invoice_payments WHERE repair_id=?", (rid,)
+        ).fetchone()[0] or 0),
+        "status_history": int(con.execute(
+            "SELECT COUNT(*) FROM repair_status_history WHERE repair_id=?", (rid,)
+        ).fetchone()[0] or 0),
+    }
+
+    if request.method == "POST":
+        if request.form.get("confirm_delete", "").strip() != "SUPPRIMER":
+            con.close()
+            flash("Suppression annulée : tape SUPPRIMER pour confirmer.")
+            return redirect(url_for("repair_delete", rid=rid))
+
+        # Filet de sécurité avant toute suppression.
+        backup = backup_database(
+            force=True,
+            tag=f"avant_suppression_dossier_{rid}",
+            only_if_changed=False
+        )
+
+        dossier_no = str(r["dossier_no"] or "")
+        invoice_no = str(r["invoice_no"] or "")
+        client_id = int(r["client_id"])
+        followup_year = int(r["followup_year"] or 0) or None
+
+        try:
+            con.execute("BEGIN")
+            con.execute("DELETE FROM invoice_payments WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM repair_status_history WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM repairs WHERE id=?", (rid,))
+            con.commit()
+        except Exception:
+            con.rollback()
+            con.close()
+            raise
+
+        con.close()
+
+        audit_event(
+            "REPAIR_DELETE",
+            (
+                f"repair_id={rid}; dossier={dossier_no}; invoice={invoice_no}; "
+                f"client_id={client_id}; invoice_lines={counts['invoice_lines']}; "
+                f"payments={counts['invoice_payments']}; "
+                f"status_history={counts['status_history']}; "
+                f"backup={backup.name if backup else 'none'}"
+            ),
+            request.remote_addr
+        )
+
+        flash(
+            f"Dossier {dossier_no} supprimé. "
+            "Le client, ses autres dossiers et les fichiers PDF/signatures ont été conservés."
+        )
+        if followup_year:
+            return redirect(url_for("index", year=followup_year))
+        return redirect(url_for("index"))
+
+    con.close()
+    return render_template(
+        "repair_delete.html",
+        r=dict(r),
+        counts=counts,
+    )
+
+
 @app.route("/repair/<int:rid>/signature.png")
 def repair_signature(rid):
     """Sert la signature client uniquement à l'atelier authentifié."""
@@ -13057,17 +13159,39 @@ def repair_close(rid):
                 close_payment_method = deposit_method or close_payment_mode
                 close_payment_detail = deposit_detail or ""
             else:
-                close_payment_mode, close_payment_method, close_payment_detail, pay_error = payment_data_from_form(
-                    final_amount, r["payment_mode"], r["payment_method"], r["payment_detail"]
+                # Modification d'une facture déjà réglée : si les montants n'ont
+                # pas changé et qu'aucun nouveau mode n'est saisi, conserver les
+                # informations de règlement existantes. Une simple correction de
+                # désignation ne doit pas imposer de ressaisir un ancien paiement.
+                previous_total = round(
+                    float(r["service_amount"] or 0) + float(r["goods_amount"] or 0),
+                    2,
                 )
-                if pay_error:
-                    con.close()
-                    flash(pay_error)
-                    return redirect(url_for("repair_close", rid=rid))
-                if not close_payment_mode:
-                    con.close()
-                    flash("Choisis un mode de règlement avant d'enregistrer le solde.")
-                    return redirect(url_for("repair_close", rid=rid))
+                payment_mode_submitted = bool(str(request.form.get("payment_mode", "") or "").strip())
+                preserve_existing_payment = (
+                    bool(r["invoice_no"])
+                    and bool(int(r["paid"] or 0))
+                    and abs(previous_total - invoice_total) <= 0.009
+                    and not payment_mode_submitted
+                    and payment_add_amount <= 0
+                )
+
+                if preserve_existing_payment:
+                    close_payment_mode = r["payment_mode"] or ""
+                    close_payment_method = r["payment_method"] or ""
+                    close_payment_detail = r["payment_detail"] or ""
+                else:
+                    close_payment_mode, close_payment_method, close_payment_detail, pay_error = payment_data_from_form(
+                        final_amount, r["payment_mode"], r["payment_method"], r["payment_detail"]
+                    )
+                    if pay_error:
+                        con.close()
+                        flash(pay_error)
+                        return redirect(url_for("repair_close", rid=rid))
+                    if not close_payment_mode:
+                        con.close()
+                        flash("Choisis un mode de règlement avant d'enregistrer le solde.")
+                        return redirect(url_for("repair_close", rid=rid))
         else:
             close_payment_mode = deposit_mode or normalize_payment_mode(request.form.get("payment_mode", ""))
             close_payment_method = deposit_method or close_payment_mode
@@ -16526,6 +16650,10 @@ def invoice_archived_pdf(rid):
         JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
     """, (rid,)).fetchone()
+    has_invoice_lines = bool(con.execute(
+        "SELECT 1 FROM invoice_lines WHERE repair_id=? LIMIT 1",
+        (rid,)
+    ).fetchone())
     con.close()
 
     if not r:
@@ -16536,6 +16664,20 @@ def invoice_archived_pdf(rid):
     invoice_no = str(r["invoice_no"]).strip()
     client_name = str(r["client_name"] or "").strip()
     suffix = pdf_language_suffix(lang)
+
+    # Une facture WOPR éditable doit toujours être réimprimée depuis les
+    # données actuelles de la base. Sinon cette route ressortirait l'ancien
+    # PDF archivé après une modification de désignation, quantité ou prix.
+    #
+    # Exception : une vraie facture historique importée, jamais reconstruite
+    # dans l'éditeur, conserve son PDF original comme référence.
+    if has_invoice_lines or not r["legacy_imported"]:
+        return redirect(url_for(
+            "invoice_pdf",
+            rid=rid,
+            lang=lang,
+            _wopr_download="1" if force_download else None,
+        ))
 
     # 1) Nom WOPR actuel exact, dans le dossier de la vraie date de facture.
     invoice_date_value = invoice_no_date(invoice_no)

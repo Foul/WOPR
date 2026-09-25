@@ -31,16 +31,10 @@ SERVER_OUT=DATA_DIR/"wopr-server.log"
 SERVER_ERR=DATA_DIR/"wopr-server-error.log"
 ADMIN_PIN_FILE=DATA_DIR/"admin_pin.json"
 SQLCIPHER_SETTINGS_FILE=DATA_DIR/"sqlcipher.json"
-def _find_existing_db():
-    candidates = [
-        p for p in DATA_DIR.glob("*.db")
-        if p.is_file() and not p.name.startswith(".")
-    ]
-    if not candidates:
-        return DATA_DIR/"wopr.db"
-    return max(candidates, key=lambda p: p.stat().st_size)
 
-DB_FILE=_find_existing_db()
+# La base WOPR officielle est toujours private/data/wopr.db.
+# Ne jamais sélectionner automatiquement une copie/test selon sa taille.
+DB_FILE=DATA_DIR/"wopr.db"
 BACKUP_DIR=DATA_DIR/"backups"
 VENV_DIR=PRIVATE_DIR/(".venv-win" if IS_WINDOWS else ".venv")
 PY=VENV_DIR/("Scripts/python.exe" if IS_WINDOWS else "bin/python")
@@ -348,9 +342,21 @@ def stop_server(status, db_pin=None):
     return backup
 
 def db_desc():
-    if not DB_FILE.exists(): return "Base : introuvable"
+    if not DB_FILE.is_file():
+        return "Base : introuvable"
+
     s=DB_FILE.stat()
-    return f"Base : {datetime.fromtimestamp(s.st_mtime):%d/%m/%Y %H:%M:%S}  •  {s.st_size/1048576:.2f} Mo"
+    suffix=""
+    try:
+        if SQLCIPHER_SETTINGS_FILE.is_file():
+            suffix="  •  🔒 SQLCipher"
+    except OSError:
+        pass
+
+    return (
+        f"Base : {datetime.fromtimestamp(s.st_mtime):%d/%m/%Y %H:%M:%S}"
+        f"  •  {s.st_size/1048576:.2f} Mo{suffix}"
+    )
 
 class Launcher(tk.Tk):
     BG = "#070B10"
@@ -371,6 +377,10 @@ class Launcher(tk.Tk):
         self.geometry("640x390")
         self.resizable(False, False)
         self.configure(bg=self.BG)
+
+        # PIN SQLCipher conservé uniquement en RAM pendant la vie du launcher.
+        # Il n'est jamais écrit sur disque et est oublié à la fermeture du launcher.
+        self._database_pin = None
 
         # Icône de fenêtre : garde l'identité WOPR sous Windows et Linux.
         # Le binaire Windows doit toujours être compilé avec --icon WOPR.ico
@@ -588,6 +598,7 @@ class Launcher(tk.Tk):
         def job():
             try:
                 start_server(self.set_status, db_pin)
+                self._database_pin = db_pin
                 webbrowser.open(APP_URL)
             except Exception as e:
                 self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
@@ -597,9 +608,14 @@ class Launcher(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def stop_wopr(self):
-        db_pin=self.ask_database_pin("sauvegarder et arrêter")
-        if pin_required_for_database() and db_pin is None:
-            return
+        # Réutilise le PIN saisi au démarrage. Aucun second dialogue si le
+        # serveur a été démarré depuis cette instance du launcher.
+        db_pin = self._database_pin
+        if pin_required_for_database() and not db_pin:
+            # Cas exceptionnel : launcher rouvert alors que WOPR tournait déjà.
+            db_pin=self.ask_database_pin("sauvegarder et arrêter")
+            if db_pin is None:
+                return
 
         self.status.set("[~] SHUTDOWN SEQUENCE…")
         self.status_label.config(fg=self.AMBER)
@@ -607,6 +623,7 @@ class Launcher(tk.Tk):
         def job():
             try:
                 stop_server(self.set_status, db_pin)
+                self._database_pin = None
             except Exception as e:
                 self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
             finally:

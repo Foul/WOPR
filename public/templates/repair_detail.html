@@ -181,6 +181,7 @@
 
 <div class="footer-actions">
   <a class="button edit-followup-btn wopr-action-edit" href="{{ url_for('repair_edit', rid=r['id']) }}">Modifier le suivi</a>
+  <a class="button danger-btn wopr-action-delete" href="{{ url_for('repair_delete', rid=r['id']) }}">🗑 Supprimer ce dossier</a>
   {% if r['status'] in ['Terminé', 'Restitué'] and not (r['tracking_completion_notification_sent'] or r['tracking_completion_sms_sent']) %}
     <form method="post" action="{{ url_for('repair_notify_completion', rid=r['id']) }}" class="inline-form" onsubmit="return confirm('Envoyer la confirmation de fin au client ?');">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">

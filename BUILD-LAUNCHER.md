@@ -31,56 +31,104 @@ Test :
 ./WOPR
 ```
 
-## Compilation Windows
-
-La version Windows est compilée sous Windows, par exemple dans une VM Windows 11.
-
-Depuis la racine du projet, en une seule ligne :
-
-```powershell
-py -m PyInstaller --onefile --windowed --name WOPR --icon public\static\WOPR.ico public\launcher\wopr_launcher.py
-```
-
-Puis remplacer le binaire officiel à la racine :
-
-```powershell
-copy /Y dist\WOPR.exe WOPR.exe
-```
-
-Test :
-
-```powershell
-WOPR.exe
-```
-
-## Nettoyage PyInstaller
-
-Linux :
+Nettoyage après compilation :
 
 ```bash
 rm -rf build dist WOPR.spec
 ```
 
-Windows :
+Le binaire `WOPR` copié à la racine est conservé.
+
+## Compilation Windows
+
+La version Windows est compilée directement avec l'environnement Python Windows de WOPR :
+
+```text
+private\.venv-win
+```
+
+Depuis la racine du projet :
 
 ```powershell
-rmdir /S /Q build & del /Q WOPR.spec & rmdir /S /Q dist
+.\private\.venv-win\Scripts\python.exe -m PyInstaller --onefile --windowed --name WOPR --icon public\static\WOPR.ico public\launcher\wopr_launcher.py
+```
+
+Puis remplacer le binaire officiel à la racine :
+
+```powershell
+Copy-Item .\dist\WOPR.exe .\WOPR.exe -Force
+```
+
+Test :
+
+```powershell
+.\WOPR.exe
+```
+
+### Nettoyage après compilation Windows
+
+Une fois `dist\WOPR.exe` copié en `WOPR.exe` à la racine, les fichiers temporaires générés par PyInstaller peuvent être supprimés :
+
+```powershell
+Remove-Item .\build,.\dist -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item .\WOPR.spec -Force -ErrorAction SilentlyContinue
+```
+
+À conserver :
+
+```text
+WOPR.exe
+private\.venv-win
+```
+
+`private\.venv-win` reste nécessaire au fonctionnement de WOPR sous Windows et ne doit pas être supprimé.
+
+## SQLCipher
+
+WOPR utilise la même base SQLCipher sous Linux et Windows.
+
+Les dépendances sont sélectionnées automatiquement par `public/requirements.txt` :
+
+```text
+sqlcipher3-binary==0.6.0; platform_system == "Linux"
+sqlcipher3==0.6.2; platform_system == "Windows"
+```
+
+Le code Python conserve le même import sur les deux plateformes :
+
+```python
+from sqlcipher3 import dbapi2 as sqlcipher
+```
+
+## PyInstaller
+
+PyInstaller est nécessaire uniquement pour reconstruire les launchers compilés.
+
+Sous Windows, il peut être installé automatiquement via `public/requirements.txt` si la dépendance suivante y est présente :
+
+```text
+pyinstaller>=6.0; platform_system == "Windows"
 ```
 
 ## Remarque
 
-Les anciens scripts de build et les anciens chemins de sortie sous
-`public/launcher/dist/` ne sont plus utilisés.
+Les anciens scripts de build et les anciens chemins de sortie sous :
 
-Le fichier de référence à maintenir est :
+```text
+public/launcher/dist/
+```
+
+ne sont plus utilisés.
+
+Le fichier source de référence à maintenir est :
 
 ```text
 public/launcher/wopr_launcher.py
 ```
 
-Après toute modification du launcher, recompiler les deux binaires officiels :
+Après toute modification du launcher, recompiler le binaire correspondant :
 
 ```text
-WOPR
-WOPR.exe
+WOPR      -> Linux
+WOPR.exe  -> Windows
 ```
