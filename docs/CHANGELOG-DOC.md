@@ -1,5 +1,20 @@
 # Changelog de la documentation
 
+## 2.5.0 - 25 septembre 2026 - SQLCipher, launcher et stabilisation 8-BIT
+
+- chiffrement de la base principale `private/data/wopr.db` avec SQLCipher ;
+- clé SQLCipher aléatoire distincte du PIN administrateur ;
+- prise en charge SQLCipher Linux et Windows avec dépendances spécifiques à chaque plateforme ;
+- correction du crash natif Windows lié à `PRAGMA cipher_memory_security = ON` ;
+- conservation du PIN SQLCipher uniquement en RAM par le launcher pendant sa session ;
+- réutilisation du PIN à l'arrêt afin d'éviter une seconde saisie dans une session normale ;
+- sauvegardes externes adaptées à la base chiffrée ;
+- rétention Proton Drive et Freebox portée à 15 jours avec suppression des `.sha256` associés ;
+- stabilisation responsive de la topbar 8-BIT ;
+- correction du chevauchement entre Recherche et Suivi, indépendamment de la résolution et de l'échelle DPI ;
+- clarification de l'usage de `public/static/` et `private/assets/` ;
+- documentation et notes de release alignées sur **2.5.0**.
+
 ## 2.4.8 - 18 septembre 2026 - nettoyage de l'écran des règlements
 
 - suppression du doublon visuel « Acompte reçu » ;

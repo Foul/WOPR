@@ -193,7 +193,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.4.8"
+APP_VERSION = "2.5.0"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -2655,11 +2655,7 @@ def _unwrap_database_key(pin=None, settings=None):
 def _sqlcipher_apply_key(con, key):
     # Clé brute hexadécimale : pas de transformation supplémentaire par SQLCipher.
     con.execute(f"PRAGMA key = \"x'{bytes(key).hex()}'\"")
-    # Sous Windows, sqlcipher3 0.6.2 / Python 3.14 peut provoquer un
-    # stack overflow natif dès la première lecture si ce PRAGMA est activé.
-    # On le conserve sur Linux, où il fonctionne normalement.
-    if os.name != "nt":
-        con.execute("PRAGMA cipher_memory_security = ON")
+    #con.execute("PRAGMA cipher_memory_security = ON")
 
 
 def _open_database(path, row_factory=False, force_encrypted=None, key=None):
