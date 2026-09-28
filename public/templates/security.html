@@ -104,6 +104,11 @@
       </li>
       {% endfor %}
     </ul>
+    <form method="post" id="kdeconnect-test-form" style="margin-top:12px;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="kdeconnect_test">
+      <button class="primary" type="submit" id="kdeconnect-test-button">📱 Tester la connexion WOPR / Téléphone</button>
+    </form>
   </section>
   <section class="security-card">
     <h2>📧 Envoi des factures — Proton SMTP</h2>
@@ -242,6 +247,14 @@
   </section>
 </div>
 <script>
+document.getElementById('kdeconnect-test-form')?.addEventListener('submit', function () {
+  const button = document.getElementById('kdeconnect-test-button');
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = '⏳ Test WOPR / Téléphone…';
+  button.setAttribute('aria-busy', 'true');
+});
+
 document.getElementById('external-backup-test-form')?.addEventListener('submit', function () {
   const button = document.getElementById('external-backup-test-button');
   if (!button) return;
@@ -254,7 +267,7 @@ document.getElementById('external-backup-test-form')?.addEventListener('submit',
 // position de lecture pour que le bandeau de résultat n'expédie pas la page
 // en haut du tableau de sécurité.
 (function () {
-  const forms = document.querySelectorAll('#external-backup-test-form, #backup-now-form');
+  const forms = document.querySelectorAll('#kdeconnect-test-form, #external-backup-test-form, #backup-now-form');
   const key = 'wopr-backup-scroll-y';
   forms.forEach(function (form) {
     form.addEventListener('submit', function () {

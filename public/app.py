@@ -1392,13 +1392,88 @@ def smtp_send_message(msg):
             pass
 
 
+def kdeconnect_cli_path():
+    """Retourne le chemin de kdeconnect-cli sur Linux ou Windows.
+
+    Ordre de recherche sous Windows :
+    1. PATH ;
+    2. installation classique / Chocolatey dans Program Files ;
+    3. package Microsoft Store (AppX/MSIX), détecté dynamiquement.
+    """
+    cli = shutil.which("kdeconnect-cli") or shutil.which("kdeconnect-cli.exe")
+    if cli:
+        return cli
+
+    if os.name != "nt":
+        return None
+
+    candidates = []
+
+    program_files = os.environ.get("ProgramFiles")
+    if program_files:
+        candidates.append(Path(program_files) / "KDE Connect" / "bin" / "kdeconnect-cli.exe")
+
+    program_files_x86 = os.environ.get("ProgramFiles(x86)")
+    if program_files_x86:
+        candidates.append(Path(program_files_x86) / "KDE Connect" / "bin" / "kdeconnect-cli.exe")
+
+    # Repli explicite pour les installations standards 64 bits.
+    candidates.append(Path(r"C:\Program Files\KDE Connect\bin\kdeconnect-cli.exe"))
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            pass
+
+    # Microsoft Store / AppX / MSIX : ne jamais coder le dossier WindowsApps
+    # en dur, car le chemin contient la version du package et change lors
+    # des mises à jour. On demande directement son InstallLocation à Windows.
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if powershell:
+        commands = [
+            "Get-AppxPackage *KDEConnect* | Select-Object -First 1 -ExpandProperty InstallLocation",
+            "Get-AppxPackage *KDE*Connect* | Select-Object -First 1 -ExpandProperty InstallLocation",
+        ]
+        for command in commands:
+            try:
+                proc = subprocess.run(
+                    [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except Exception:
+                continue
+
+            install_location = (proc.stdout or "").strip().splitlines()
+            if not install_location:
+                continue
+
+            root = Path(install_location[0].strip())
+            store_candidates = [
+                root / "bin" / "kdeconnect-cli.exe",
+                root / "kdeconnect-cli.exe",
+            ]
+            for candidate in store_candidates:
+                try:
+                    if candidate.is_file():
+                        return str(candidate)
+                except OSError:
+                    pass
+
+    return None
+
+
 def send_tracking_sms(phone, message, device_id=""):
     """Envoie un SMS de suivi via KDE Connect sans lever d'erreur Flask."""
     normalized = normalize_sms_phone(phone)
     if not re.fullmatch(r"\+?[0-9]{6,15}", normalized):
         return False, "Numéro de téléphone invalide."
 
-    cli = shutil.which("kdeconnect-cli")
+    cli = kdeconnect_cli_path()
     if not cli:
         return False, "KDE Connect CLI introuvable."
 
@@ -3402,7 +3477,7 @@ def _portability_diagnostics_impl():
     )
 
     # Fonction utile mais non requise pour que WOPR soit portable.
-    kde_ok = shutil.which("kdeconnect-cli") is not None
+    kde_ok = kdeconnect_cli_path() is not None
     add(
         "SMS KDE Connect",
         kde_ok,
@@ -8207,7 +8282,7 @@ def security_gate():
     # même si l'atelier est authentifié, aucune donnée sensible de l'application
     # n'est accessible pendant une prise en charge devant le client.
     if session.get("client_mode"):
-        allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search", "atelier_dashboard", "atelier_client_mode", "atelier_client_mode_off", "security_invoice_logo_preview"}
+        allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search", "atelier_dashboard", "atelier_client_mode", "atelier_client_mode_off", "security_invoice_logo_preview", "wopr_end_sequence_audio"}
         current_rid = session.get("client_mode_rid")
 
         if endpoint in {"repair_detail", "repair_signature", "qr_png", "intake_pdf"}:
@@ -8452,6 +8527,37 @@ def security_page():
             write_sumup_settings(current)
             audit_event("SUMUP_SETTINGS", f"enabled={int(current['enabled'])}; merchant={current['merchant_code']}", request.remote_addr)
             flash("Configuration SumUp enregistrée localement.")
+        elif action == "kdeconnect_test":
+            cli = kdeconnect_cli_path()
+            if not cli:
+                audit_event("KDECONNECT_TEST_ERROR", "CLI introuvable", request.remote_addr)
+                flash("❌ KDE Connect introuvable : kdeconnect-cli n'a pas été détecté sur cette machine.")
+            else:
+                devices = kdeconnect_available_devices()
+                if not devices:
+                    audit_event("KDECONNECT_TEST_ERROR", "aucun appareil joignable", request.remote_addr)
+                    flash(
+                        "⚠️ KDE Connect détecté, mais aucun téléphone appairé et joignable n'a été trouvé. "
+                        "Vérifie que KDE Connect est ouvert et que le téléphone est sur le même réseau."
+                    )
+                elif len(devices) == 1:
+                    dev = devices[0]
+                    audit_event(
+                        "KDECONNECT_TEST",
+                        f"OK device={dev.get('id','')} name={dev.get('name','')}",
+                        request.remote_addr,
+                    )
+                    flash(
+                        f"✅ Connexion WOPR / Téléphone OK — {dev.get('name') or 'Téléphone'} "
+                        f"({dev.get('id')})."
+                    )
+                else:
+                    names = ", ".join((d.get("name") or d.get("id") or "Appareil") for d in devices)
+                    audit_event("KDECONNECT_TEST", f"OK devices={len(devices)}", request.remote_addr)
+                    flash(
+                        f"✅ KDE Connect fonctionne — {len(devices)} appareils joignables : {names}. "
+                        "WOPR demandera lequel utiliser si nécessaire."
+                    )
         elif action == "smtp_save":
             current = read_smtp_settings()
             token = request.form.get("smtp_token", "").strip()
@@ -11705,7 +11811,7 @@ def repair_new():
 
 def kdeconnect_available_devices():
     """Retourne les appareils KDE Connect appairés ET joignables."""
-    cli = shutil.which("kdeconnect-cli")
+    cli = kdeconnect_cli_path()
     if not cli:
         return []
     try:
@@ -11760,7 +11866,7 @@ def kdeconnect_send_sms():
         flash("Le message est vide.")
         return redirect(return_url or url_for("contacts_page"))
 
-    cli = shutil.which("kdeconnect-cli")
+    cli = kdeconnect_cli_path()
     if not cli:
         flash("KDE Connect CLI introuvable : installe/active kdeconnect-cli.")
         return redirect(return_url or url_for("contacts_page"))
