@@ -48,55 +48,6 @@
   cursor:pointer;
   font-weight:900;
 }
-
-/* WOPR 2.4.8 — garde-fou navigation 8-BIT.
-   Les feuilles 8-bit chargées après app.css ne doivent jamais masquer le menu. */
-body.theme-8bit header.topbar{
-  height:auto!important;
-  max-height:none!important;
-  overflow:visible!important;
-}
-body.theme-8bit header.topbar nav.topnav{
-  display:grid!important;
-  grid-template-columns:repeat(auto-fit,minmax(110px,1fr))!important;
-  width:100%!important;
-  height:auto!important;
-  max-height:none!important;
-  overflow:visible!important;
-  visibility:visible!important;
-  opacity:1!important;
-  position:relative!important;
-  z-index:50!important;
-}
-body.theme-8bit header.topbar nav.topnav > .nav-btn,
-body.theme-8bit header.topbar nav.topnav > .topbar-search,
-body.theme-8bit header.topbar nav.topnav > .nav-lock-form{
-  visibility:visible!important;
-  opacity:1!important;
-  position:relative!important;
-  z-index:51!important;
-}
-body.theme-8bit header.topbar nav.topnav > .nav-btn{
-  display:inline-flex!important;
-}
-body.theme-8bit header.topbar nav.topnav > .topbar-search{
-  display:inline-flex!important;
-}
-body.theme-8bit header.topbar nav.topnav > .nav-lock-form{
-  display:block!important;
-}
-body.theme-8bit header.topbar nav.topnav > .nav-lock-form > .lock-btn{
-  display:inline-flex!important;
-  width:100%!important;
-  visibility:visible!important;
-  opacity:1!important;
-}
-body.theme-8bit header.topbar nav.topnav .nav-btn > *,
-body.theme-8bit header.topbar nav.topnav .lock-btn > *{
-  visibility:visible!important;
-  opacity:1!important;
-}
-
 </style>
 </head>
 <body>
@@ -173,6 +124,9 @@ body.theme-8bit header.topbar nav.topnav .lock-btn > *{
     </a>
     <a class="nav-btn nav-achats {% if request.endpoint in ['achats_ventes_page', 'achats_ventes_add', 'achats_ventes_edit', 'achats_ventes_delete'] %}active{% endif %}" href="{{ url_for('achats_ventes_page') }}">
       <span class="nav-ico">🛍️</span><span>Achats / Ventes</span>
+    </a>
+    <a class="nav-btn nav-stock {% if request.endpoint in ['stock_page','stock_add','stock_edit','stock_delete','stock_image'] %}active{% endif %}" href="{{ url_for('stock_page') }}">
+      <span class="nav-ico">📦</span><span>Stock</span>
     </a>
     <a class="nav-btn nav-antivirus {% if request.endpoint in ['antivirus_page','antivirus_add','antivirus_edit','antivirus_delete'] %}active{% endif %}" href="{{ url_for('antivirus_page') }}">
       <span class="nav-ico">🛡️</span><span>Antivirus</span>

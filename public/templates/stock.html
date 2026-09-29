@@ -1,0 +1,526 @@
+{% extends "base.html" %}
+{% block title %}Stock - WOPR{% endblock %}
+
+{% block body %}
+<style>
+.stock-page{max-width:1500px;margin:0 auto;padding:18px}
+.stock-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px}
+.stock-head h1{margin:0}
+.stock-search{display:flex;gap:8px;flex:1;max-width:900px;flex-wrap:wrap;align-items:center}
+.stock-search input{flex:1;min-width:260px}
+.stock-form-card{margin-bottom:18px;padding:18px;border:1px solid var(--border,#334);border-radius:10px;background:var(--panel,#fff)}
+.stock-form-card h2{margin:0 0 16px}
+.stock-form-grid{display:grid;grid-template-columns:minmax(260px,1.25fr) minmax(260px,1.25fr) minmax(130px,.6fr) minmax(260px,1.25fr);gap:14px;align-items:start}
+.stock-field{display:flex;flex-direction:column;gap:7px;font-weight:700;min-width:0}
+.stock-field input{width:100%;box-sizing:border-box}
+.stock-input-line{display:flex;gap:7px;align-items:stretch}
+.stock-input-line input{flex:1;min-width:0}
+.stock-mini-action{flex:0 0 auto;min-height:44px!important;white-space:nowrap;padding:4px 9px!important}
+.stock-image-field{grid-column:1 / -1}
+.stock-image-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.stock-selected-image{display:none;margin-top:8px;max-width:180px;max-height:110px;object-fit:contain;border:1px solid #7774;background:#fff;padding:4px}
+.stock-selected-image.visible{display:block}
+.stock-lookup-hint{min-height:16px;font-size:11px;font-weight:600;opacity:.72}
+.stock-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.stock-table-wrap{overflow-x:auto}
+.stock-table{width:100%;border-collapse:collapse}
+.stock-table th,.stock-table td{padding:9px 8px;border-bottom:1px solid #8883;text-align:left;vertical-align:middle}
+.stock-table th{white-space:nowrap}
+.stock-thumb{display:block;width:72px;height:58px;object-fit:contain;background:#fff;border:1px solid #7774;border-radius:6px}
+.stock-no-image{width:72px;height:58px;display:flex;align-items:center;justify-content:center;border:1px dashed #7776;border-radius:6px;opacity:.55;font-size:22px}
+.stock-image-button{position:relative;border:0;background:transparent;padding:0;cursor:zoom-in;display:block}
+.stock-image-button::after{content:"🔍";position:absolute;right:2px;bottom:2px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.9);border:1px solid #111;font-size:11px}
+.stock-ref{font-weight:800}
+.stock-remarks{white-space:pre-wrap}
+.stock-qty-wrap{display:flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap}
+.stock-qty-wrap form{margin:0}
+.stock-qty-btn{width:28px;height:28px;min-height:28px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;font-size:18px!important;line-height:1!important}
+.stock-qty-value{min-width:34px;text-align:center;font-weight:800}
+.stock-row-actions{display:flex;gap:5px;flex-wrap:wrap;min-width:250px}
+.stock-row-actions form{margin:0}
+.stock-row-actions .button{min-height:30px!important;padding:4px 7px!important;font-size:10px!important}
+.stock-autofilled{outline:2px solid #56a36c!important;outline-offset:1px}
+.stock-page :is(a.button,button.button){display:inline-flex!important;align-items:center!important;justify-content:center!important;text-align:center!important;line-height:1!important;vertical-align:middle!important;box-sizing:border-box!important}
+.stock-search :is(a.button,button.button){min-height:48px!important}
+.stock-actions :is(a.button,button.button),.stock-row-actions :is(a.button,button.button){min-height:32px!important}
+
+/* Modales */
+.stock-modal{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;padding:28px}
+.stock-modal.open{display:flex}
+.stock-modal-card{position:relative;width:min(1050px,94vw);max-height:90vh;overflow:auto;background:var(--panel,#fff);border:2px solid #111;padding:18px;box-shadow:7px 7px 0 rgba(0,0,0,.35)}
+.stock-modal-close{position:absolute;top:8px;right:8px;width:38px;height:38px;border:2px solid #111;background:#ffdada;color:#7c2020;font-size:24px;font-weight:900;cursor:pointer}
+.stock-modal-title{font-size:20px;font-weight:900;margin:0 50px 14px 0}
+.stock-big-image{display:block;max-width:90vw;max-height:84vh;object-fit:contain;background:#fff;padding:8px;border:2px solid #111}
+.stock-image-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.stock-image-choice{border:2px solid #aab6be;background:#fff;padding:6px;cursor:pointer;min-height:140px;display:flex;align-items:center;justify-content:center}
+.stock-image-choice:hover{border-color:#3399ff}
+.stock-image-choice img{max-width:100%;height:125px;object-fit:contain}
+.stock-modal-status{padding:18px;text-align:center;font-weight:800}
+.stock-identify-result{padding:14px;border:1px solid #9fc6ef;background:#eef6ff;margin-top:10px}
+.stock-identify-result strong{display:block;font-size:17px;margin-bottom:6px}
+
+.stock-identify-current{margin:0 0 12px;padding:10px 12px;border-left:4px solid #8a9aa5;background:#f5f7f8}
+.stock-function-candidates{display:grid;gap:9px;margin-top:10px}
+.stock-function-candidate{
+  width:100%;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  text-align:left!important;padding:10px 12px!important;min-height:50px!important
+}
+.stock-function-candidate-main{display:block;font-weight:900;font-size:13px}
+.stock-function-candidate-note{display:block;margin-top:4px;font-size:11px;font-weight:500;opacity:.68;line-height:1.25}
+.stock-row-function{min-width:180px}
+
+@media(max-width:1050px){
+  .stock-form-grid{grid-template-columns:1fr 1fr}
+  .stock-image-field{grid-column:1/-1}
+}
+@media(max-width:700px){
+  .stock-form-grid{grid-template-columns:1fr}
+  .stock-image-field{grid-column:auto}
+  .stock-image-line{grid-template-columns:1fr}
+  .stock-table th:nth-child(5),.stock-table td:nth-child(5){display:none}
+}
+</style>
+
+<div class="stock-page">
+  <div class="stock-head">
+    <h1>📦 Stock</h1>
+    <form class="stock-search" method="get" action="{{ url_for('stock_page') }}">
+      <input id="stockLiveSearch" type="search" name="q" value="{{ q }}" placeholder="Rechercher une référence, une fonction, une remarque…" autocomplete="off">
+      <button class="button wopr-action-open" type="submit">Rechercher</button>
+      {% if q %}<a class="button secondary wopr-action-neutral" href="{{ url_for('stock_page') }}">Tout afficher</a>{% endif %}
+      <a class="button secondary wopr-action-special" href="{{ url_for('stock_export_csv') }}">Exporter CSV</a>
+      <a class="button secondary wopr-action-open wopr-print-pdf-btn" href="{{ url_for('stock_export_pdf') }}">Exporter PDF</a>
+    </form>
+  </div>
+
+  <div class="stock-form-card">
+    <h2>{{ "Modifier l'article" if edit_item else "Ajouter un article" }}</h2>
+    <form id="stockEditForm" method="post" enctype="multipart/form-data"
+          action="{{ url_for('stock_edit', item_id=edit_item['id']) if edit_item else url_for('stock_add') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" id="stockSelectedImageUrl" name="selected_image_url" value="">
+
+      <div class="stock-form-grid">
+        <label class="stock-field">
+          <span>Composant / Référence</span>
+          <input id="stockReference" name="reference" required value="{{ edit_item['reference'] if edit_item else '' }}" autocomplete="off">
+        </label>
+
+        <label class="stock-field">
+          <span>Fonction</span>
+          <span class="stock-input-line">
+            <input id="stockFunction" name="function" value="{{ edit_item['function'] if edit_item else '' }}">
+            <button id="stockIdentifyNew" class="button wopr-action-open stock-mini-action" type="button">🔎 Identifier</button>
+          </span>
+          <small id="stockLookupHint" class="stock-lookup-hint"></small>
+        </label>
+
+        <label class="stock-field">
+          <span>Quantité</span>
+          <input name="quantity" value="{{ edit_item['quantity'] if edit_item else '' }}" placeholder="ex. 8, 2x10, 2M/2F">
+        </label>
+
+        <label class="stock-field">
+          <span>Remarques</span>
+          <input name="remarks" value="{{ edit_item['remarks'] if edit_item else '' }}">
+        </label>
+
+        <label class="stock-field stock-image-field">
+          <span>Image</span>
+          <span class="stock-image-line">
+            <input type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif">
+            <button id="stockSearchImageNew" class="button wopr-action-special stock-mini-action" type="button">🖼️ Chercher une image</button>
+          </span>
+          <img id="stockSelectedImagePreview" class="stock-selected-image" alt="">
+        </label>
+      </div>
+
+      {% if edit_item and edit_item['image_name'] %}
+      <div style="margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="stock-image-button" data-stock-image="{{ url_for('stock_image', item_id=edit_item['id']) }}">
+          <img class="stock-thumb" src="{{ url_for('stock_image', item_id=edit_item['id']) }}" alt="">
+        </button>
+        <label><input type="checkbox" name="remove_image" value="1"> Supprimer l'image actuelle</label>
+      </div>
+      {% endif %}
+
+      <div class="stock-actions">
+        <button class="button wopr-action-save" type="submit">{{ "ENREGISTRER" if edit_item else "+ AJOUTER" }}</button>
+        {% if edit_item %}
+          <a class="button secondary wopr-action-neutral" href="{{ url_for('stock_page', q=q) }}">ANNULER</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+
+  <div class="stock-table-wrap">
+    <table class="stock-table">
+      <thead>
+        <tr>
+          <th>Image</th>
+          <th>Composant / Référence</th>
+          <th>Fonction</th>
+          <th>Quantité</th>
+          <th>Remarques</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for item in items %}
+        <tr class="stock-data-row"
+            data-item-id="{{ item['id'] }}"
+            data-reference="{{ item['reference']|e }}"
+            data-search="{{ (item['reference'] ~ ' ' ~ (item['function'] or '') ~ ' ' ~ (item['quantity'] or '') ~ ' ' ~ (item['remarks'] or ''))|lower }}">
+          <td class="stock-row-image">
+            {% if item['image_name'] %}
+              <button type="button" class="stock-image-button" data-stock-image="{{ url_for('stock_image', item_id=item['id']) }}" title="Voir l'image en grand">
+                <img class="stock-thumb" src="{{ url_for('stock_image', item_id=item['id']) }}" alt="">
+              </button>
+            {% else %}
+              <div class="stock-no-image">📷</div>
+            {% endif %}
+          </td>
+          <td class="stock-ref">{{ item['reference'] }}</td>
+          <td class="stock-row-function">{{ item['function'] or '' }}</td>
+          <td>
+            <div class="stock-qty-wrap">
+              <form method="post" action="{{ url_for('stock_quantity_adjust', item_id=item['id']) }}">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="delta" value="-1">
+                <button class="stock-qty-btn wopr-action-delete" type="submit" title="Retirer 1">−</button>
+              </form>
+              <span class="stock-qty-value">{{ item['quantity'] or '' }}</span>
+              <form method="post" action="{{ url_for('stock_quantity_adjust', item_id=item['id']) }}">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="delta" value="1">
+                <button class="stock-qty-btn wopr-action-save" type="submit" title="Ajouter 1">+</button>
+              </form>
+            </div>
+          </td>
+          <td class="stock-remarks">{{ item['remarks'] or '' }}</td>
+          <td>
+            <div class="stock-row-actions">
+              <button type="button" class="button wopr-action-open stock-row-identify">🔎 Fonction</button>
+              <button type="button" class="button wopr-action-special stock-row-image-search">🖼️ Image</button>
+              <a class="button secondary wopr-action-edit" href="{{ url_for('stock_page', edit=item['id'], q=q) }}">Modifier</a>
+              <form method="post" action="{{ url_for('stock_delete', item_id=item['id']) }}" onsubmit="return confirm('Supprimer cet article du stock ?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button class="button danger wopr-action-delete" type="submit">Supprimer</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" style="padding:22px;text-align:center;opacity:.7">Aucun article dans le stock.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- image en grand -->
+<div id="stockViewModal" class="stock-modal" aria-hidden="true">
+  <button type="button" class="stock-modal-close">×</button>
+  <img id="stockViewModalImg" class="stock-big-image" alt="">
+</div>
+
+<!-- recherche / choix d'image intégrée -->
+<div id="stockImageSearchModal" class="stock-modal" aria-hidden="true">
+  <div class="stock-modal-card">
+    <button type="button" class="stock-modal-close">×</button>
+    <div class="stock-modal-title">Choisir une image</div>
+    <div id="stockImageSearchStatus" class="stock-modal-status">Recherche…</div>
+    <div id="stockImageResults" class="stock-image-results"></div>
+  </div>
+</div>
+
+<!-- résultat identification -->
+<div id="stockIdentifyModal" class="stock-modal" aria-hidden="true">
+  <div class="stock-modal-card">
+    <button type="button" class="stock-modal-close">×</button>
+    <div class="stock-modal-title">Identification du composant</div>
+    <div id="stockIdentifyStatus" class="stock-modal-status">Recherche…</div>
+    <div id="stockIdentifyResult"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const csrf = {{ csrf_token()|tojson }};
+  const search = document.getElementById('stockLiveSearch');
+  const rows = Array.from(document.querySelectorAll('.stock-data-row'));
+  const refInput = document.getElementById('stockReference');
+  const functionInput = document.getElementById('stockFunction');
+  const hint = document.getElementById('stockLookupHint');
+  const selectedImageUrl = document.getElementById('stockSelectedImageUrl');
+  const selectedImagePreview = document.getElementById('stockSelectedImagePreview');
+
+  function normalize(value){
+    return (value || '').toLocaleLowerCase('fr').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g,'').replace(/[\s\-_./]+/g,'');
+  }
+
+  if(search){
+    search.addEventListener('input', function(){
+      const raw = search.value.trim().toLocaleLowerCase('fr');
+      const compact = normalize(search.value);
+      rows.forEach(function(row){
+        const hayRaw=(row.dataset.search||'').toLocaleLowerCase('fr');
+        const hayCompact=normalize(row.dataset.search||'');
+        row.style.display=(!raw || hayRaw.includes(raw) || (compact && hayCompact.includes(compact)))?'':'none';
+      });
+    });
+  }
+
+  function openModal(el){ el.classList.add('open'); el.setAttribute('aria-hidden','false'); }
+  function closeModal(el){ el.classList.remove('open'); el.setAttribute('aria-hidden','true'); }
+
+  document.querySelectorAll('.stock-modal').forEach(function(modal){
+    modal.addEventListener('click', function(e){
+      if(e.target===modal || e.target.classList.contains('stock-modal-close')) closeModal(modal);
+    });
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') document.querySelectorAll('.stock-modal.open').forEach(closeModal);
+  });
+
+  // Voir image existante en grand.
+  const viewModal=document.getElementById('stockViewModal');
+  const viewImg=document.getElementById('stockViewModalImg');
+  document.querySelectorAll('[data-stock-image]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      viewImg.src=btn.dataset.stockImage;
+      openModal(viewModal);
+    });
+  });
+
+  async function identify(reference, existingTarget){
+    const modal=document.getElementById('stockIdentifyModal');
+    const status=document.getElementById('stockIdentifyStatus');
+    const result=document.getElementById('stockIdentifyResult');
+    status.style.display='block';
+    status.textContent='Recherche de ' + reference + '…';
+    result.innerHTML='';
+    openModal(modal);
+
+    try{
+      let r, data;
+      if(existingTarget){
+        r=await fetch('/stock/'+existingTarget.id+'/identify',{
+          method:'POST',
+          headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-CSRF-Token':csrf},
+          body:'_csrf_token='+encodeURIComponent(csrf)
+        });
+      }else{
+        r=await fetch('{{ url_for("stock_identify") }}?reference='+encodeURIComponent(reference),{cache:'no-store'});
+      }
+      data=await r.json();
+      status.style.display='none';
+
+      const current=(data.current_function||'').trim();
+      if(current){
+        const cur=document.createElement('div');
+        cur.className='stock-identify-current';
+        cur.textContent='Actuel : ' + current;
+        result.appendChild(cur);
+      }
+
+      const candidates=data.candidates||[];
+      if(!r.ok || !candidates.length){
+        const empty=document.createElement('div');
+        empty.className='stock-identify-result';
+        empty.textContent=data.error||'Aucune fonction électronique fiable trouvée pour cette référence.';
+        result.appendChild(empty);
+        return;
+      }
+
+      const intro=document.createElement('div');
+      intro.className='stock-identify-result';
+      intro.textContent='Fonction(s) électronique(s) trouvée(s) :';
+      result.appendChild(intro);
+
+      const box=document.createElement('div');
+      box.className='stock-function-candidates';
+
+      candidates.forEach(function(candidate){
+        const b=document.createElement('button');
+        b.type='button';
+        b.className='button wopr-action-save stock-function-candidate';
+
+        const wrap=document.createElement('span');
+        const main=document.createElement('span');
+        main.className='stock-function-candidate-main';
+        main.textContent=candidate.function||'';
+        wrap.appendChild(main);
+
+        const note=document.createElement('span');
+        note.className='stock-function-candidate-note';
+        const sourceLabel=(candidate.source||'').trim();
+        const details=(candidate.details||candidate.title||'').trim();
+        note.textContent=(sourceLabel ? sourceLabel + ' — ' : '') + (details || 'Identification électronique');
+        wrap.appendChild(note);
+        b.appendChild(wrap);
+
+        b.addEventListener('click', async function(){
+          const chosen=candidate.function||'';
+          if(!chosen) return;
+
+          if(existingTarget){
+            b.disabled=true;
+            try{
+              const rr=await fetch('/stock/'+existingTarget.id+'/function',{
+                method:'POST',
+                headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-CSRF-Token':csrf},
+                body:'_csrf_token='+encodeURIComponent(csrf)+'&function='+encodeURIComponent(chosen)
+              });
+              const dd=await rr.json();
+              if(!rr.ok || !dd.ok) throw new Error(dd.error||'Erreur');
+              existingTarget.row.querySelector('.stock-row-function').textContent=dd.function||chosen;
+              closeModal(modal);
+            }catch(e){
+              alert(e.message||'Impossible d’enregistrer la fonction.');
+              b.disabled=false;
+            }
+          }else{
+            functionInput.value=chosen;
+            functionInput.classList.add('stock-autofilled');
+            if(hint) hint.textContent='✓ Fonction choisie — tu peux encore la modifier.';
+            setTimeout(()=>functionInput.classList.remove('stock-autofilled'),900);
+            closeModal(modal);
+          }
+        });
+
+        box.appendChild(b);
+      });
+      result.appendChild(box);
+    }catch(e){
+      status.style.display='none';
+      const err=document.createElement('div');
+      err.className='stock-identify-result';
+      err.textContent='Recherche impossible pour le moment.';
+      result.appendChild(err);
+    }
+  }
+
+  // Nouvelle fiche : vraie recherche, même si WOPR connaît déjà cette référence.
+  document.getElementById('stockIdentifyNew')?.addEventListener('click', function(){
+    const ref=(refInput?.value||'').trim();
+    if(!ref){ if(hint) hint.textContent='Entre d’abord une référence.'; return; }
+    identify(ref, null);
+  });
+
+  // Éléments déjà intégrés : recherche toujours disponible, même si Fonction est déjà remplie.
+  document.querySelectorAll('.stock-row-identify').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      const row=btn.closest('.stock-data-row');
+      identify(row.dataset.reference,{id:row.dataset.itemId,row:row});
+    });
+  });
+
+  let imageTarget = null; // {mode:'new'} ou {mode:'existing', row, id}
+  const imageModal=document.getElementById('stockImageSearchModal');
+  const imageStatus=document.getElementById('stockImageSearchStatus');
+  const imageResults=document.getElementById('stockImageResults');
+
+  async function searchImages(reference, target){
+    imageTarget=target;
+    imageStatus.style.display='block';
+    imageStatus.textContent='Recherche d’images pour ' + reference + '…';
+    imageResults.innerHTML='';
+    openModal(imageModal);
+    try{
+      const r=await fetch('{{ url_for("stock_images_search") }}?reference='+encodeURIComponent(reference),{cache:'no-store'});
+      const data=await r.json();
+      imageStatus.style.display='none';
+      if(!r.ok || !data.images || !data.images.length){
+        imageStatus.style.display='block';
+        imageStatus.textContent='Aucune image trouvée.';
+        return;
+      }
+      data.images.forEach(function(url){
+        const b=document.createElement('button');
+        b.type='button'; b.className='stock-image-choice';
+        const img=document.createElement('img');
+        img.src=url; img.loading='lazy'; img.referrerPolicy='no-referrer';
+        b.appendChild(img);
+        b.addEventListener('click', async function(){
+          if(!imageTarget) return;
+          if(imageTarget.mode==='new'){
+            selectedImageUrl.value=url;
+            selectedImagePreview.src=url;
+            selectedImagePreview.classList.add('visible');
+            closeModal(imageModal);
+            return;
+          }
+          b.disabled=true;
+          try{
+            const rr=await fetch('/stock/'+imageTarget.id+'/image-url',{
+              method:'POST',
+              headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-CSRF-Token':csrf},
+              body:'_csrf_token='+encodeURIComponent(csrf)+'&image_url='+encodeURIComponent(url)
+            });
+            const dd=await rr.json();
+            if(!rr.ok || !dd.ok){ throw new Error(dd.error||'Erreur'); }
+            const cell=imageTarget.row.querySelector('.stock-row-image');
+            cell.innerHTML='';
+            const viewBtn=document.createElement('button');
+            viewBtn.type='button'; viewBtn.className='stock-image-button';
+            viewBtn.dataset.stockImage=dd.image_url+'?t='+Date.now();
+            const im=document.createElement('img');
+            im.className='stock-thumb'; im.src=dd.image_url+'?t='+Date.now();
+            viewBtn.appendChild(im);
+            viewBtn.addEventListener('click',function(){
+              viewImg.src=viewBtn.dataset.stockImage; openModal(viewModal);
+            });
+            cell.appendChild(viewBtn);
+            closeModal(imageModal);
+          }catch(e){
+            alert(e.message||'Impossible d’enregistrer cette image.');
+            b.disabled=false;
+          }
+        });
+        imageResults.appendChild(b);
+      });
+    }catch(e){
+      imageStatus.style.display='block';
+      imageStatus.textContent='Recherche d’images impossible pour le moment.';
+    }
+  }
+
+  document.getElementById('stockSearchImageNew')?.addEventListener('click',function(){
+    const ref=(refInput?.value||'').trim();
+    if(!ref){ if(hint) hint.textContent='Entre d’abord une référence.'; return; }
+    searchImages(ref,{mode:'new'});
+  });
+
+  document.querySelectorAll('.stock-row-image-search').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      const row=btn.closest('.stock-data-row');
+      searchImages(row.dataset.reference,{mode:'existing',row:row,id:row.dataset.itemId});
+    });
+  });
+
+  // Auto-remplissage uniquement depuis ce que WOPR connaît déjà, sans Internet à chaque frappe.
+  let timer=null;
+  refInput?.addEventListener('input',function(){
+    clearTimeout(timer);
+    if(functionInput.value.trim()) return;
+    const ref=refInput.value.trim();
+    if(ref.length<2) return;
+    timer=setTimeout(async function(){
+      try{
+        const r=await fetch('{{ url_for("stock_lookup") }}?reference='+encodeURIComponent(ref),{cache:'no-store'});
+        if(!r.ok) return;
+        const data=await r.json();
+        if(data.found && !functionInput.value.trim()){
+          functionInput.value=data.function||'';
+          functionInput.classList.add('stock-autofilled');
+          if(hint) hint.textContent='✓ Référence déjà connue dans WOPR';
+          setTimeout(()=>functionInput.classList.remove('stock-autofilled'),900);
+        }
+      }catch(e){}
+    },220);
+  });
+})();
+</script>
+{% endblock %}

@@ -9,6 +9,13 @@ from tkinter import messagebox, simpledialog
 APP_URL="http://127.0.0.1:5000"
 IS_WINDOWS=os.name=="nt"
 
+class DatabaseUnlockError(RuntimeError):
+    """Erreur de déverrouillage SQLCipher classée pour l'interface du launcher."""
+    def __init__(self, kind, detail=""):
+        self.kind = str(kind or "database")
+        self.detail = str(detail or "").strip()
+        super().__init__(self.detail or self.kind)
+
 def base_dir():
     return Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
 
@@ -31,10 +38,16 @@ SERVER_OUT=DATA_DIR/"wopr-server.log"
 SERVER_ERR=DATA_DIR/"wopr-server-error.log"
 ADMIN_PIN_FILE=DATA_DIR/"admin_pin.json"
 SQLCIPHER_SETTINGS_FILE=DATA_DIR/"sqlcipher.json"
+def _find_existing_db():
+    candidates = [
+        p for p in DATA_DIR.glob("*.db")
+        if p.is_file() and not p.name.startswith(".")
+    ]
+    if not candidates:
+        return DATA_DIR/"wopr.db"
+    return max(candidates, key=lambda p: p.stat().st_size)
 
-# La base WOPR officielle est toujours private/data/wopr.db.
-# Ne jamais sélectionner automatiquement une copie/test selon sa taille.
-DB_FILE=DATA_DIR/"wopr.db"
+DB_FILE=_find_existing_db()
 BACKUP_DIR=DATA_DIR/"backups"
 VENV_DIR=PRIVATE_DIR/(".venv-win" if IS_WINDOWS else ".venv")
 PY=VENV_DIR/("Scripts/python.exe" if IS_WINDOWS else "bin/python")
@@ -165,6 +178,8 @@ def start_server(status, db_pin=None):
     pid=read_pid()
     if pid and not process_exists(pid): PID_FILE.unlink(missing_ok=True)
     ensure_venv(status)
+    # Vérifie le PIN avant de lancer Flask : un mauvais PIN n'est pas un crash WOPR.
+    validate_database_pin(db_pin)
     status("Lancement du serveur WOPR…")
     out=SERVER_OUT.open("a",encoding="utf-8")
     err=SERVER_ERR.open("a",encoding="utf-8")
@@ -240,8 +255,13 @@ def validate_database_pin(db_pin):
         creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if IS_WINDOWS else 0
     )
     if cp.returncode:
-        detail=(cp.stderr or cp.stdout or "PIN incorrect ou base inaccessible.").strip()
-        raise RuntimeError(detail)
+        detail=(cp.stderr or cp.stdout or "Base chiffrée inaccessible.").strip()
+        folded=detail.casefold()
+        if "pin incorrect" in folded or "pin wopr invalide" in folded:
+            raise DatabaseUnlockError("pin", detail)
+        if "master.key" in folded or "clé maître" in folded or "cle maitre" in folded:
+            raise DatabaseUnlockError("master_key", detail)
+        raise DatabaseUnlockError("database", detail)
 
 def create_shutdown_backup(status, db_pin=None):
     status("Création de la sauvegarde de fermeture…")
@@ -342,21 +362,9 @@ def stop_server(status, db_pin=None):
     return backup
 
 def db_desc():
-    if not DB_FILE.is_file():
-        return "Base : introuvable"
-
+    if not DB_FILE.exists(): return "Base : introuvable"
     s=DB_FILE.stat()
-    suffix=""
-    try:
-        if SQLCIPHER_SETTINGS_FILE.is_file():
-            suffix="  •  🔒 SQLCipher"
-    except OSError:
-        pass
-
-    return (
-        f"Base : {datetime.fromtimestamp(s.st_mtime):%d/%m/%Y %H:%M:%S}"
-        f"  •  {s.st_size/1048576:.2f} Mo{suffix}"
-    )
+    return f"Base : {datetime.fromtimestamp(s.st_mtime):%d/%m/%Y %H:%M:%S}  •  {s.st_size/1048576:.2f} Mo"
 
 class Launcher(tk.Tk):
     BG = "#070B10"
@@ -372,15 +380,14 @@ class Launcher(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        # PIN uniquement en RAM : réutilisé pour l'arrêt si ce launcher
+        # a lui-même démarré WOPR. Jamais écrit sur disque.
+        self._database_pin = None
 
         self.title("WOPR // SYSTEM LAUNCHER")
         self.geometry("640x390")
         self.resizable(False, False)
         self.configure(bg=self.BG)
-
-        # PIN SQLCipher conservé uniquement en RAM pendant la vie du launcher.
-        # Il n'est jamais écrit sur disque et est oublié à la fermeture du launcher.
-        self._database_pin = None
 
         # Icône de fenêtre : garde l'identité WOPR sous Windows et Linux.
         # Le binaire Windows doit toujours être compilé avec --icon WOPR.ico
@@ -583,6 +590,38 @@ class Launcher(tk.Tk):
             return None
         return pin
 
+    def _show_database_unlock_error(self, exc, retry_start=False):
+        kind=getattr(exc, "kind", "database")
+        if kind == "pin":
+            retry=messagebox.askretrycancel(
+                "WOPR // PIN INCORRECT",
+                "Le PIN WOPR est incorrect.\n\n"
+                "La base chiffrée n'a pas été déverrouillée.\n"
+                "Aucune donnée n'a été modifiée.\n\n"
+                "Réessayer ?",
+                parent=self,
+            )
+            if retry and retry_start:
+                self.after(100, self.open_wopr)
+            return
+
+        if kind == "master_key":
+            messagebox.showerror(
+                "WOPR // CLÉ MAÎTRE ABSENTE",
+                "La clé maître WOPR est introuvable ou inutilisable sur cette machine.\n\n"
+                "Impossible d'ouvrir la base chiffrée.\n\n"
+                "Vérifie le fichier master.key avant de réessayer.",
+                parent=self,
+            )
+            return
+
+        messagebox.showerror(
+            "WOPR // BASE CHIFFRÉE",
+            "Impossible de déverrouiller la base WOPR.\n\n"
+            + (getattr(exc, "detail", "") or str(exc)),
+            parent=self,
+        )
+
     def open_wopr(self):
         if alive():
             webbrowser.open(APP_URL)
@@ -600,6 +639,8 @@ class Launcher(tk.Tk):
                 start_server(self.set_status, db_pin)
                 self._database_pin = db_pin
                 webbrowser.open(APP_URL)
+            except DatabaseUnlockError as e:
+                self.after(0, self._show_database_unlock_error, e, True)
             except Exception as e:
                 self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
             finally:
@@ -608,11 +649,11 @@ class Launcher(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def stop_wopr(self):
-        # Réutilise le PIN saisi au démarrage. Aucun second dialogue si le
-        # serveur a été démarré depuis cette instance du launcher.
+        # Réutilise le PIN saisi au démarrage tant que cette même instance
+        # du launcher est restée ouverte.
         db_pin = self._database_pin
         if pin_required_for_database() and not db_pin:
-            # Cas exceptionnel : launcher rouvert alors que WOPR tournait déjà.
+            # Cas exceptionnel : launcher rouvert pendant que WOPR tourne déjà.
             db_pin=self.ask_database_pin("sauvegarder et arrêter")
             if db_pin is None:
                 return
@@ -624,6 +665,8 @@ class Launcher(tk.Tk):
             try:
                 stop_server(self.set_status, db_pin)
                 self._database_pin = None
+            except DatabaseUnlockError as e:
+                self.after(0, self._show_database_unlock_error, e, False)
             except Exception as e:
                 self.after(0, messagebox.showerror, "WOPR // ERROR", str(e))
             finally:

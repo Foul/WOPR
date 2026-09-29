@@ -11,6 +11,9 @@
     <a class="navbtn navbtn-new" href="{{ url_for('repair_new') }}">
       <span class="nav-ico">➕</span><span>Nouvelle réparation</span>
     </a>
+    <a class="navbtn navbtn-new" href="{{ url_for('tracking_stats_page') }}">
+      <span class="nav-ico">📊</span><span>Stats suivi</span>
+    </a>
   </div>
 </div>
 
@@ -27,18 +30,18 @@
       </select>
     </label>
   </form>
-  <a class="atelier-kpi" href="{{ url_for('index', year=current_year, en_cours=1) }}">
+  <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
     <span class="atelier-kpi-icon">🔧</span>
     <span class="atelier-kpi-label">En cours</span>
     <strong>{{ en_cours_count }}</strong>
     <small>dossiers actifs</small>
   </a>
-  <a class="atelier-kpi" href="{{ url_for('index', year=current_year, attente_piece=1) }}">
+  <div class="atelier-kpi">
     <span class="atelier-kpi-icon">📦</span>
     <span class="atelier-kpi-label">Attente pièce</span>
     <strong>{{ attente_piece_count }}</strong>
     <small>réparation(s)</small>
-  </a>
+  </div>
   <div class="atelier-kpi {% if overdue_count %}atelier-kpi-alert{% endif %}">
     <span class="atelier-kpi-icon">⏳</span>
     <span class="atelier-kpi-label">Dossiers +14 j</span>

@@ -1,27 +1,18 @@
 # Changelog de la documentation
 
-## 2.5.1 - 25 septembre 2026 - alignement final de la documentation 2.5.x
+## 2.6.0 - 29 septembre 2026 - stock composants et statistiques du suivi client
 
-- passage de la version publique de WOPR à **2.5.1** après publication du tag `v2.5.0` ;
-- alignement de `manuel.md`, `documentation.html`, `index.html` et `WOPR-Manuel.pdf` sur **2.5.1** ;
-- correction de la date de documentation au **25 septembre 2026** ;
-- conservation de l'historique 2.5.0 dans le changelog ;
-- remplacement des notes de release courantes par `RELEASE-NOTES-2.5.1.md`.
-
-## 2.5.0 - 25 septembre 2026 - SQLCipher, launcher et stabilisation 8-BIT
-
-- chiffrement de la base principale `private/data/wopr.db` avec SQLCipher ;
-- clé SQLCipher aléatoire distincte du PIN administrateur ;
-- prise en charge SQLCipher Linux et Windows avec dépendances spécifiques à chaque plateforme ;
-- correction du crash natif Windows lié à `PRAGMA cipher_memory_security = ON` ;
-- conservation du PIN SQLCipher uniquement en RAM par le launcher pendant sa session ;
-- réutilisation du PIN à l'arrêt afin d'éviter une seconde saisie dans une session normale ;
-- sauvegardes externes adaptées à la base chiffrée ;
-- rétention Proton Drive et Freebox portée à 15 jours avec suppression des `.sha256` associés ;
-- stabilisation responsive de la topbar 8-BIT ;
-- correction du chevauchement entre Recherche et Suivi, indépendamment de la résolution et de l'échelle DPI ;
-- clarification de l'usage de `public/static/` et `private/assets/` ;
-- documentation et notes de release alignées sur **2.5.0**.
+- ajout d’un module Stock volontairement simple : référence, fonction, quantité, remarques et image ;
+- recherche instantanée dans le stock, ajustement rapide des quantités et agrandissement des images ;
+- export du stock en CSV et en PDF avec présentation de type catalogue ;
+- recherche intégrée d’images de composants et aide à l’identification de leur fonction ;
+- identification de composants conservée comme aide modifiable, sans écraser silencieusement les informations saisies ;
+- ajout des statistiques du suivi client en ligne : vues, visiteurs distincts, première et dernière consultation ;
+- comptabilisation uniquement lorsqu’un code de suivi valide affiche réellement un dossier ;
+- rapprochement des statistiques publiques avec les dossiers locaux WOPR ;
+- accès aux statistiques depuis le tableau de bord Atelier plutôt que depuis la navigation principale ;
+- conservation de la confidentialité : aucune adresse IP n’est stockée en clair pour les statistiques ;
+- maintien des correctifs 2.5.1 concernant le CA, SumUp, les filtres Atelier, le suivi public et le Mode Client.
 
 ## 2.4.8 - 18 septembre 2026 - nettoyage de l'écran des règlements
 

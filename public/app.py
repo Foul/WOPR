@@ -23,6 +23,7 @@ import ssl
 import re
 import unicodedata
 import html
+import ipaddress
 import time
 import threading
 import os
@@ -72,6 +73,7 @@ FACTURES_ROOT = DOCUMENTS_ROOT / "Factures"
 FOURNISSEURS_ROOT = DOCUMENTS_ROOT / "Fournisseurs"
 COMMANDES_ROOT = DOCUMENTS_ROOT / "Commandes"
 SUIVI_REPARATIONS_ROOT = DOCUMENTS_ROOT / "Suivi de réparation"
+STOCK_IMAGES_ROOT = PRIVATE_ASSETS / "stock"
 
 MONTH_FOLDER_NAMES = {
     1: "01 - Janvier",
@@ -193,7 +195,7 @@ TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.5.1"
+APP_VERSION = "2.6.0"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -918,6 +920,7 @@ for _directory in (
     PRIVATE_ROOT, DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR,
     PRIVATE_ASSETS, PRIVATE_SEEDS, DOCUMENTS_ROOT, DEVIS_ROOT, FACTURES_ROOT,
     FOURNISSEURS_ROOT, COMMANDES_ROOT, SUIVI_REPARATIONS_ROOT,
+    STOCK_IMAGES_ROOT,
 ):
     _directory.mkdir(parents=True, exist_ok=True)
 
@@ -1553,6 +1556,8 @@ def publish_tracking_snapshot(rid):
             public_parts.append("Intervention réalisée :\n" + str(row["work_done"]).strip())
         if str(row["tests_validation"] or "").strip():
             public_parts.append("Contrôles effectués :\n" + str(row["tests_validation"]).strip())
+        if str(row["remarks"] or "").strip():
+            public_parts.append("Remarques :\n" + str(row["remarks"]).strip())
         public_message = "\n\n".join(public_parts) or "Votre dossier est suivi par Foul-Fix."
         title_parts = [str(row["device_type"] or "").strip(), str(row["brand_model"] or "").strip()]
         payload = {
@@ -2505,14 +2510,8 @@ def accounting_monthly_totals(con, year=None):
         service = max(0.0, float(row.get("accounting_service_amount") or 0))
         goods = max(0.0, float(row.get("accounting_goods_amount") or 0))
 
-        # Compatibilité avec certains encaissements historiques :
-        # une facture peut être marquée payée avec une période comptable valide
-        # alors que les champs accounting_* sont restés à 0.
-        #
-        # Dans ce cas, s'il n'existe AUCUN acompte à soustraire, le montant de
-        # la facture est bien le montant encaissé et peut servir de repli.
-        # On évite volontairement ce repli en présence d'un acompte pour ne pas
-        # compter deux fois une partie déjà enregistrée séparément.
+        # Compatibilité encaissements historiques : si accounting_* est à 0
+        # et qu'il n'y a pas d'acompte, reprendre les montants de la facture.
         deposit = max(0.0, float(row.get("deposit_amount") or 0))
         if service + goods <= 0 and (fallback_to_invoice or deposit <= 0):
             service = max(0.0, float(row.get("service_amount") or 0))
@@ -9311,6 +9310,164 @@ def home():
     return redirect(url_for("atelier_dashboard"))
 
 
+
+def _tracking_stats_datetime(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return raw[:16].replace("T", " ")
+
+
+def fetch_tracking_stats():
+    """Récupère les statistiques privées du portail Foul-Fix."""
+    conf = read_tracking_settings()
+    endpoint = str(conf.get("api_url") or "").strip()
+    api_key = str(conf.get("api_key") or "").strip()
+
+    if not bool(conf.get("enabled", False)):
+        raise RuntimeError("Le suivi en ligne n'est pas activé dans WOPR.")
+    if not endpoint:
+        raise RuntimeError("URL de l'API de suivi absente.")
+    if not api_key:
+        raise RuntimeError("Clé API de suivi absente.")
+
+    parsed = urllib.parse.urlsplit(endpoint)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query.append(("stats", "1"))
+    stats_url = urllib.parse.urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urllib.parse.urlencode(query),
+        parsed.fragment,
+    ))
+
+    req = urllib.request.Request(
+        stats_url,
+        headers={
+            "Accept": "application/json",
+            "X-WOPR-Key": api_key,
+        },
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            parsed_error = json.loads(exc.read().decode("utf-8", errors="replace"))
+            if isinstance(parsed_error, dict):
+                detail = str(parsed_error.get("error") or "")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"API suivi HTTP {exc.code}" + (f" — {detail}" if detail else "")
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Connexion au portail impossible : {exc.reason}") from exc
+
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise RuntimeError("Réponse invalide de l'API de suivi.")
+
+    stats = payload.get("stats")
+    if not isinstance(stats, dict):
+        raise RuntimeError("Statistiques absentes de la réponse.")
+    return stats
+
+
+@app.route("/suivi/stats")
+def tracking_stats_page():
+    error = ""
+    stats = {
+        "today": {"views": 0, "unique_visitors": 0},
+        "week": {"views": 0, "unique_visitors": 0},
+        "month": {"views": 0, "unique_visitors": 0},
+        "total_views": 0,
+        "codes": [],
+    }
+
+    try:
+        remote = fetch_tracking_stats()
+        if isinstance(remote, dict):
+            stats.update(remote)
+    except Exception as exc:
+        error = str(exc)
+
+    # Rapproche les codes publics avec les dossiers/client locaux WOPR.
+    con = db()
+    rows = con.execute("""
+        SELECT r.id, r.public_tracking_code, r.dossier_no, r.device_type,
+               r.brand_model, r.status,
+               c.first_name, c.last_name, c.name, c.company
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.public_tracking_code),'') <> ''
+    """).fetchall()
+    con.close()
+
+    local_by_code = {}
+    for row in rows:
+        code = str(row["public_tracking_code"] or "").strip().upper()
+        if not code:
+            continue
+
+        first_name = str(row["first_name"] or "").strip()
+        last_name = str(row["last_name"] or "").strip()
+        legacy_name = str(row["name"] or "").strip()
+        company = str(row["company"] or "").strip()
+
+        person = " ".join(x for x in [first_name, last_name] if x).strip()
+        client_name = company or person or legacy_name or "Client"
+
+        device = " — ".join(
+            x for x in [
+                str(row["device_type"] or "").strip(),
+                str(row["brand_model"] or "").strip(),
+            ] if x
+        )
+
+        local_by_code[code] = {
+            "repair_id": int(row["id"]),
+            "dossier_no": str(row["dossier_no"] or ""),
+            "client_name": client_name,
+            "device": device,
+            "status": str(row["status"] or ""),
+        }
+
+    enriched = []
+    for item in stats.get("codes") or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip().upper()
+        local = local_by_code.get(code, {})
+        enriched.append({
+            "code": code,
+            "views": int(item.get("views") or 0),
+            "unique_visitors": int(item.get("unique_visitors") or 0),
+            "first_view_at": _tracking_stats_datetime(item.get("first_view_at")),
+            "last_view_at": _tracking_stats_datetime(item.get("last_view_at")),
+            **local,
+        })
+
+    enriched.sort(key=lambda x: (int(x["views"]), str(x["last_view_at"])), reverse=True)
+
+    return render_template(
+        "tracking_stats.html",
+        stats=stats,
+        rows=enriched,
+        error=error,
+        tracking_enabled=bool(read_tracking_settings().get("enabled", False)),
+    )
+
+
 @app.route("/suivi")
 def index():
     to_return_only = request.args.get("a_restituer") == "1"
@@ -9656,8 +9813,8 @@ def index():
             "number": month,
             "name": month_names[month],
             "rows": month_rows,
-            "service_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only) else t["service"],
-            "goods_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only) else t["goods"],
+            "service_total": 0.0 if to_return_only else t["service"],
+            "goods_total": 0.0 if to_return_only else t["goods"],
         })
 
     try:
@@ -9674,8 +9831,6 @@ def index():
         yellow_count=yellow_count,
         to_return_count=to_return_count,
         to_return_only=to_return_only,
-        en_cours_only=en_cours_only,
-        attente_piece_only=attente_piece_only,
         client_search=client_search,
         search_all_years=bool(client_search_folded),
         edit_id=edit_id,
@@ -10951,6 +11106,1221 @@ def achats_ventes_sale_invoice_folder(entry_id):
         create=True
     )
     return _folder_open_response(folder)
+
+
+# ===== STOCK SIMPLE ==========================================================
+# V1 volontairement minimaliste : référence, fonction, quantité, remarques,
+# image. Les quantités restent du texte afin d'accepter "2x10", "2M/2F", etc.
+
+def ensure_stock_table():
+    con = db()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stock_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference TEXT NOT NULL,
+            function TEXT,
+            quantity TEXT,
+            remarks TEXT,
+            image_name TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.commit()
+    con.close()
+    STOCK_IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _stock_save_image(upload, old_name=""):
+    if not upload or not getattr(upload, "filename", ""):
+        return old_name
+
+    original = str(upload.filename or "").strip()
+    suffix = Path(original).suffix.lower()
+    allowed = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    if suffix not in allowed:
+        raise ValueError("Format d'image non accepté. Utilise JPG, PNG, WEBP ou GIF.")
+
+    STOCK_IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_hex(12)}{suffix}"
+    destination = STOCK_IMAGES_ROOT / filename
+    upload.save(destination)
+
+    if old_name:
+        try:
+            old_path = STOCK_IMAGES_ROOT / Path(str(old_name)).name
+            if old_path.is_file():
+                old_path.unlink()
+        except OSError:
+            pass
+    return filename
+
+
+
+
+def _stock_normalize_reference(value):
+    return re.sub(r"[\s\-_./]+", "", str(value or "")).casefold()
+
+
+def _stock_http_text(url, timeout=8):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/154 Safari/537.36",
+            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(2_500_000)
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return raw.decode(charset, errors="replace")
+
+
+def _stock_clean_search_text(value):
+    value = re.sub(r"<[^>]+>", " ", str(value or ""))
+    value = html.unescape(value)
+    return " ".join(value.split()).strip()
+
+
+def _stock_guess_from_reference(reference):
+    """Déductions locales sûres quand la référence contient déjà l'information."""
+    raw = " ".join(str(reference or "").split()).strip()
+    low = raw.casefold()
+    if not raw:
+        return ""
+
+    # Valeurs explicites : ex. "0201 100nF 10V Condensateur en Céramique"
+    cap = re.search(r"\b(0201|0402|0603|0805|1206)?\s*([0-9.,]+\s*(?:pf|nf|uf|µf))\s*([0-9.,]+\s*v)?\b", low, re.I)
+    if cap and ("condens" in low or re.search(r"\b(?:pf|nf|uf|µf)\b", low)):
+        size = (cap.group(1) or "").upper()
+        value = (cap.group(2) or "").replace(" ", "")
+        volts = (cap.group(3) or "").replace(" ", "")
+        parts = ["Condensateur céramique CMS"]
+        if size:
+            parts.append(size)
+        if value:
+            parts.append(value)
+        if volts:
+            parts.append(volts.upper())
+        return " ".join(parts)
+
+    if "connecteur" in low or "port " in low:
+        if "usb-c" in low or "type-c" in low or "type c" in low:
+            return "Connecteur USB-C"
+        if "micro usb" in low:
+            return "Connecteur Micro-USB"
+        if "hdmi" in low:
+            return "Connecteur HDMI"
+
+    if "ferrite" in low:
+        return "Ferrite"
+    if "relais" in low or "relay" in low:
+        return "Relais"
+    if "mosfet" in low:
+        if re.search(r"\bp[\s-]*(?:ch|channel)\b", low):
+            return "MOSFET canal P"
+        if re.search(r"\bn[\s-]*(?:ch|channel)\b", low):
+            return "MOSFET canal N"
+        return "MOSFET"
+    if "tvs" in low:
+        return "Diode TVS"
+    if "esd" in low and "diode" in low:
+        return "Diode de protection ESD"
+    if "buck" in low and "boost" in low:
+        return "Convertisseur Buck-Boost"
+    if "buck" in low or "step-down" in low or "step down" in low:
+        return "Régulateur Buck / Step-Down"
+    if "boost" in low or "step-up" in low or "step up" in low:
+        return "Régulateur Boost / Step-Up"
+    if "pd controller" in low or ("power delivery" in low and "controller" in low):
+        return "Contrôleur USB-C / Power Delivery"
+
+    # Famille 78Lxx : régulateurs linéaires positifs (78L05, 78L09, 78L12...)
+    m = re.fullmatch(r"78l(\d{2})", re.sub(r"[\s\-_./]+", "", low))
+    if m:
+        return f"Régulateur de tension {int(m.group(1))}V"
+
+    return ""
+
+
+def _stock_format_number_fr(value):
+    return str(value or "").replace(".", ",")
+
+
+def _stock_function_from_description(description):
+    """Convertit une description constructeur/distributeur en fonction courte."""
+    text = _stock_clean_search_text(description)
+    low = text.casefold()
+    if not text:
+        return ""
+
+    # Convertisseurs DC/DC : cas très courant en dépannage.
+    if (
+        ("synchronous" in low and ("step-down" in low or "step down" in low))
+        or "synchronous buck" in low
+    ):
+        vin = re.search(
+            r"(\d+(?:[.,]\d+)?)\s*[-v ]+\s*to\s*(\d+(?:[.,]\d+)?)\s*[- ]*v\s*(?:input)?",
+            text, re.I
+        )
+        amps = re.search(r"(\d+(?:[.,]\d+)?)\s*[- ]*a\b", text, re.I)
+        extras = []
+        if vin:
+            extras.append(
+                _stock_format_number_fr(vin.group(1)) + "–" +
+                _stock_format_number_fr(vin.group(2)) + " V"
+            )
+        if amps:
+            extras.append(_stock_format_number_fr(amps.group(1)) + " A")
+        return "Régulateur Buck synchrone" + ((" " + " / ".join(extras)) if extras else "")
+
+    if "step-down" in low or "step down" in low or "buck converter" in low or "buck regulator" in low:
+        return "Régulateur Buck / Step-Down"
+
+    if "step-up" in low or "step up" in low or "boost converter" in low or "boost regulator" in low:
+        return "Régulateur Boost / Step-Up"
+
+    if "buck-boost" in low or "buck boost" in low:
+        return "Convertisseur Buck-Boost"
+
+    if "high-side driver" in low or "high side driver" in low:
+        return "High-side driver"
+
+    if "low-side driver" in low or "low side driver" in low:
+        return "Low-side driver"
+
+    if "power delivery" in low and "controller" in low:
+        return "Contrôleur USB-C / Power Delivery"
+
+    if ("usb-c" in low or "usb type-c" in low or "type-c" in low) and "controller" in low:
+        return "Contrôleur USB-C"
+
+    if "power management" in low or re.search(r"\bpmic\b", low):
+        return "Contrôleur de gestion d’alimentation"
+
+    if "n-channel" in low and "mosfet" in low:
+        return "MOSFET canal N"
+
+    if "p-channel" in low and "mosfet" in low:
+        return "MOSFET canal P"
+
+    if "mosfet" in low:
+        return "MOSFET"
+
+    if "transient voltage suppress" in low or ("tvs" in low and "diode" in low):
+        return "Diode TVS"
+
+    if "schottky" in low and "diode" in low:
+        return "Diode Schottky"
+
+    if "fast switching diode" in low or "switching diode" in low:
+        return "Diode à commutation rapide"
+
+    if "esd protection" in low or ("esd" in low and "diode" in low):
+        return "Diode de protection ESD"
+
+    if "ferrite bead" in low or "ferrite chip" in low:
+        return "Ferrite"
+
+    if re.search(r"\brelay\b", low):
+        return "Relais"
+
+    if ("or gate" in low and ("2-input" in low or "quad" in low)):
+        return "Porte logique OR"
+
+    if "operational amplifier" in low or re.search(r"\bop[\s-]?amp\b", low):
+        return "Amplificateur opérationnel"
+
+    if "microcontroller" in low or re.search(r"\bmcu\b", low):
+        return "Microcontrôleur"
+
+    if "eeprom" in low:
+        return "Mémoire EEPROM"
+
+    if "flash memory" in low or "nor flash" in low or "nand flash" in low:
+        return "Mémoire Flash"
+
+    if "linear regulator" in low or re.search(r"\bldo\b", low):
+        return "Régulateur de tension LDO"
+
+    if "voltage regulator" in low:
+        return "Régulateur de tension"
+
+    # Trop générique : on préfère ne rien proposer plutôt qu'un résultat faux.
+    return ""
+
+
+def _stock_guess_function(reference, title, snippet):
+    """Propose seulement une vraie fonction électronique, jamais un titre Web."""
+    local = _stock_guess_from_reference(reference)
+    if local:
+        return local
+    return _stock_function_from_description(f"{title} {snippet}")
+
+
+def _stock_extract_bing_results(page):
+    results = []
+    blocks = re.findall(r'<li[^>]+class="b_algo"[^>]*>(.*?)</li>', page, flags=re.I | re.S)
+    for block in blocks[:10]:
+        title_m = re.search(r"<h2[^>]*>.*?<a[^>]*>(.*?)</a>", block, flags=re.I | re.S)
+        snippet_m = re.search(r"<p[^>]*>(.*?)</p>", block, flags=re.I | re.S)
+        title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        snippet = _stock_clean_search_text(snippet_m.group(1) if snippet_m else "")
+        if title or snippet:
+            results.append((title, snippet))
+    return results
+
+
+def _stock_extract_ddg_results(page):
+    results = []
+    # duckduckgo html : liens result__a et snippets result__snippet
+    blocks = re.findall(r'<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>', page, flags=re.I | re.S)
+    for block in blocks[:10]:
+        title_m = re.search(r'class="result__a"[^>]*>(.*?)</a>', block, flags=re.I | re.S)
+        snippet_m = re.search(r'class="result__snippet"[^>]*>(.*?)</(?:a|div)>', block, flags=re.I | re.S)
+        title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        snippet = _stock_clean_search_text(snippet_m.group(1) if snippet_m else "")
+        if title or snippet:
+            results.append((title, snippet))
+    return results
+
+
+def _stock_ti_marking_candidates(reference):
+    """Interroge directement l'outil officiel TI de correspondance des marquages."""
+    ref = str(reference or "").strip()
+    if not ref:
+        return []
+
+    url = (
+        "https://www.ti.com/packaging/en/docs/partlookup.tsp?partmarking="
+        + urllib.parse.quote_plus(ref)
+    )
+    try:
+        page = _stock_http_text(url, timeout=8)
+    except Exception:
+        return []
+
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", page, flags=re.I | re.S)
+    found = []
+    seen = set()
+
+    for tr in rows:
+        cells = [
+            _stock_clean_search_text(x)
+            for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.I | re.S)
+        ]
+        if len(cells) < 5:
+            continue
+
+        # Colonnes TI : Part number | Marking | Package | Pins | Status | Description
+        part = cells[0].strip()
+        marking = cells[1].strip()
+        description = cells[-1].strip()
+
+        if _stock_normalize_reference(marking) != _stock_normalize_reference(ref):
+            continue
+
+        function = _stock_function_from_description(description)
+        if not function:
+            continue
+
+        key = function.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append({
+            "function": function,
+            "details": f"{part} — {description}",
+            "title": part,
+            "source": "Texas Instruments",
+        })
+
+    return found[:5]
+
+
+def _stock_web_identify(reference):
+    """Identification électronique : sources constructeur d'abord,
+    recherche Web stricte ensuite. Aucun titre Web brut n'est proposé.
+    """
+    reference = str(reference or "").strip()
+    if not reference:
+        return {"found": False, "candidates": []}
+
+    candidates = []
+    seen = set()
+
+    def add_candidate(candidate):
+        function = " ".join(str(candidate.get("function") or "").split()).strip()
+        if not function:
+            return
+        key = function.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append({
+            "function": function,
+            "details": str(candidate.get("details") or "")[:300],
+            "title": str(candidate.get("title") or "")[:160],
+            "source": str(candidate.get("source") or ""),
+        })
+
+    # 1) Si la saisie décrit déjà clairement le composant.
+    local_guess = _stock_guess_from_reference(reference)
+    if local_guess:
+        add_candidate({
+            "function": local_guess,
+            "details": "Déduit directement de la référence / description saisie.",
+            "source": "WOPR",
+        })
+
+    # 2) Marquage boîtier Texas Instruments : source constructeur officielle.
+    for candidate in _stock_ti_marking_candidates(reference):
+        add_candidate(candidate)
+
+    # 3) Recherche Web stricte pour les autres fabricants / références.
+    ref_norm = _stock_normalize_reference(reference)
+
+    def result_is_relevant(title, snippet):
+        hay = _stock_normalize_reference(f"{title} {snippet}")
+        return bool(ref_norm and ref_norm in hay)
+
+    queries = [
+        f'"{reference}" datasheet semiconductor',
+        f'"{reference}" electronic component datasheet',
+        f'"{reference}" IC datasheet',
+    ]
+
+    for q in queries:
+        if len(candidates) >= 5:
+            break
+        try:
+            url = "https://www.bing.com/search?q=" + urllib.parse.quote_plus(q) + "&setlang=en"
+            page = _stock_http_text(url, timeout=7)
+            for title, snippet in _stock_extract_bing_results(page):
+                if not result_is_relevant(title, snippet):
+                    continue
+                function = _stock_guess_function(reference, title, snippet)
+                if not function:
+                    continue
+                add_candidate({
+                    "function": function,
+                    "details": snippet,
+                    "title": title,
+                    "source": "Web",
+                })
+                if len(candidates) >= 5:
+                    break
+        except Exception:
+            pass
+
+    # Fallback DuckDuckGo, même filtre strict.
+    if not candidates:
+        try:
+            q = urllib.parse.quote_plus(f'"{reference}" datasheet semiconductor')
+            page = _stock_http_text("https://html.duckduckgo.com/html/?q=" + q, timeout=7)
+            for title, snippet in _stock_extract_ddg_results(page):
+                if not result_is_relevant(title, snippet):
+                    continue
+                function = _stock_guess_function(reference, title, snippet)
+                if not function:
+                    continue
+                add_candidate({
+                    "function": function,
+                    "details": snippet,
+                    "title": title,
+                    "source": "Web",
+                })
+                if len(candidates) >= 5:
+                    break
+        except Exception:
+            pass
+
+    return {
+        "found": bool(candidates),
+        "function": candidates[0]["function"] if candidates else "",
+        "details": candidates[0]["details"] if candidates else "",
+        "candidates": candidates[:5],
+        "source": candidates[0]["source"] if candidates else "",
+    }
+
+
+def _stock_web_images(reference):
+    reference = str(reference or "").strip()
+    if not reference:
+        return []
+    query = urllib.parse.quote_plus(f"{reference} electronic component")
+    url = "https://www.bing.com/images/search?q=" + query + "&form=HDRSC2"
+    page = _stock_http_text(url)
+
+    urls = []
+    # Bing embarque les URLs originales dans les métadonnées JSON murl.
+    for raw in re.findall(r'&quot;murl&quot;:&quot;(.*?)&quot;', page, flags=re.I):
+        value = html.unescape(raw).replace("\\/", "/")
+        if value.startswith(("http://", "https://")) and value not in urls:
+            urls.append(value)
+        if len(urls) >= 12:
+            break
+
+    if not urls:
+        for raw in re.findall(r'"murl"\s*:\s*"(https?://[^"]+)"', page, flags=re.I):
+            value = raw.replace("\\/", "/")
+            if value not in urls:
+                urls.append(value)
+            if len(urls) >= 12:
+                break
+    return urls
+
+
+def _stock_remote_image_allowed(url):
+    try:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _stock_download_remote_image(url, old_name=""):
+    if not _stock_remote_image_allowed(url):
+        raise ValueError("Adresse d'image refusée.")
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        raw = resp.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise ValueError("Image trop volumineuse.")
+
+    ext_by_type = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    suffix = ext_by_type.get(content_type)
+    if not suffix:
+        # Vérifie quand même via Pillow si le serveur ne donne pas un bon MIME.
+        try:
+            img = Image.open(io.BytesIO(raw))
+            fmt = (img.format or "").upper()
+            suffix = { "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif" }.get(fmt)
+        except Exception:
+            suffix = None
+    if not suffix:
+        raise ValueError("Le résultat choisi n'est pas une image compatible.")
+
+    STOCK_IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_hex(12)}{suffix}"
+    dest = STOCK_IMAGES_ROOT / filename
+    dest.write_bytes(raw)
+
+    if old_name:
+        try:
+            old_path = STOCK_IMAGES_ROOT / Path(str(old_name)).name
+            if old_path.is_file():
+                old_path.unlink()
+        except OSError:
+            pass
+    return filename
+
+
+@app.route("/stock/lookup")
+def stock_lookup():
+    ensure_stock_table()
+    reference = str(request.args.get("reference") or "").strip()
+    if not reference:
+        return jsonify({"found": False})
+
+    normalized = _stock_normalize_reference(reference)
+    con = db()
+    rows = con.execute("""
+        SELECT reference, function
+        FROM stock_items
+        WHERE COALESCE(trim(function),'') <> ''
+        ORDER BY updated_at DESC, id DESC
+    """).fetchall()
+    con.close()
+
+    for row in rows:
+        if _stock_normalize_reference(row["reference"]) == normalized:
+            return jsonify({
+                "found": True,
+                "function": str(row["function"] or "").strip(),
+                "source": "stock",
+            })
+    return jsonify({"found": False})
+
+
+@app.route("/stock/identify")
+def stock_identify():
+    reference = str(request.args.get("reference") or "").strip()
+    if not reference:
+        return jsonify({"found": False, "error": "Référence vide.", "candidates": []}), 400
+
+    # Valeur actuelle éventuelle, uniquement informative.
+    current_function = ""
+    try:
+        normalized = _stock_normalize_reference(reference)
+        con = db()
+        rows = con.execute("""
+            SELECT reference, function
+            FROM stock_items
+            WHERE COALESCE(trim(function),'') <> ''
+            ORDER BY updated_at DESC, id DESC
+        """).fetchall()
+        con.close()
+        for row in rows:
+            if _stock_normalize_reference(row["reference"]) == normalized:
+                current_function = str(row["function"] or "").strip()
+                break
+    except Exception:
+        pass
+
+    try:
+        result = _stock_web_identify(reference)
+        result["current_function"] = current_function
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({
+            "found": False,
+            "current_function": current_function,
+            "candidates": [],
+            "error": "Recherche Internet impossible pour le moment.",
+            "detail": str(exc)[:160],
+        }), 502
+
+
+@app.route("/stock/images")
+def stock_images_search():
+    reference = str(request.args.get("reference") or "").strip()
+    if not reference:
+        return jsonify({"images": [], "error": "Référence vide."}), 400
+    try:
+        return jsonify({"images": _stock_web_images(reference)})
+    except Exception as exc:
+        return jsonify({
+            "images": [],
+            "error": "Recherche d'images impossible pour le moment.",
+            "detail": str(exc)[:160],
+        }), 502
+
+
+@app.route("/stock/<int:item_id>/identify", methods=["POST"])
+def stock_identify_existing(item_id):
+    ensure_stock_table()
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    con.close()
+    if not row:
+        return jsonify({"ok": False, "error": "Article introuvable."}), 404
+
+    try:
+        result = _stock_web_identify(row["reference"])
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": "Recherche Internet impossible.",
+            "detail": str(exc)[:160],
+            "candidates": [],
+        }), 502
+
+    return jsonify({
+        "ok": bool(result.get("found")),
+        "current_function": str(row["function"] or "").strip(),
+        "candidates": result.get("candidates") or [],
+        "error": "" if result.get("found") else "Aucune fonction trouvée.",
+    })
+
+
+@app.route("/stock/<int:item_id>/function", methods=["POST"])
+def stock_apply_function(item_id):
+    ensure_stock_table()
+    function = " ".join(str(request.form.get("function") or "").split()).strip()
+    if not function:
+        return jsonify({"ok": False, "error": "Fonction vide."}), 400
+
+    con = db()
+    row = con.execute("SELECT id FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return jsonify({"ok": False, "error": "Article introuvable."}), 404
+
+    con.execute(
+        "UPDATE stock_items SET function=?, updated_at=? WHERE id=?",
+        (function, now().isoformat(timespec="seconds"), item_id),
+    )
+    con.commit()
+    con.close()
+    audit_event("STOCK_FUNCTION", f"id={item_id} -> {function}", request.remote_addr)
+    return jsonify({"ok": True, "function": function})
+
+
+@app.route("/stock/<int:item_id>/image-url", methods=["POST"])
+def stock_set_remote_image(item_id):
+    ensure_stock_table()
+    image_url = str(request.form.get("image_url") or "").strip()
+    if not image_url:
+        return jsonify({"ok": False, "error": "Image non sélectionnée."}), 400
+
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return jsonify({"ok": False, "error": "Article introuvable."}), 404
+
+    try:
+        image_name = _stock_download_remote_image(image_url, str(row["image_name"] or ""))
+    except ValueError as exc:
+        con.close()
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        con.close()
+        return jsonify({"ok": False, "error": "Téléchargement de l'image impossible.", "detail": str(exc)[:160]}), 502
+
+    con.execute(
+        "UPDATE stock_items SET image_name=?, updated_at=? WHERE id=?",
+        (image_name, now().isoformat(timespec="seconds"), item_id),
+    )
+    con.commit()
+    con.close()
+    audit_event("STOCK_IMAGE_WEB", f"id={item_id}", request.remote_addr)
+    return jsonify({"ok": True, "image_url": url_for("stock_image", item_id=item_id)})
+
+
+@app.route("/stock")
+def stock_page():
+    ensure_stock_table()
+    q = str(request.args.get("q") or "").strip()
+    edit_id = request.args.get("edit", type=int)
+
+    con = db()
+    if q:
+        like = f"%{q}%"
+        items = con.execute("""
+            SELECT *
+            FROM stock_items
+            WHERE reference LIKE ? COLLATE NOCASE
+               OR function LIKE ? COLLATE NOCASE
+               OR quantity LIKE ? COLLATE NOCASE
+               OR remarks LIKE ? COLLATE NOCASE
+            ORDER BY reference COLLATE NOCASE, id
+        """, (like, like, like, like)).fetchall()
+    else:
+        items = con.execute("""
+            SELECT *
+            FROM stock_items
+            ORDER BY reference COLLATE NOCASE, id
+        """).fetchall()
+
+    edit_item = None
+    if edit_id:
+        edit_item = con.execute("SELECT * FROM stock_items WHERE id=?", (edit_id,)).fetchone()
+    con.close()
+
+    return render_template(
+        "stock.html",
+        items=items,
+        q=q,
+        edit_item=edit_item,
+    )
+
+
+@app.route("/stock/add", methods=["POST"])
+def stock_add():
+    ensure_stock_table()
+    reference = str(request.form.get("reference") or "").strip()
+    if not reference:
+        flash("Le composant / la référence est obligatoire.")
+        return redirect(url_for("stock_page"))
+
+    try:
+        image_name = _stock_save_image(request.files.get("image"))
+        if not image_name:
+            selected_image_url = str(request.form.get("selected_image_url") or "").strip()
+            if selected_image_url:
+                image_name = _stock_download_remote_image(selected_image_url)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for("stock_page"))
+    except Exception:
+        flash("Impossible de récupérer l'image sélectionnée.")
+        return redirect(url_for("stock_page"))
+
+    stamp = now().isoformat(timespec="seconds")
+    con = db()
+    con.execute("""
+        INSERT INTO stock_items(
+            reference, function, quantity, remarks, image_name, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?)
+    """, (
+        reference,
+        str(request.form.get("function") or "").strip(),
+        str(request.form.get("quantity") or "").strip(),
+        str(request.form.get("remarks") or "").strip(),
+        image_name,
+        stamp, stamp,
+    ))
+    con.commit()
+    con.close()
+    audit_event("STOCK_ADD", reference, request.remote_addr)
+    flash("Article ajouté au stock.")
+    return redirect(url_for("stock_page"))
+
+
+@app.route("/stock/<int:item_id>/edit", methods=["POST"])
+def stock_edit(item_id):
+    ensure_stock_table()
+    reference = str(request.form.get("reference") or "").strip()
+    if not reference:
+        flash("Le composant / la référence est obligatoire.")
+        return redirect(url_for("stock_page", edit=item_id))
+
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Article introuvable", 404
+
+    old_image = str(row["image_name"] or "")
+    image_name = old_image
+
+    if request.form.get("remove_image") == "1" and old_image:
+        try:
+            old_path = STOCK_IMAGES_ROOT / Path(old_image).name
+            if old_path.is_file():
+                old_path.unlink()
+        except OSError:
+            pass
+        image_name = ""
+
+    upload = request.files.get("image")
+    if upload and getattr(upload, "filename", ""):
+        try:
+            image_name = _stock_save_image(upload, image_name)
+        except ValueError as exc:
+            con.close()
+            flash(str(exc))
+            return redirect(url_for("stock_page", edit=item_id))
+    else:
+        selected_image_url = str(request.form.get("selected_image_url") or "").strip()
+        if selected_image_url:
+            try:
+                image_name = _stock_download_remote_image(selected_image_url, image_name)
+            except ValueError as exc:
+                con.close()
+                flash(str(exc))
+                return redirect(url_for("stock_page", edit=item_id))
+            except Exception:
+                con.close()
+                flash("Impossible de récupérer l'image sélectionnée.")
+                return redirect(url_for("stock_page", edit=item_id))
+
+    con.execute("""
+        UPDATE stock_items
+        SET reference=?, function=?, quantity=?, remarks=?, image_name=?, updated_at=?
+        WHERE id=?
+    """, (
+        reference,
+        str(request.form.get("function") or "").strip(),
+        str(request.form.get("quantity") or "").strip(),
+        str(request.form.get("remarks") or "").strip(),
+        image_name,
+        now().isoformat(timespec="seconds"),
+        item_id,
+    ))
+    con.commit()
+    con.close()
+    audit_event("STOCK_EDIT", f"id={item_id} {reference}", request.remote_addr)
+    flash("Article modifié.")
+    return redirect(url_for("stock_page"))
+
+
+
+@app.route("/stock/<int:item_id>/quantity", methods=["POST"])
+def stock_quantity_adjust(item_id):
+    ensure_stock_table()
+    try:
+        delta = int(request.form.get("delta") or 0)
+    except Exception:
+        delta = 0
+    if delta not in (-1, 1):
+        return "Variation invalide", 400
+
+    con = db()
+    row = con.execute("SELECT reference, quantity FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Article introuvable", 404
+
+    raw = str(row["quantity"] or "").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        con.close()
+        flash(f"Quantité '{raw or 'vide'}' non numérique : utilise Modifier pour cet article.")
+        return redirect(url_for("stock_page"))
+
+    new_value = max(0, value + delta)
+    con.execute(
+        "UPDATE stock_items SET quantity=?, updated_at=? WHERE id=?",
+        (str(new_value), now().isoformat(timespec="seconds"), item_id)
+    )
+    con.commit()
+    con.close()
+
+    audit_event("STOCK_QUANTITY", f"id={item_id} delta={delta} -> {new_value}", request.remote_addr)
+    return redirect(url_for("stock_page"))
+
+
+@app.route("/stock/<int:item_id>/delete", methods=["POST"])
+def stock_delete(item_id):
+    ensure_stock_table()
+    backup_database(force=True, tag="avant_suppression_stock")
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Article introuvable", 404
+
+    image_name = str(row["image_name"] or "")
+    reference = str(row["reference"] or "")
+    con.execute("DELETE FROM stock_items WHERE id=?", (item_id,))
+    con.commit()
+    con.close()
+
+    if image_name:
+        try:
+            image_path = STOCK_IMAGES_ROOT / Path(image_name).name
+            if image_path.is_file():
+                image_path.unlink()
+        except OSError:
+            pass
+
+    audit_event("STOCK_DELETE", f"id={item_id} {reference}", request.remote_addr)
+    flash("Article supprimé du stock.")
+    return redirect(url_for("stock_page"))
+
+
+
+@app.route("/stock/export.csv")
+def stock_export_csv():
+    ensure_stock_table()
+    con = db()
+    rows = con.execute("""
+        SELECT reference, function, quantity, remarks
+        FROM stock_items
+        ORDER BY reference COLLATE NOCASE, id
+    """).fetchall()
+    con.close()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";", lineterminator="\n")
+    writer.writerow(["Composant / Référence", "Fonction", "Quantité", "Remarques"])
+    for row in rows:
+        writer.writerow([
+            str(row["reference"] or ""),
+            str(row["function"] or ""),
+            str(row["quantity"] or ""),
+            str(row["remarks"] or ""),
+        ])
+
+    data = ("\ufeff" + output.getvalue()).encode("utf-8")
+    return Response(
+        data,
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="WOPR-Stock.csv"'
+        },
+    )
+
+
+
+def _stock_pdf_wrap(text, font_name, font_size, max_width, max_lines=4):
+    value = " ".join(str(text or "").split())
+    if not value:
+        return [""]
+    words = value.split()
+    lines = []
+    current = ""
+
+    for word in words:
+        candidate = word if not current else current + " " + word
+        if pdfmetrics.stringWidth(candidate, font_name, font_size) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            if len(lines) >= max_lines:
+                break
+
+        if pdfmetrics.stringWidth(word, font_name, font_size) <= max_width:
+            current = word
+            continue
+
+        part = ""
+        for char in word:
+            test = part + char
+            if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
+                part = test
+            else:
+                if part:
+                    lines.append(part)
+                    if len(lines) >= max_lines:
+                        break
+                part = char
+        current = part
+        if len(lines) >= max_lines:
+            break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if len(lines) == max_lines:
+        joined = " ".join(lines)
+        if len(joined) < len(value):
+            last = lines[-1]
+            while last and pdfmetrics.stringWidth(last + "...", font_name, font_size) > max_width:
+                last = last[:-1]
+            lines[-1] = last.rstrip() + "..."
+
+    return lines or [""]
+
+
+@app.route("/stock/export.pdf")
+def stock_export_pdf():
+    ensure_stock_table()
+    con = db()
+    rows = con.execute("""
+        SELECT id, reference, function, quantity, remarks, image_name
+        FROM stock_items
+        ORDER BY reference COLLATE NOCASE, id
+    """).fetchall()
+    con.close()
+
+    buffer = io.BytesIO()
+    page_w, page_h = A4[1], A4[0]  # A4 paysage
+    pdf = canvas.Canvas(buffer, pagesize=(page_w, page_h))
+    pdf.setTitle("WOPR - Stock composants")
+    pdf.setAuthor(str(cfg().get("business_name") or "Foul-Fix"))
+
+    # Palette sobre, proche de WOPR.
+    ink = colors.HexColor("#10202D")
+    muted = colors.HexColor("#60717E")
+    line = colors.HexColor("#CBD5DC")
+    header_bg = colors.HexColor("#EAF2F8")
+    zebra = colors.HexColor("#F8FAFB")
+    accent = colors.HexColor("#2E78A6")
+    qty_bg = colors.HexColor("#E5F5E9")
+    qty_fg = colors.HexColor("#20623A")
+
+    margin_x = 11 * mm
+    top_margin = 10 * mm
+    bottom_margin = 10 * mm
+    content_w = page_w - 2 * margin_x
+
+    # Colonnes : photo / référence / fonction / quantité / remarques
+    widths = [31 * mm, 58 * mm, 58 * mm, 22 * mm, content_w - (31 + 58 + 58 + 22) * mm]
+    x = [margin_x]
+    for w in widths:
+        x.append(x[-1] + w)
+
+    table_top = page_h - 34 * mm
+    header_h = 9 * mm
+    row_h = 27 * mm
+    usable_h = table_top - bottom_margin - 10 * mm - header_h
+    rows_per_page = max(1, int(usable_h // row_h))
+    total_pages = max(1, (len(rows) + rows_per_page - 1) // rows_per_page)
+
+    def draw_page_header(page_no):
+        # Bandeau titre
+        pdf.setFillColor(ink)
+        pdf.roundRect(margin_x, page_h - 28 * mm, content_w, 18 * mm, 3 * mm, fill=1, stroke=0)
+
+        # Logo Foul-Fix si disponible
+        logo = invoice_logo_path()
+        logo_right = margin_x
+        if logo and logo.is_file():
+            try:
+                img = ImageReader(str(logo))
+                iw, ih = img.getSize()
+                max_w, max_h = 34 * mm, 12 * mm
+                scale = min(max_w / float(iw), max_h / float(ih))
+                dw, dh = iw * scale, ih * scale
+                pdf.drawImage(
+                    img,
+                    margin_x + 4 * mm,
+                    page_h - 25 * mm + (12 * mm - dh) / 2,
+                    width=dw, height=dh,
+                    preserveAspectRatio=True, mask="auto",
+                )
+                logo_right = margin_x + 4 * mm + dw + 6 * mm
+            except Exception:
+                logo_right = margin_x + 4 * mm
+
+        pdf.setFillColor(colors.white)
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(logo_right, page_h - 17.2 * mm, "STOCK COMPOSANTS")
+
+        pdf.setFont("Helvetica", 8.5)
+        pdf.setFillColor(colors.HexColor("#D9E7F0"))
+        pdf.drawString(logo_right, page_h - 22 * mm, "Références, fonctions, quantités et repères visuels")
+
+        # Infos à droite
+        pdf.setFillColor(colors.white)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawRightString(page_w - margin_x - 4 * mm, page_h - 16.5 * mm, f"{len(rows)} référence{'s' if len(rows) != 1 else ''}")
+        pdf.setFont("Helvetica", 7.8)
+        pdf.setFillColor(colors.HexColor("#D9E7F0"))
+        pdf.drawRightString(page_w - margin_x - 4 * mm, page_h - 21.5 * mm, now().strftime("Export du %d/%m/%Y à %H:%M"))
+
+        # En-tête du tableau
+        y = table_top
+        pdf.setFillColor(header_bg)
+        pdf.roundRect(margin_x, y - header_h, content_w, header_h, 1.5 * mm, fill=1, stroke=0)
+        pdf.setFillColor(ink)
+        pdf.setFont("Helvetica-Bold", 8.2)
+        headers = ["IMAGE", "COMPOSANT / RÉFÉRENCE", "FONCTION", "QTÉ", "REMARQUES"]
+        for i, title in enumerate(headers):
+            pdf.drawString(x[i] + 2.2 * mm, y - 5.8 * mm, title)
+
+        # Pagination en bas
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica", 7.5)
+        pdf.drawString(margin_x, 6 * mm, "Foul-Fix  •  WOPR  •  Stock interne")
+        pdf.drawRightString(page_w - margin_x, 6 * mm, f"Page {page_no}/{total_pages}")
+        return y - header_h
+
+    def draw_text_cell(value, x0, y_top, width, bold=False, size=8.2, max_lines=5, color=ink):
+        font = "Helvetica-Bold" if bold else "Helvetica"
+        lines = _stock_pdf_wrap(value, font, size, width - 5 * mm, max_lines=max_lines)
+        pdf.setFillColor(color)
+        pdf.setFont(font, size)
+        line_h = 3.8 * mm
+        block_h = len(lines) * line_h
+        ty = y_top - (row_h - block_h) / 2 - 2.5 * mm
+        for txt in lines:
+            pdf.drawString(x0 + 2.4 * mm, ty, txt)
+            ty -= line_h
+
+    page_no = 1
+    y = draw_page_header(page_no)
+
+    for idx, row in enumerate(rows):
+        if idx and idx % rows_per_page == 0:
+            pdf.showPage()
+            page_no += 1
+            y = draw_page_header(page_no)
+
+        # Fond alterné + contour
+        row_bg = colors.white if idx % 2 == 0 else zebra
+        pdf.setFillColor(row_bg)
+        pdf.setStrokeColor(line)
+        pdf.setLineWidth(0.4)
+        pdf.roundRect(margin_x, y - row_h, content_w, row_h, 1.5 * mm, fill=1, stroke=1)
+
+        # Séparateurs
+        pdf.setStrokeColor(colors.HexColor("#DFE6EA"))
+        for xx in x[1:-1]:
+            pdf.line(xx, y - row_h + 1.5 * mm, xx, y - 1.5 * mm)
+
+        # Photo dans une carte blanche
+        photo_x = x[0] + 3 * mm
+        photo_y = y - row_h + 3 * mm
+        photo_w = widths[0] - 6 * mm
+        photo_h = row_h - 6 * mm
+        pdf.setFillColor(colors.white)
+        pdf.setStrokeColor(colors.HexColor("#D8E0E5"))
+        pdf.roundRect(photo_x, photo_y, photo_w, photo_h, 1.5 * mm, fill=1, stroke=1)
+
+        image_name = str(row["image_name"] or "").strip()
+        image_drawn = False
+        if image_name:
+            image_path = STOCK_IMAGES_ROOT / Path(image_name).name
+            if image_path.is_file():
+                try:
+                    img = ImageReader(str(image_path))
+                    iw, ih = img.getSize()
+                    max_w, max_h = photo_w - 4 * mm, photo_h - 4 * mm
+                    scale = min(max_w / float(iw), max_h / float(ih))
+                    dw, dh = iw * scale, ih * scale
+                    pdf.drawImage(
+                        img,
+                        photo_x + (photo_w - dw) / 2,
+                        photo_y + (photo_h - dh) / 2,
+                        width=dw, height=dh,
+                        preserveAspectRatio=True, mask="auto",
+                    )
+                    image_drawn = True
+                except Exception:
+                    pass
+
+        if not image_drawn:
+            pdf.setFillColor(colors.HexColor("#A8B4BC"))
+            pdf.setFont("Helvetica", 7)
+            pdf.drawCentredString(photo_x + photo_w / 2, photo_y + photo_h / 2 - 2, "Pas d'image")
+
+        # Référence / fonction
+        draw_text_cell(row["reference"], x[1], y, widths[1], bold=True, size=9.2, max_lines=4)
+        draw_text_cell(row["function"], x[2], y, widths[2], size=8.2, max_lines=5, color=colors.HexColor("#324653"))
+
+        # Badge quantité
+        qty = str(row["quantity"] or "").strip() or "-"
+        badge_w = min(widths[3] - 6 * mm, max(12 * mm, pdfmetrics.stringWidth(qty, "Helvetica-Bold", 9) + 7 * mm))
+        badge_h = 8 * mm
+        bx = x[3] + (widths[3] - badge_w) / 2
+        by = y - row_h / 2 - badge_h / 2
+        pdf.setFillColor(qty_bg)
+        pdf.setStrokeColor(colors.HexColor("#B8DFC3"))
+        pdf.roundRect(bx, by, badge_w, badge_h, 4 * mm, fill=1, stroke=1)
+        pdf.setFillColor(qty_fg)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawCentredString(bx + badge_w / 2, by + 2.6 * mm, qty)
+
+        # Remarques
+        draw_text_cell(row["remarks"], x[4], y, widths[4], size=7.8, max_lines=5, color=muted)
+
+        y -= row_h
+
+    if not rows:
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica", 11)
+        pdf.drawCentredString(page_w / 2, table_top - 28 * mm, "Aucun article dans le stock.")
+
+    pdf.save()
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="WOPR-Stock.pdf",
+    )
+
+
+@app.route("/stock/<int:item_id>/image")
+def stock_image(item_id):
+    ensure_stock_table()
+    con = db()
+    row = con.execute("SELECT image_name FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    con.close()
+    if not row or not str(row["image_name"] or "").strip():
+        abort(404)
+
+    filename = Path(str(row["image_name"])).name
+    path = STOCK_IMAGES_ROOT / filename
+    if not path.is_file():
+        abort(404)
+    return send_file(path, as_attachment=False, max_age=3600)
 
 
 @app.route("/achats-ventes")
@@ -15067,6 +16437,14 @@ def _sumup_invoice_candidates():
 
     result = []
     for members in grouped.values():
+        # Uniquement les factures réellement encaissées, ou les anciennes lignes
+        # qui possèdent déjà une date comptable. Évite les impayés dans les candidats.
+        if not any(
+            bool(x.get("paid")) or str(x.get("accounting_date") or "").strip()
+            for x in members
+        ):
+            continue
+
         rep = next((x for x in members if not x.get("legacy_imported")), members[0])
         total, total_source = _sumup_invoice_total_from_members(members)
 
