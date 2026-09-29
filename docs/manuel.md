@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
 **Version documentée : 2.6.0**
-**Documentation mise à jour : 25 septembre 2026**
+**Documentation mise à jour : 29 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -39,7 +39,7 @@ Le développement peut être soutenu volontairement via PayPal :
 
 **https://paypal.me/foul**
 
-![QR code PayPal](images/paypal-qr.png)
+[![QR code PayPal](images/paypal-qr.png)](https://paypal.me/foul)
 
 Le don est totalement facultatif. Il ne débloque aucune fonctionnalité, ne donne accès à aucune version Premium et n’accorde aucun avantage dans le logiciel.
 
@@ -103,7 +103,7 @@ Le lanceur permet d’arrêter proprement WOPR.
 
 Une sauvegarde d’arrêt n’est créée que si la base a changé depuis la sauvegarde précédente. Cela évite de générer inutilement des copies identiques.
 
-Au démarrage, WOPR privilégie la base SQLite contenant les données clients et réparations les plus complètes plutôt que de se fier uniquement au nom du fichier. Cette protection évite de sélectionner par erreur une base vide ou incomplète.
+Au démarrage, WOPR utilise la base officielle `private/data/wopr.db`.
 
 ---
 
@@ -152,11 +152,7 @@ Les actions utilisent une logique commune :
 
 ### 4.3 Thème 8-BIT
 
-Le thème 8-BIT conserve le rendu pixel-art finalisé lors de la série 2.3.285, avec les ajustements de cohérence apportés en 2.3.287.
-
-Les boutons d’action adoptent un rendu pixel-art cohérent, y compris les boutons créés dynamiquement par JavaScript comme certains boutons **Facture** et **Dossier**.
-
-Les tableaux et badges reçoivent également un habillage arcade léger, sans rendre les données difficiles à lire.
+Le thème 8-BIT conserve un rendu pixel-art cohérent pour les boutons, tableaux et badges, y compris sur les écrans haute résolution.
 
 ---
 
@@ -178,6 +174,8 @@ Elle sert à voir rapidement :
 - les derniers dossiers modifiés.
 
 Le bouton **Nouvelle réparation** est placé directement dans cette page.
+
+Depuis la version 2.6.0, le tableau Atelier donne également accès à **Stats suivi en ligne**, qui affiche les consultations réelles du portail client.
 
 Les cartes du tableau de bord sont cliquables lorsqu’un accès détaillé existe.
 
@@ -277,13 +275,29 @@ Les PDF ne sont pas analysés pour récupérer les montants.
 
 Les tableaux larges restent utilisables sur des écrans 2K/4K grâce au défilement horizontal.
 
-La légende suit la largeur réelle du tableau et ne déborde plus sur l’espace vide du conteneur.
-
 ### 7.3 Documents
 
 Les PDF générés sont affichés directement dans le navigateur lorsque cela est possible.
 
 Le bouton **Dossier** ouvre le répertoire dans lequel le document est archivé.
+
+### 7.4 Suivi client en ligne et statistiques
+
+WOPR peut publier les informations autorisées vers un portail de suivi configuré par l’atelier.
+
+L’URL du portail et celle de l’API sont configurables : aucun domaine particulier n’est imposé par WOPR.
+
+Depuis la version 2.6.0, WOPR peut récupérer des statistiques privées de consultation du portail :
+
+- vues aujourd’hui ;
+- vues sur les 7 derniers jours ;
+- vues du mois ;
+- visiteurs distincts ;
+- première consultation ;
+- dernière consultation ;
+- détail par code de suivi.
+
+Une consultation n’est comptée que lorsqu’un code valide affiche réellement un dossier. Les adresses IP ne sont pas conservées en clair pour ces statistiques.
 
 ---
 
@@ -516,7 +530,33 @@ Le chiffre d’affaires officiel reste issu du Suivi.
 
 ---
 
-## 13. Abby
+## 13. Stock composants
+
+Le module **Stock** reste volontairement simple et orienté atelier.
+
+Chaque fiche peut contenir :
+
+- Composant / Référence ;
+- Fonction ;
+- Quantité ;
+- Remarques ;
+- Image.
+
+Le module propose également :
+
+- recherche instantanée ;
+- ajustement rapide des quantités ;
+- agrandissement des images ;
+- export CSV ;
+- export PDF ;
+- recherche intégrée d’images ;
+- aide à l’identification de la fonction électronique.
+
+L’identification automatique reste une aide : l’utilisateur garde la main sur les informations enregistrées.
+
+---
+
+## 14. Abby
 
 L’intégration **Abby** est optionnelle.
 
@@ -534,7 +574,7 @@ Les clés et paramètres Abby restent dans la partie privée.
 
 ---
 
-## 14. Antivirus
+## 15. Antivirus
 
 La page **Antivirus** sert de registre pour les licences et renouvellements.
 
@@ -553,18 +593,11 @@ Des compteurs indiquent :
 - les licences à renouveler dans les 30 jours ;
 - les licences expirées.
 
-L’édition se fait directement dans la ligne :
-
-- **Éditer** active les champs ;
-- **Valider** enregistre ;
-- **Annuler** abandonne les changements ;
-- **Supprimer** efface la ligne après confirmation.
-
-Dans le thème 8-BIT, ces boutons suivent la même logique de couleurs et le même skin que les autres actions.
+L’édition se fait directement dans la ligne.
 
 ---
 
-## 15. CA / Déclarations
+## 16. CA / Déclarations
 
 La page **CA / Déclarations** présente les valeurs nécessaires au suivi administratif.
 
@@ -578,7 +611,7 @@ Une correction d’un PDF ne doit donc pas être utilisée pour corriger le CA.
 
 ---
 
-## 16. Communication client
+## 17. Communication client
 
 WOPR peut préparer différents messages :
 
@@ -597,53 +630,53 @@ Selon la configuration, l’envoi peut utiliser :
 - KDE Connect pour le SMS ;
 - un texte préparé à copier dans un autre service.
 
-Tous les envois SMTP construits par WOPR (suivi, facture, facture simple via la facture, devis) utilisent la même signature e-mail locale lorsqu’elle est activée. L’image de signature et ses paramètres sont conservés dans `private/` et sont intégrés au message en image inline.
+Tous les envois SMTP construits par WOPR utilisent la même signature e-mail locale lorsqu’elle est activée.
 
 WOPR reste utilisable même si ces intégrations ne sont pas configurées.
 
 ---
 
-## 17. Sécurité locale
+## 18. Sécurité locale
 
 La page **Sécurité** regroupe plusieurs fonctions sensibles.
 
-### 17.1 PIN administrateur
+### 18.1 PIN administrateur
 
 Le PIN protège l’accès atelier.
 
 Il est stocké sous forme de hash.
 
-### 17.2 Base SQLCipher
+### 18.2 Base SQLCipher
 
 La base principale `private/data/wopr.db` est chiffrée avec SQLCipher. La clé de chiffrement de la base est aléatoire et distincte du PIN administrateur.
 
 Le launcher demande le PIN lorsque le déverrouillage de la base est nécessaire. Ce PIN n’est pas écrit sur disque : il peut être conservé uniquement en mémoire vive pendant la session du launcher afin d’être réutilisé lors de l’arrêt et de la sauvegarde.
 
-### 17.3 Clé maître
+### 18.3 Clé maître
 
 Les secrets locaux peuvent être chiffrés.
 
 La clé maître doit être conservée avec soin. Une clé maître perdue ne peut pas être reconstruite à partir de la documentation.
 
-### 17.4 Mots de passe appareil
+### 18.4 Mots de passe appareil
 
 Lorsqu’un mot de passe système est enregistré dans un dossier, il n’est pas affiché directement dans le HTML.
 
 Sa consultation utilise une action protégée.
 
-### 17.5 SMTP
+### 18.5 SMTP
 
 Les réglages SMTP et jetons restent locaux.
 
 La signature e-mail commune est également stockée dans `private/` afin de ne pas intégrer l’identité ou les visuels de l’entreprise dans le code public.
 
-### 17.6 Logo facture
+### 18.6 Logo facture
 
 Le logo choisi par l’utilisateur est enregistré dans `private/assets/`.
 
 Il n’est pas inclus dans le coeur public du projet.
 
-### 17.7 Diagnostic de portabilité
+### 18.7 Diagnostic de portabilité
 
 Le diagnostic vérifie notamment :
 
@@ -656,22 +689,15 @@ Le diagnostic vérifie notamment :
 
 ---
 
-## 18. Sauvegardes
+## 19. Sauvegardes
 
 WOPR conserve un nombre limité de sauvegardes récentes afin d’éviter une croissance infinie du dossier.
-
-La politique actuelle prévoit notamment :
-
-- jusqu’à 30 sauvegardes ;
-- une sauvegarde de démarrage au maximum une fois par jour ;
-- une sauvegarde d’arrêt uniquement si la base a changé ;
-- des sauvegardes forcées avant certaines opérations sensibles.
 
 Une sauvegarde manuelle reste disponible.
 
 ---
 
-## 19. Organisation des documents
+## 20. Organisation des documents
 
 Les documents sont stockés dans la partie privée.
 
@@ -692,11 +718,9 @@ private/
             └── MM - Mois/
 ```
 
-Les vues concernées proposent un bouton **Dossier** pour accéder directement au répertoire correspondant.
-
 ---
 
-## 20. Organisation générale des données
+## 21. Organisation générale des données
 
 Structure simplifiée d’une installation :
 
@@ -722,35 +746,17 @@ WOPR/
     └── seeds/
 ```
 
-La partie `public/` peut être diffusée.
-
 La partie `private/` appartient à l’installation et peut contenir des informations confidentielles.
 
 ---
 
-## 21. Licence GNU GPLv3
+## 22. Licence GNU GPLv3
 
 WOPR est publié sous licence **GNU General Public License version 3**.
 
 Le texte juridique complet se trouve dans le fichier `LICENSE` fourni avec le projet.
 
-### 21.1 Ce que permet la GPLv3
-
-La GPLv3 autorise notamment à :
-
-- utiliser WOPR ;
-- étudier son code source ;
-- modifier le logiciel ;
-- redistribuer des copies ;
-- redistribuer des versions modifiées.
-
-### 21.2 Obligations principales lors d’une redistribution
-
-Lorsqu’une redistribution entre dans le cadre de la GPLv3, il faut notamment conserver les libertés prévues par la licence et fournir les éléments requis par celle-ci, notamment le code source correspondant lorsque cela s’applique.
-
-Les mentions de copyright et la licence doivent être conservées selon les conditions de la GPLv3.
-
-### 21.3 Gratuité de WOPR
+### 22.1 Gratuité de WOPR
 
 La GPLv3 n’interdit pas en elle-même de demander de l’argent pour distribuer un logiciel.
 
@@ -758,11 +764,9 @@ La GPLv3 n’interdit pas en elle-même de demander de l’argent pour distribue
 
 Il n’existe pas de version Premium et aucun don n’est requis pour accéder à une fonction.
 
-Pour les détails juridiques, le fichier `LICENSE` fait foi.
-
 ---
 
-## 22. Soutien PayPal
+## 23. Soutien PayPal
 
 WOPR est gratuit.
 
@@ -770,7 +774,7 @@ Si l’utilisateur souhaite soutenir volontairement le projet :
 
 **PayPal : https://paypal.me/foul**
 
-![QR code PayPal](images/paypal-qr.png)
+[![QR code PayPal](images/paypal-qr.png)](https://paypal.me/foul)
 
 Le soutien est facultatif.
 
@@ -778,20 +782,9 @@ Aucune fonctionnalité n’est bloquée sans don.
 
 ---
 
-## 23. Publication sur GitHub
+## 24. Publication sur GitHub
 
 Avant une publication, vérifier impérativement qu’aucune donnée privée n’est incluse.
-
-### À publier
-
-- code public WOPR ;
-- templates génériques ;
-- ressources publiques ;
-- source du lanceur ;
-- dépendances ;
-- documentation ;
-- licence ;
-- fichiers nécessaires à la distribution.
 
 ### À ne jamais publier
 
@@ -809,116 +802,72 @@ Avant une publication, vérifier impérativement qu’aucune donnée privée n�
 
 ### Script de publication
 
-Le script `Update-WOPR.sh` effectue notamment :
-
-- les contrôles de sécurité ;
-- la vérification de la version ;
-- le commit et le push GitHub ;
-- la synchronisation du dossier `docs/` vers le site ;
-- la préparation des notes depuis `docs/CHANGELOG-DOC.md` ;
-- la création ou la vérification de la release GitHub ;
-- la création du ZIP public.
+Le script `Update-WOPR.sh` effectue notamment les contrôles de sécurité, la vérification de version, la synchronisation de la documentation et la préparation de la publication.
 
 ---
 
-## 24. Dépannage rapide
+## 25. Dépannage rapide
 
 ### WOPR ne démarre pas
 
-Vérifier :
+Vérifier Python, les dépendances, le lanceur, les messages affichés au démarrage et les fichiers présents dans l’installation.
 
-- Python ;
-- les dépendances ;
-- le lanceur ;
-- les messages affichés au démarrage ;
-- les fichiers présents dans l’installation.
+### Une intégration externe ne fonctionne pas
 
-### Une intégration Google / Abby / SMTP ne fonctionne pas
-
-Ces fonctions nécessitent leur propre configuration.
-
-Commencer par vérifier les paramètres locaux et le test de connexion associé.
-
-### Un justificatif ne s’ouvre plus
-
-Utiliser le contrôle des justificatifs d’Achats / Ventes et vérifier que le fichier n’a pas été déplacé ou renommé en dehors de WOPR.
+Google, Abby, SMTP, KDE Connect et le suivi public nécessitent leur propre configuration.
 
 ### Le CA semble incohérent
 
 Contrôler le Suivi, les montants et les dates d’encaissement.
 
-Ne pas essayer de corriger le CA en modifiant uniquement un PDF.
-
-### Perte de clé maître
-
-Conserver une sauvegarde sécurisée de cette clé en dehors du dépôt public.
-
 ---
 
-## 25. Nouveautés principales de la release 2.3.286
+## 26. Nouveautés principales de la release 2.5.0
 
-La version 2.3.286 consolide surtout le workflow quotidien et les intégrations.
+La version 2.5.0 renforce principalement la sécurité locale, la compatibilité Linux / Windows et la stabilité de l’interface.
 
-Parmi les évolutions visibles :
+- base principale chiffrée avec SQLCipher ;
+- clé SQLCipher aléatoire et distincte du PIN ;
+- PIN conservé uniquement en mémoire vive pendant la session du launcher ;
+- fonctionnement Linux / Windows harmonisé ;
+- interface 8-BIT stabilisée.
 
-- workflow prise en charge → suivi → facturation → restitution fiabilisé ;
-- recherche client privée, côté serveur et plus permissive ;
-- absence de faux changements de statut Google lors d’une simple réutilisation de fiche ;
-- création directe d’un client depuis la page Clients ;
-- aide code postal → ville disponible également dans la fiche client ;
-- Facture simple alignée sur la recherche client principale et remplissage automatique des coordonnées ;
-- désignation de facture préremplie depuis le suivi ;
-- conservation des informations techniques lors de la facturation ;
-- remise papier par défaut : **Facture + Suivi Papier** ;
-- date comptable proposée seulement lorsque le paiement est réellement déclaré reçu ;
-- signature e-mail commune et image inline pour tous les envois SMTP de WOPR ;
-- suppression client propagée chez Abby lorsque la fiche est reliée ;
-- sélection plus sûre de la bonne base SQLite par analyse de son contenu ;
-- titres PDF historiques nettoyés ;
-- suppression du mode client automatique lors d’une nouvelle prise en charge ;
-- corrections de cohérence visuelle, notamment autour de Facture simple et du thème 8-BIT.
+## 27. Nouveautés principales de la release 2.5.1
 
----
+La version 2.5.1 est une release de maintenance de la série 2.5.x.
 
-## 26. Nouveautés principales de la release 2.3.287
+- corrections CA et rapprochement SumUp ;
+- filtres Atelier fiabilisés ;
+- remarques du suivi public enrichies ;
+- stabilité du Mode Client et du launcher conservée.
 
-La version 2.3.287 fiabilise les encaissements, le rapprochement SumUp et la préparation des déclarations.
+## 28. Nouveautés principales de la release 2.6.0
 
-- une page « Contrôle automatique du CA » récapitule les totaux automatiques par année, mois et catégorie ;
-- cette page signale les doublons historiques et les encaissements sans période comptable, sans modifier les données ;
-- le CA encaissé provient d'une source comptable unique issue du Suivi ;
-- les doublons historiques portant la même facture ne sont plus additionnés ;
-- les périodes comptables validées restent stables lorsqu'une preuve de paiement est enrichie ;
-- les corrections manuelles affichent leur valeur automatique de comparaison ;
-- la page CA sépare le cumul des mois précédents, le mois en cours et le total annuel ;
-- les factures orphelines, archives, lignes de facture et rattachements SumUp sont contrôlables ;
-- les bandeaux de confirmation se ferment automatiquement après quelques secondes.
+La version 2.6.0 ajoute deux fonctions importantes au travail quotidien de l’atelier.
 
-## 27. Nouveautés principales de la release 2.5.0
+### Stock composants
 
-La version 2.5.0 renforce la sécurité locale de WOPR, stabilise son fonctionnement Linux / Windows et corrige plusieurs défauts d’interface du thème 8-BIT.
+- ajout d’un module Stock simple : référence, fonction, quantité, remarques et image ;
+- recherche instantanée ;
+- ajustement rapide des quantités ;
+- aperçu des images ;
+- export CSV et PDF ;
+- recherche d’images directement depuis WOPR ;
+- aide à l’identification de la fonction électronique d’un composant.
 
-- la base principale `private/data/wopr.db` est chiffrée avec **SQLCipher** ;
-- la clé SQLCipher est aléatoire et distincte du PIN administrateur ;
-- Linux et Windows utilisent la même base de code avec des dépendances SQLCipher adaptées à chaque plateforme ;
-- le crash natif Windows lié à `PRAGMA cipher_memory_security = ON` est contourné ;
-- le PIN SQLCipher est conservé uniquement en mémoire vive pendant la session du launcher ;
-- le PIN peut être réutilisé à l’arrêt pour la sauvegarde sans seconde saisie dans une session normale ;
-- les sauvegardes externes sont adaptées à la base chiffrée ;
-- la rétention Proton Drive et Freebox est fixée à 15 jours ;
-- la topbar du thème 8-BIT est stabilisée sur les affichages haute résolution et avec mise à l’échelle ;
-- le chevauchement entre **Recherche** et **Suivi** est corrigé indépendamment de la résolution brute ;
-- les ressources publiques restent dans `public/static/` et les ressources propres à l’installation dans `private/assets/`.
+### Statistiques du suivi client
 
-## 28. Nouveautés principales de la release 2.5.1
+- comptage des consultations réelles du portail de suivi ;
+- une consultation est enregistrée uniquement lorsqu’un code valide affiche un dossier ;
+- vues aujourd’hui, sur 7 jours et sur le mois ;
+- visiteurs distincts ;
+- première et dernière consultation ;
+- détail par code de suivi ;
+- rapprochement du code public avec le dossier et le client locaux ;
+- accès depuis le tableau de bord Atelier ;
+- aucune adresse IP conservée en clair dans les statistiques.
 
-La version 2.5.1 est une release de maintenance qui finalise l'alignement documentaire de la série 2.5.x après la publication du tag `v2.5.0`.
-
-- version publique et documentation alignées sur **2.5.1** ;
-- date de documentation fixée au **25 septembre 2026** ;
-- manuel Markdown, documentation HTML, page de présentation et PDF synchronisés ;
-- historique 2.5.0 conservé dans le changelog ;
-- fonctionnement SQLCipher, launcher et interface 8-BIT de la série 2.5.x conservé.
+La version 2.6.0 conserve également les correctifs de la série 2.5.1 concernant le CA, SumUp, les filtres Atelier, le suivi public et le Mode Client.
 
 ## 29. Crédit
 

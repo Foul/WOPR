@@ -57,37 +57,13 @@ Le client consulte ensuite l’avancement de sa réparation depuis la page de su
 
 L’URL du portail et l’URL de l’API sont configurables : WOPR n’impose aucun domaine ni hébergeur particulier.
 
-Seules les informations prévues pour le client sont publiées.
-
-Depuis la version 2.6.0, WOPR peut également récupérer des statistiques privées de consultation :
-
-- vues aujourd’hui ;
-- vues sur les 7 derniers jours ;
-- vues du mois ;
-- visiteurs distincts ;
-- première et dernière consultation d’un code.
-
-Une consultation n’est comptée que lorsqu’un code valide affiche réellement un dossier.
+Depuis la version 2.6.0, WOPR peut également récupérer des statistiques privées de consultation.
 
 ## Stock composants
 
-Le module Stock reste volontairement simple :
+Le module Stock reste volontairement simple : Composant / Référence, Fonction, Quantité, Remarques et Image.
 
-- Composant / Référence
-- Fonction
-- Quantité
-- Remarques
-- Image
-
-Il permet également :
-
-- recherche instantanée ;
-- ajustement rapide des quantités ;
-- aperçu des images ;
-- export CSV ;
-- export PDF ;
-- aide à l’identification de la fonction ;
-- recherche d’images de composants.
+Il propose également recherche instantanée, ajustement des quantités, aperçu des images, exports CSV/PDF et aide à l’identification.
 
 ## Plateformes
 
@@ -97,20 +73,9 @@ Il permet également :
 
 ## Lancement
 
-Le launcher unifié se trouve dans :
+Le launcher unifié se trouve dans `public/launcher/wopr_launcher.py`.
 
-`public/launcher/wopr_launcher.py`
-
-Les binaires officiels se trouvent à la racine du projet :
-
-- Linux : `WOPR`
-- Windows : `WOPR.exe`
-
-Le launcher vérifie l’environnement Python, les dépendances, le déverrouillage SQLCipher et lance le serveur local WOPR.
-
-Par défaut, WOPR est accessible sur :
-
-`http://127.0.0.1:5000`
+Par défaut, WOPR est accessible sur `http://127.0.0.1:5000`.
 
 ## Mise à jour / publication
 
@@ -119,10 +84,6 @@ Le workflow officiel du projet utilise :
 ```bash
 ./Update-WOPR.sh
 ```
-
-Ce script réalise les contrôles préalables, prépare la publication, synchronise la documentation et construit les éléments nécessaires à une release.
-
-Pour un simple commit local, il n’est pas nécessaire de lancer une release.
 
 ## Documentation
 
@@ -139,6 +100,8 @@ WOPR est distribué gratuitement et publié sous licence **GNU GPLv3**.
 
 ## Soutenir WOPR
 
-Soutien facultatif : **https://paypal.me/foul**.
+Le soutien est totalement facultatif et ne débloque aucune fonctionnalité.
 
-Aucun don ne débloque de fonctionnalité.
+[![QR code PayPal pour soutenir WOPR](docs/images/paypal-qr.png)](https://paypal.me/foul)
+
+**https://paypal.me/foul**
