@@ -2504,7 +2504,17 @@ def accounting_monthly_totals(con, year=None):
     def accounting_split(row, *, fallback_to_invoice=False):
         service = max(0.0, float(row.get("accounting_service_amount") or 0))
         goods = max(0.0, float(row.get("accounting_goods_amount") or 0))
-        if fallback_to_invoice and service + goods <= 0:
+
+        # Compatibilité avec certains encaissements historiques :
+        # une facture peut être marquée payée avec une période comptable valide
+        # alors que les champs accounting_* sont restés à 0.
+        #
+        # Dans ce cas, s'il n'existe AUCUN acompte à soustraire, le montant de
+        # la facture est bien le montant encaissé et peut servir de repli.
+        # On évite volontairement ce repli en présence d'un acompte pour ne pas
+        # compter deux fois une partie déjà enregistrée séparément.
+        deposit = max(0.0, float(row.get("deposit_amount") or 0))
+        if service + goods <= 0 and (fallback_to_invoice or deposit <= 0):
             service = max(0.0, float(row.get("service_amount") or 0))
             goods = max(0.0, float(row.get("goods_amount") or 0))
         return service, goods
@@ -9304,6 +9314,8 @@ def home():
 @app.route("/suivi")
 def index():
     to_return_only = request.args.get("a_restituer") == "1"
+    en_cours_only = request.args.get("en_cours") == "1"
+    attente_piece_only = request.args.get("attente_piece") == "1"
     client_search = str(request.args.get("q") or "").strip()
     client_search_folded = client_search.casefold()
     try:
@@ -9450,12 +9462,20 @@ def index():
                 filtered_rows.append(row)
         rows = filtered_rows
 
+    # Filtre Atelier "En cours" : mêmes statuts que le KPI du tableau de bord.
+    if en_cours_only:
+        en_cours_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation"}
+        rows = [row for row in rows if str(row["status"] or "") in en_cours_statuses]
+
+    if attente_piece_only:
+        rows = [row for row in rows if str(row["status"] or "") == "En attente pièce"]
+
     # V2.3.82 : un encaissement effectué un autre mois que le suivi doit être
     # visible dans le mois d'encaissement, sans créer une seconde écriture comptable.
     # On fabrique donc uniquement une ligne d'affichage virtuelle.
     cross_month_payments = {}
     for source_row in rows:
-        if to_return_only or client_search_folded:
+        if to_return_only or en_cours_only or attente_piece_only or client_search_folded:
             continue
         ay = source_row["accounting_year"]
         am = source_row["accounting_month"]
@@ -9636,8 +9656,8 @@ def index():
             "number": month,
             "name": month_names[month],
             "rows": month_rows,
-            "service_total": 0.0 if to_return_only else t["service"],
-            "goods_total": 0.0 if to_return_only else t["goods"],
+            "service_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only) else t["service"],
+            "goods_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only) else t["goods"],
         })
 
     try:
@@ -9654,6 +9674,8 @@ def index():
         yellow_count=yellow_count,
         to_return_count=to_return_count,
         to_return_only=to_return_only,
+        en_cours_only=en_cours_only,
+        attente_piece_only=attente_piece_only,
         client_search=client_search,
         search_all_years=bool(client_search_folded),
         edit_id=edit_id,
