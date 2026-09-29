@@ -9,49 +9,123 @@
 
 **100 % gratuit et open source - GNU GPLv3**
 
-WOPR est une application locale de gestion d’atelier pour suivre réparations, clients, devis, factures, encaissements, restitutions, achats, justificatifs et tâches administratives.
+WOPR est une application locale de gestion d’atelier conçue pour centraliser le suivi des réparations, les clients, devis, factures, encaissements, achats, justificatifs, stock de composants et tâches administratives.
 
 **Version documentée : 2.6.0**
 
-## Release 2.4.0 — stable
-- Mode Client pour présenter l’atelier sans exposer les noms, problèmes, factures ni montants.
-- Bascule Mode Client / Mode Admin et bouton Nouvelle réparation conservés dans le thème 8-BIT.
-- Logo Foul-Fix centré dans le bandeau selon le thème actif.
-- Entreprise du client affichée dans la liste des factures.
-- Préparation SumUp avec montant exact de la facture et remarque prête à copier.
-- Contrôles CA, navigation et affichage responsive finalisés.
+> Développé avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
-> Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
+## Principales fonctions
+
+- Tableau de bord Atelier avec vue rapide des dossiers en cours, attentes pièce, restitutions, impayés et activité du mois.
+- Gestion complète des réparations : création, diagnostic, suivi, statut, remarques, facturation et restitution.
+- Mode Client permettant d’utiliser l’interface devant un client sans afficher les informations confidentielles.
+- Gestion des clients avec recherche, archivage, coordonnées et intégrations optionnelles.
+- Devis et factures PDF, factures simples et historique des règlements.
+- Gestion des paiements fractionnés et rapprochement des encaissements.
+- Contrôle du chiffre d’affaires et préparation des déclarations.
+- Intégration SumUp pour le rapprochement des paiements.
+- Achats / Ventes avec justificatifs fournisseurs.
+- Sauvegardes locales et externes.
+- Suivi client public par code via un portail configurable par l’atelier.
+- Statistiques de consultation du suivi client accessibles depuis le tableau de bord Atelier.
+- Module Stock simple pour les composants électroniques : référence, fonction, quantité, remarques et image.
+- Export du stock en CSV et PDF.
+- Recherche d’images et aide à l’identification de composants.
+- Envoi de SMS via KDE Connect lorsque celui-ci est disponible.
+- Thème 8-BIT et interface responsive.
+
+## Sécurité
+
+WOPR est conçu comme une application **local-first**.
+
+La base principale est stockée dans :
+
+`private/data/wopr.db`
+
+Le chiffrement SQLCipher est pris en charge sous Linux et Windows. Le PIN WOPR permet de déverrouiller la base chiffrée via le launcher.
+
+Les données privées, documents clients, signatures, sauvegardes et fichiers de configuration restent dans le dossier `private/`.
+
+**Le dossier `private/` ne doit jamais être publié.**
+
+## Suivi client en ligne
+
+WOPR peut publier les informations autorisées vers un portail de suivi configuré par l’atelier.
+
+Le client consulte ensuite l’avancement de sa réparation depuis la page de suivi publique choisie par l’utilisateur.
+
+L’URL du portail et l’URL de l’API sont configurables : WOPR n’impose aucun domaine ni hébergeur particulier.
+
+Seules les informations prévues pour le client sont publiées.
+
+Depuis la version 2.6.0, WOPR peut également récupérer des statistiques privées de consultation :
+
+- vues aujourd’hui ;
+- vues sur les 7 derniers jours ;
+- vues du mois ;
+- visiteurs distincts ;
+- première et dernière consultation d’un code.
+
+Une consultation n’est comptée que lorsqu’un code valide affiche réellement un dossier.
+
+## Stock composants
+
+Le module Stock reste volontairement simple :
+
+- Composant / Référence
+- Fonction
+- Quantité
+- Remarques
+- Image
+
+Il permet également :
+
+- recherche instantanée ;
+- ajustement rapide des quantités ;
+- aperçu des images ;
+- export CSV ;
+- export PDF ;
+- aide à l’identification de la fonction ;
+- recherche d’images de composants.
 
 ## Plateformes
+
 - **Linux : supporté** - binaire officiel `WOPR`.
 - **Windows : supporté** - binaire officiel `WOPR.exe`.
 - **macOS : non supporté** - aucun binaire officiel, aucun test de compatibilité et aucun support garanti.
 
-## Release 2.3.287
-- CA encaissé fiabilisé depuis une source comptable unique issue du Suivi.
-- Doublons historiques de factures dédupliqués et périodes comptables validées conservées.
-- Rapprochement SumUp historique sécurisé sans déplacement silencieux du CA déjà déclaré.
-- Corrections manuelles comparées à leur valeur automatique.
-- Page CA clarifiée : cumul précédent, mois en cours et total annuel séparés.
-- Contrôles des factures orphelines, archives et lignes de facture renforcés.
-- Bandeaux de confirmation fermables automatiquement après quelques secondes.
+## Lancement
 
-## Release 2.3.286
-- workflow **prise en charge → suivi → facturation → restitution** fiabilisé ;
-- recherche client privée et permissive, sans exposer tout le carnet dans la page ;
-- création directe d’un client depuis **Clients**, avec aide code postal → ville ;
-- synchronisation Google plus prudente : pas de faux « À synchroniser » et aucune écriture automatique ;
-- **Facture simple** alignée sur la recherche client principale et remplissage automatique des coordonnées ;
-- désignation de facture préremplie depuis le suivi, sans écraser les informations techniques ;
-- remise papier par défaut : **Facture + Suivi Papier** ;
-- signature e-mail commune intégrée à tous les envois SMTP de WOPR ;
-- suppression d’un client relié à Abby propagée côté Abby avant suppression/archivage local ;
-- sélection de la base SQLite renforcée par analyse du contenu réel ;
-- titres PDF et affichage des anciennes factures nettoyés ;
-- corrections d’ergonomie et de cohérence des thèmes, dont **8-BIT**.
+Le launcher unifié se trouve dans :
+
+`public/launcher/wopr_launcher.py`
+
+Les binaires officiels se trouvent à la racine du projet :
+
+- Linux : `WOPR`
+- Windows : `WOPR.exe`
+
+Le launcher vérifie l’environnement Python, les dépendances, le déverrouillage SQLCipher et lance le serveur local WOPR.
+
+Par défaut, WOPR est accessible sur :
+
+`http://127.0.0.1:5000`
+
+## Mise à jour / publication
+
+Le workflow officiel du projet utilise :
+
+```bash
+./Update-WOPR.sh
+```
+
+Ce script réalise les contrôles préalables, prépare la publication, synchronise la documentation et construit les éléments nécessaires à une release.
+
+Pour un simple commit local, il n’est pas nécessaire de lancer une release.
 
 ## Documentation
+
 - [Manuel Markdown](docs/manuel.md)
 - [Documentation HTML](docs/documentation.html)
 - [Présentation WOPR](docs/index.html)
@@ -59,11 +133,6 @@ WOPR est une application locale de gestion d’atelier pour suivre réparations,
 - [Licence, support et dons](docs/LICENCE-SUPPORT.md)
 - [Changelog documentation](docs/CHANGELOG-DOC.md)
 
-## Confidentialité
-Le dossier **`private/` ne doit jamais être publié**.
-
 ## Licence
-WOPR est distribué gratuitement par Foul-Fix et publié sous licence **GNU GPLv3**.
 
-## Soutenir WOPR
-Soutien facultatif : **https://paypal.me/foul**. Aucun don ne débloque de fonctionnalité.
+WOPR est distribué gratuitement et publié sous licence **GNU GPLv3**.
