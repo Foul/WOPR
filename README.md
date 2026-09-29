@@ -136,3 +136,9 @@ Pour un simple commit local, il n’est pas nécessaire de lancer une release.
 ## Licence
 
 WOPR est distribué gratuitement et publié sous licence **GNU GPLv3**.
+
+## Soutenir WOPR
+
+Soutien facultatif : **https://paypal.me/foul**.
+
+Aucun don ne débloque de fonctionnalité.
