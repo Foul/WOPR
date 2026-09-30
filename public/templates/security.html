@@ -75,7 +75,7 @@
     {% if backups %}
       <p style="margin-top:14px;"><strong>Ouvrir une ancienne sauvegarde dans WOPR</strong></p>
       <small>La base actuelle est automatiquement sauvegardée avant toute restauration. WOPR reconnaît une sauvegarde par son contenu SQLite/GZIP, pas par son nom de fichier.</small>
-      <ul class="backup-list">
+      <ul class="backup-list" style="max-height:none;overflow:visible;">
         {% for b in backups %}
         <li style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
           <code style="overflow-wrap:anywhere;">{{ b.name }}</code>
@@ -237,8 +237,6 @@
     {% endif %}
   </section>
 
-
-
   <section class="security-card">
     <h2>Protections actives</h2>
     <ul>
@@ -263,9 +261,6 @@ document.getElementById('external-backup-test-form')?.addEventListener('submit',
   button.setAttribute('aria-busy', 'true');
 });
 
-// Les sauvegardes déclenchent une redirection après le POST. Conserve la
-// position de lecture pour que le bandeau de résultat n'expédie pas la page
-// en haut du tableau de sécurité.
 (function () {
   const forms = document.querySelectorAll('#kdeconnect-test-form, #external-backup-test-form, #backup-now-form');
   const key = 'wopr-backup-scroll-y';

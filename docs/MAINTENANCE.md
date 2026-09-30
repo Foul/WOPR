@@ -11,10 +11,10 @@ Version de référence actuelle : **2.6.0**.
 6. vérifier l’absence de données privées ;
 7. vérifier les visuels publics, dont le QR code PayPal.
 
-Le script de release extrait ses notes depuis `docs/CHANGELOG-DOC.md`.
+Avant publication, vérifier également :
+- la cohérence de la version courante entre l’application et la documentation ;
+- que `docs/WOPR-Manuel.pdf` correspond bien au manuel courant ;
+- qu’aucun fichier `docs/RELEASE-NOTES-*.md` obsolète n’est présent ;
+- que les visuels obligatoires de la documentation sont présents.
 
-`Update-WOPR.sh` doit bloquer la publication si :
-- la version courante n’est pas cohérente entre l’application et la documentation ;
-- `docs/WOPR-Manuel.pdf` est plus ancien que `docs/manuel.md` ;
-- un fichier `docs/RELEASE-NOTES-*.md` est encore présent ;
-- un visuel obligatoire de la documentation est manquant.
+Les notes de release sont maintenues dans `docs/CHANGELOG-DOC.md`.

@@ -77,13 +77,6 @@ Le launcher unifié se trouve dans `public/launcher/wopr_launcher.py`.
 
 Par défaut, WOPR est accessible sur `http://127.0.0.1:5000`.
 
-## Mise à jour / publication
-
-Le workflow officiel du projet utilise :
-
-```bash
-./Update-WOPR.sh
-```
 
 ## Documentation
 

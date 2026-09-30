@@ -800,9 +800,9 @@ Avant une publication, vérifier impérativement qu’aucune donnée privée n�
 - exports clients ;
 - captures non anonymisées.
 
-### Script de publication
+### Publication
 
-Le script `Update-WOPR.sh` effectue notamment les contrôles de sécurité, la vérification de version, la synchronisation de la documentation et la préparation de la publication.
+Avant toute publication, vérifier la cohérence de la version, la documentation, les ressources publiques et l’absence de données privées.
 
 ---
 

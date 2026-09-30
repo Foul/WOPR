@@ -48,6 +48,373 @@
   cursor:pointer;
   font-weight:900;
 }
+
+
+/* ===== WOPR TOPBAR GROUPÉE V5 — autonome, prioritaire ===== */
+.topbar{
+  overflow:visible!important;
+  position:relative!important;
+  z-index:11000!important;
+}
+
+.topbar .topnav.topnav-grouped{
+  display:flex!important;
+  grid-template-columns:none!important;
+  align-items:center!important;
+  justify-content:flex-start!important;
+  flex-wrap:nowrap!important;
+  gap:0!important;
+  width:100%!important;
+  min-width:0!important;
+  max-width:100%!important;
+  margin-left:0!important;
+  margin-right:0!important;
+  overflow:visible!important;
+  position:relative!important;
+  z-index:11010!important;
+}
+
+/* Tout sauf le verrou vit dans ce bloc, collé à gauche. */
+.topbar .topnav.topnav-grouped .wopr-nav-cluster{
+  display:flex!important;
+  align-items:center!important;
+  justify-content:flex-start!important;
+  flex:0 1 auto!important;
+  flex-wrap:nowrap!important;
+  gap:4px!important;
+  width:auto!important;
+  min-width:0!important;
+  max-width:calc(100% - 72px)!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:visible!important;
+}
+
+/* Atelier ne doit plus garder son ancienne marge droite 8-bit. */
+body.theme-8bit .topbar .topnav.topnav-grouped .nav-atelier{
+  margin-right:0!important;
+}
+
+/* Recherche fixe/compacte : les menus commencent immédiatement après. */
+.topbar .topnav.topnav-grouped .topbar-search,
+body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
+  order:initial!important;
+  grid-column:auto!important;
+  flex:0 0 340px!important;
+  width:340px!important;
+  min-width:340px!important;
+  max-width:340px!important;
+  margin:0!important;
+  box-sizing:border-box!important;
+}
+
+/* Les groupes n'occupent que la largeur de leur bouton. */
+.topbar .topnav.topnav-grouped .wopr-nav-menu,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-menu{
+  position:relative!important;
+  display:block!important;
+  flex:0 0 auto!important;
+  width:auto!important;
+  min-width:0!important;
+  max-width:none!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:visible!important;
+}
+
+/* Le summary reprend le vrai style nav-btn/Atelier. */
+.topbar .topnav.topnav-grouped .wopr-nav-menu > summary.nav-btn{
+  list-style:none!important;
+  width:auto!important;
+  min-width:0!important;
+  max-width:none!important;
+  margin:0!important;
+  cursor:pointer!important;
+  white-space:nowrap!important;
+}
+.topbar .topnav.topnav-grouped .wopr-nav-menu > summary.nav-btn::-webkit-details-marker{display:none!important}
+.topbar .topnav.topnav-grouped .wopr-nav-menu > summary.nav-btn::marker{content:""!important}
+
+/* Largeurs compactes : rien ne s'étale. */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-repairs > summary{width:130px!important}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-docs > summary{width:116px!important}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-management > summary{width:104px!important}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-services > summary{width:112px!important}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-wopr > summary{width:90px!important}
+
+/* Menu déroulant : VRAIMENT vertical, une rubrique par ligne. */
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown{
+  display:none!important;
+  position:absolute!important;
+  top:calc(100% + 4px)!important;
+  left:0!important;
+  right:auto!important;
+  z-index:32000!important;
+  width:230px!important;
+  min-width:230px!important;
+  max-width:230px!important;
+  height:auto!important;
+  margin:0!important;
+  padding:6px!important;
+  overflow:visible!important;
+  border:2px solid #274f6d!important;
+  border-radius:0!important;
+  background:#0b1a26!important;
+  box-shadow:4px 4px 0 #030a10!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-nav-menu[open] > .wopr-nav-dropdown,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-menu[open] > .wopr-nav-dropdown{
+  display:block!important;
+}
+
+/* Chaque lien = une ligne entière. */
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown > a,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a{
+  display:flex!important;
+  flex:none!important;
+  align-items:center!important;
+  justify-content:flex-start!important;
+  float:none!important;
+  clear:both!important;
+  width:100%!important;
+  min-width:0!important;
+  max-width:100%!important;
+  height:38px!important;
+  min-height:38px!important;
+  margin:0 0 5px 0!important;
+  padding:0 10px!important;
+  box-sizing:border-box!important;
+  white-space:nowrap!important;
+  border:1px solid #315f80!important;
+  border-radius:0!important;
+  background:#10293b!important;
+  color:#eef8ff!important;
+  text-decoration:none!important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;
+  font-weight:800!important;
+  line-height:38px!important;
+  text-transform:uppercase!important;
+  text-shadow:1px 1px 0 #000!important;
+}
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:last-child{margin-bottom:0!important}
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:hover,
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown > a.active{
+  background:#1b4662!important;
+  border-color:#5fa6d4!important;
+  color:#fff!important;
+}
+
+/* Les deux spans internes restent sur une ligne mais chaque rubrique est un bloc séparé. */
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown > a > span:first-child{
+  flex:0 0 26px!important;
+  width:26px!important;
+  min-width:26px!important;
+  margin-right:8px!important;
+}
+.topbar .topnav.topnav-grouped .wopr-nav-dropdown > a > span:last-child{
+  display:block!important;
+  flex:1 1 auto!important;
+}
+
+/* Verrou : seul élément repoussé complètement à droite. */
+.topbar .topnav.topnav-grouped .wopr-lock-form,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-form{
+  display:block!important;
+  flex:0 0 64px!important;
+  width:64px!important;
+  min-width:64px!important;
+  max-width:64px!important;
+  margin-left:auto!important;
+  margin-right:0!important;
+  padding:0!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-lock-compact,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-compact{
+  width:64px!important;
+  min-width:64px!important;
+  max-width:64px!important;
+  margin:0!important;
+  padding:0!important;
+  justify-content:center!important;
+}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-compact .nav-ico{
+  min-width:0!important;
+  margin:0!important;
+}
+
+/* À 1600px on réduit la recherche, mais les groupes restent à gauche. */
+@media (max-width:1600px){
+  .topbar .topnav.topnav-grouped .topbar-search,
+  body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
+    flex-basis:290px!important;
+    width:290px!important;
+    min-width:290px!important;
+    max-width:290px!important;
+  }
+}
+
+/* À largeur plus petite seulement, retour à la ligne propre. */
+@media (max-width:1250px){
+  .topbar .topnav.topnav-grouped,
+  body.theme-8bit .topbar .topnav.topnav-grouped{
+    flex-wrap:wrap!important;
+  }
+  .topbar .topnav.topnav-grouped .wopr-nav-cluster{
+    flex-wrap:wrap!important;
+    max-width:100%!important;
+  }
+  .topbar .topnav.topnav-grouped .wopr-lock-form{
+    margin-left:0!important;
+  }
+}
+
+
+
+/* ===== FIX V6 — Atelier largeur normale ===== */
+.topbar .topnav.topnav-grouped .wopr-nav-cluster > .nav-atelier,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-cluster > .nav-atelier{
+  flex:0 0 118px!important;
+  width:118px!important;
+  min-width:118px!important;
+  max-width:118px!important;
+  margin-left:0!important;
+  margin-right:4px!important;
+  box-sizing:border-box!important;
+}
+
+
+
+/* ===== V7 — Gestion interne / Services externes ===== */
+.topbar .topnav.topnav-grouped .wopr-services-dropdown{
+  width:230px!important;
+  min-width:230px!important;
+  max-width:230px!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-service-entry{
+  display:flex!important;
+  align-items:center!important;
+  justify-content:flex-start!important;
+  width:100%!important;
+  height:44px!important;
+  min-height:44px!important;
+  padding:0 12px!important;
+  margin:0 0 6px 0!important;
+  box-sizing:border-box!important;
+  text-transform:none!important;
+  line-height:1!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-service-entry:last-child{
+  margin-bottom:0!important;
+}
+
+/* SumUp : bouton clair avec marque noire, fidèle à l'identité noir/blanc. */
+.topbar .topnav.topnav-grouped .wopr-sumup-entry,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-sumup-entry{
+  background:#fbfbf9!important;
+  border:2px solid #000!important;
+  color:#000!important;
+  box-shadow:none!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-sumup-entry:hover,
+.topbar .topnav.topnav-grouped .wopr-sumup-entry.active,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-sumup-entry:hover,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-sumup-entry.active{
+  background:#fff!important;
+  border-color:#000!important;
+  color:#000!important;
+  filter:brightness(.96)!important;
+}
+
+.sumup-mark{
+  position:relative!important;
+  display:inline-block!important;
+  flex:0 0 28px!important;
+  width:28px!important;
+  height:22px!important;
+  margin-right:9px!important;
+}
+
+.sumup-mark i{
+  position:absolute!important;
+  display:block!important;
+  width:17px!important;
+  height:7px!important;
+  background:#000!important;
+  border-radius:1px!important;
+  transform:rotate(-45deg)!important;
+}
+
+.sumup-mark i:first-child{
+  left:1px!important;
+  top:4px!important;
+}
+
+.sumup-mark i:last-child{
+  right:1px!important;
+  bottom:4px!important;
+}
+
+.sumup-wordmark{
+  display:inline-block!important;
+  flex:0 0 auto!important;
+  width:auto!important;
+  min-width:0!important;
+  margin:0!important;
+  color:#000!important;
+  font-family:Arial,Helvetica,sans-serif!important;
+  font-size:18px!important;
+  font-weight:800!important;
+  letter-spacing:-.7px!important;
+  line-height:1!important;
+  text-transform:none!important;
+  text-shadow:none!important;
+}
+
+/* Abby : on utilise directement le logo SVG déjà présent dans WOPR. */
+.topbar .topnav.topnav-grouped .wopr-abby-entry,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-abby-entry{
+  background:#fff!important;
+  border:2px solid #d9d9e2!important;
+  box-shadow:none!important;
+  justify-content:center!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-abby-entry:hover,
+.topbar .topnav.topnav-grouped .wopr-abby-entry.active,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-abby-entry:hover,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-abby-entry.active{
+  background:#f7f5ff!important;
+  border-color:#8c6ee8!important;
+}
+
+.topbar .topnav.topnav-grouped .wopr-abby-logo{
+  display:block!important;
+  width:auto!important;
+  height:26px!important;
+  max-width:120px!important;
+  object-fit:contain!important;
+  filter:none!important;
+}
+
+
+
+/* ===== V8 — Sécurité en accès direct ===== */
+.topbar .topnav.topnav-grouped .wopr-security-direct,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
+  flex:0 0 108px!important;
+  width:108px!important;
+  min-width:108px!important;
+  max-width:108px!important;
+  margin:0!important;
+  box-sizing:border-box!important;
+}
+
 </style>
 </head>
 <body>
@@ -98,51 +465,66 @@
     <div class="client-mode-badge">👤 Mode Client — confidentialité activée</div>
   </nav>
   {% else %}
-  <nav class="topnav">
-    <a class="nav-btn nav-atelier {% if request.endpoint == 'atelier_dashboard' %}active{% endif %}" href="{{ url_for('atelier_dashboard') }}">
-      <span class="nav-ico">🛠️</span><span>Atelier</span>
-    </a>
-    <form class="topbar-search {% if request.endpoint == 'global_search' %}active{% endif %}" method="get" action="{{ url_for('global_search') }}" role="search">
-      <span class="topbar-search-icon" aria-hidden="true">🔎</span>
-      <input type="search" name="q" value="{{ request.args.get('q','') if request.endpoint == 'global_search' else '' }}" placeholder="Client, tél., dossier, facture…" aria-label="Recherche globale WOPR" autocomplete="off">
-      <button type="submit" aria-label="Rechercher">↵</button>
-    </form>
-    <a class="nav-btn nav-suivi {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
-      <span class="nav-ico">📋</span><span>Suivi</span>
-    </a>
-    <a class="nav-btn nav-factures {% if request.endpoint in ['invoices_page','invoice_pdf','repair_close'] %}active{% endif %}" href="{{ url_for('invoices_page') }}">
-      <span class="nav-ico">🧾</span><span>Factures</span>
-    </a>
-    <a class="nav-btn nav-simple-invoice {% if request.endpoint == 'simple_invoice_new' %}active{% endif %}" href="{{ url_for('simple_invoice_new') }}">
-      <span class="nav-ico">🧾</span><span>Facture simple</span>
-    </a>
-    <a class="nav-btn nav-devis {% if request.endpoint in ['quotes_page','quote_new','quote_edit','quote_delete','quote_pdf'] %}active{% endif %}" href="{{ url_for('quotes_page') }}">
-      <span class="nav-ico">📝</span><span>Devis</span>
-    </a>
-    <a class="nav-btn nav-clients {% if request.endpoint in ['contacts_page', 'import_proton_contacts', 'import_proton_preview', 'client_edit', 'client_delete'] %}active{% endif %}" href="{{ url_for('contacts_page') }}">
-      <span class="nav-ico">👥</span><span>Clients</span>
-    </a>
-    <a class="nav-btn nav-achats {% if request.endpoint in ['achats_ventes_page', 'achats_ventes_add', 'achats_ventes_edit', 'achats_ventes_delete'] %}active{% endif %}" href="{{ url_for('achats_ventes_page') }}">
-      <span class="nav-ico">🛍️</span><span>Achats / Ventes</span>
-    </a>
-    <a class="nav-btn nav-stock {% if request.endpoint in ['stock_page','stock_add','stock_edit','stock_delete','stock_image'] %}active{% endif %}" href="{{ url_for('stock_page') }}">
-      <span class="nav-ico">📦</span><span>Stock</span>
-    </a>
-    <a class="nav-btn nav-antivirus {% if request.endpoint in ['antivirus_page','antivirus_add','antivirus_edit','antivirus_delete'] %}active{% endif %}" href="{{ url_for('antivirus_page') }}">
-      <span class="nav-ico">🛡️</span><span>Antivirus</span>
-    </a>
-    <a class="nav-btn nav-abby {% if request.endpoint and request.endpoint.startswith('abby_') %}active{% endif %}" href="{{ url_for('abby_page') }}" title="Abby" aria-label="Abby">
-      <img src="{{ url_for('static', filename='abby_logo.svg') }}" alt="Abby" class="abby-nav-logo">
-    </a>
-    <a class="nav-btn nav-securite {% if request.endpoint == 'security_page' %}active{% endif %}" href="{{ url_for('security_page') }}">
-      <span class="nav-ico">🔐</span><span>Sécurité</span>
-    </a>
-    <a class="nav-btn nav-ca {% if request.endpoint == 'total_page' %}active{% endif %}" href="{{ url_for('total_page') }}">
-      <span class="nav-ico">📊</span><span>CA / Déclarations</span>
-    </a>
-    <form class="nav-lock-form" method="post" action="{{ url_for('admin_lock') }}">
+  <nav class="topnav topnav-grouped">
+    <div class="wopr-nav-cluster">
+      <a class="nav-btn nav-atelier {% if request.endpoint == 'atelier_dashboard' %}active{% endif %}" href="{{ url_for('atelier_dashboard') }}">
+        <span class="nav-ico">🛠️</span><span>Atelier</span>
+      </a>
+
+      <form class="topbar-search {% if request.endpoint == 'global_search' %}active{% endif %}" method="get" action="{{ url_for('global_search') }}" role="search">
+        <span class="topbar-search-icon" aria-hidden="true">🔎</span>
+        <input type="search" name="q" value="{{ request.args.get('q','') if request.endpoint == 'global_search' else '' }}" placeholder="Client, tél., dossier, facture…" aria-label="Recherche globale WOPR" autocomplete="off">
+        <button type="submit" aria-label="Rechercher">↵</button>
+      </form>
+
+      <details class="wopr-nav-menu wopr-nav-repairs">
+        <summary class="nav-btn"><span class="nav-ico">🔧</span><span>Réparations</span><span class="nav-caret">▾</span></summary>
+        <div class="wopr-nav-dropdown">
+          <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}"><span>📋</span><span>Suivi</span></a>
+          <a href="{{ url_for('stock_page') }}" class="{% if request.endpoint in ['stock_page','stock_add','stock_edit','stock_delete','stock_image'] %}active{% endif %}"><span>📦</span><span>Stock</span></a>
+        </div>
+      </details>
+
+      <details class="wopr-nav-menu wopr-nav-docs">
+        <summary class="nav-btn"><span class="nav-ico">📄</span><span>Documents</span><span class="nav-caret">▾</span></summary>
+        <div class="wopr-nav-dropdown">
+          <a href="{{ url_for('invoices_page') }}" class="{% if request.endpoint in ['invoices_page','invoice_pdf','repair_close'] %}active{% endif %}"><span>🧾</span><span>Factures</span></a>
+          <a href="{{ url_for('simple_invoice_new') }}" class="{% if request.endpoint == 'simple_invoice_new' %}active{% endif %}"><span>➕</span><span>Facture simple</span></a>
+          <a href="{{ url_for('quotes_page') }}" class="{% if request.endpoint in ['quotes_page','quote_new','quote_edit','quote_delete','quote_pdf'] %}active{% endif %}"><span>📝</span><span>Devis</span></a>
+          <a href="{{ url_for('achats_ventes_page') }}" class="{% if request.endpoint in ['achats_ventes_page','achats_ventes_add','achats_ventes_edit','achats_ventes_delete'] %}active{% endif %}"><span>🛍️</span><span>Achats / Ventes</span></a>
+        </div>
+      </details>
+
+      <details class="wopr-nav-menu wopr-nav-management">
+        <summary class="nav-btn"><span class="nav-ico">💰</span><span>Gestion</span><span class="nav-caret">▾</span></summary>
+        <div class="wopr-nav-dropdown">
+          <a href="{{ url_for('total_page') }}" class="{% if request.endpoint == 'total_page' %}active{% endif %}"><span>📊</span><span>CA / Déclarations</span></a>
+          <a href="{{ url_for('antivirus_page') }}" class="{% if request.endpoint in ['antivirus_page','antivirus_add','antivirus_edit','antivirus_delete'] %}active{% endif %}"><span>🛡️</span><span>Antivirus</span></a>
+          <a href="{{ url_for('contacts_page') }}" class="{% if request.endpoint in ['contacts_page','import_proton_contacts','import_proton_preview','client_edit','client_delete'] %}active{% endif %}"><span>👥</span><span>Clients</span></a>
+        </div>
+      </details>
+
+      <details class="wopr-nav-menu wopr-nav-services">
+        <summary class="nav-btn"><span class="nav-ico">🔌</span><span>Services</span><span class="nav-caret">▾</span></summary>
+        <div class="wopr-nav-dropdown wopr-services-dropdown">
+          <a href="{{ url_for('sumup_transactions_page') }}" class="wopr-service-entry wopr-sumup-entry {% if request.endpoint == 'sumup_transactions_page' %}active{% endif %}">
+            <span class="sumup-mark" aria-hidden="true"><i></i><i></i></span>
+            <span class="sumup-wordmark">SumUp</span>
+          </a>
+          <a href="{{ url_for('abby_page') }}" class="wopr-service-entry wopr-abby-entry {% if request.endpoint and request.endpoint.startswith('abby_') %}active{% endif %}">
+            <img src="{{ url_for('static', filename='abby_logo.svg') }}" alt="Abby" class="wopr-abby-logo">
+          </a>
+        </div>
+      </details>
+
+      <a class="nav-btn nav-securite wopr-security-direct {% if request.endpoint == 'security_page' %}active{% endif %}" href="{{ url_for('security_page') }}">
+        <span class="nav-ico">🔐</span><span>Sécurité</span>
+      </a>
+    </div>
+
+    <form class="nav-lock-form wopr-lock-form" method="post" action="{{ url_for('admin_lock') }}">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <button class="lock-btn" type="submit"><span class="nav-ico">🔒</span><span>Verrouiller</span></button>
+      <button class="lock-btn wopr-lock-compact" type="submit" title="Verrouiller WOPR" aria-label="Verrouiller WOPR"><span class="nav-ico">🔒</span></button>
     </form>
   </nav>
   {% endif %}
@@ -213,7 +595,6 @@
 
 <script>
 document.addEventListener('click', async function (event) {
-  // Champs modifiables : password <-> text
   const passwordButton = event.target.closest('.password-toggle');
   if (passwordButton) {
     const field = passwordButton.closest('.password-field');
@@ -222,7 +603,6 @@ document.addEventListener('click', async function (event) {
     const input = field.querySelector('input');
     if (!input) return;
 
-    // Mot de passe appareil : même principe qu'Abby, jamais injecté dans le HTML initial.
     if (passwordButton.classList.contains('repair-secret-toggle')) {
       if (input.type === 'text') {
         input.type = 'password';
@@ -234,7 +614,6 @@ document.addEventListener('click', async function (event) {
         passwordButton.setAttribute('aria-label', 'Afficher le mot de passe');
         return;
       }
-      // Si un nouveau mot de passe a été saisi dans le formulaire d'édition, on affiche simplement la saisie.
       if (input.value && input.dataset.serverRevealed !== '1') {
         input.type = 'text';
         passwordButton.textContent = '🙈';
@@ -264,13 +643,9 @@ document.addEventListener('click', async function (event) {
       return;
     }
 
-    // Abby : la vraie clé n'est jamais injectée dans le HTML initial.
-    // Elle est demandée au serveur uniquement au clic sur l'œil.
     if (passwordButton.classList.contains('abby-key-toggle')) {
       if (input.type === 'text') {
         input.type = 'password';
-        // Si c'était la clé existante révélée depuis le serveur, on la retire du DOM en la remasquant.
-        // Une nouvelle clé saisie manuellement reste, elle, dans le champ pour pouvoir être enregistrée.
         if (input.dataset.serverRevealed === '1') {
           input.value = '';
           input.dataset.serverRevealed = '0';
@@ -279,7 +654,6 @@ document.addEventListener('click', async function (event) {
         passwordButton.setAttribute('aria-label', 'Afficher la clé');
         return;
       }
-      // Une nouvelle clé vient d'être saisie : l'œil ne contacte pas le serveur, il affiche simplement la saisie.
       if (input.value) {
         input.type = 'text';
         input.dataset.serverRevealed = '0';
@@ -320,7 +694,6 @@ document.addEventListener('click', async function (event) {
     return;
   }
 
-  // Fiche de suivi : valeur affichée en lecture seule
   const revealButton = event.target.closest('.reveal-secret');
   if (revealButton) {
     const cell = revealButton.closest('td');
@@ -344,7 +717,6 @@ document.addEventListener('click', async function (event) {
   }
 });
 </script>
-
 
 <!-- Easter egg WOPR : 10 clics rapides sur le badge API -->
 <div id="woprEgg" class="wopr-egg" aria-hidden="true">
@@ -427,9 +799,6 @@ document.addEventListener('click', async function (event) {
         endSample.preload = 'auto';
       }
 
-      // La séquence finale reste affichée jusqu'à fermeture volontaire.
-      // On ne ferme plus automatiquement l'easter egg : cela évite de
-      // couper la fin visuelle ou sonore sur les machines plus lentes.
       endSample.onended = () => {};
       endSample.onerror = () => {};
       endSample.currentTime = 0;
@@ -438,9 +807,7 @@ document.addEventListener('click', async function (event) {
       if (p && typeof p.catch === 'function') {
         p.catch(() => {});
       }
-    } catch(e) {
-      // Même sans audio, l'écran de fin reste affiché.
-    }
+    } catch(e) {}
   }
 
   function stopEndSample(){
@@ -627,6 +994,31 @@ document.addEventListener('click', async function (event) {
 })();
 </script>
 
+<script>
+(function(){
+  const menus = Array.from(document.querySelectorAll('.wopr-nav-menu'));
+  if (!menus.length) return;
+
+  menus.forEach(function(menu){
+    menu.addEventListener('toggle', function(){
+      if (!menu.open) return;
+      menus.forEach(function(other){
+        if (other !== menu) other.open = false;
+      });
+    });
+  });
+
+  document.addEventListener('click', function(e){
+    if (e.target.closest('.wopr-nav-menu')) return;
+    menus.forEach(function(menu){ menu.open = false; });
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'Escape') return;
+    menus.forEach(function(menu){ menu.open = false; });
+  });
+})();
+</script>
 
 <script>
 (function(){
@@ -647,6 +1039,39 @@ document.addEventListener('click', async function (event) {
   window.addEventListener('pagehide', function(){
     if (removeTimer) window.clearTimeout(removeTimer);
   }, { once:true });
+})();
+</script>
+
+
+<script>
+(function(){
+  const menus = Array.from(document.querySelectorAll('.wopr-nav-menu'));
+  if (!menus.length) return;
+
+  const canHover = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+  if (canHover) {
+    menus.forEach(function(menu){
+      let closeTimer = null;
+
+      menu.addEventListener('mouseenter', function(){
+        if (closeTimer) {
+          clearTimeout(closeTimer);
+          closeTimer = null;
+        }
+        menus.forEach(function(other){
+          if (other !== menu) other.open = false;
+        });
+        menu.open = true;
+      });
+
+      menu.addEventListener('mouseleave', function(){
+        closeTimer = setTimeout(function(){
+          menu.open = false;
+        }, 180);
+      });
+    });
+  }
 })();
 </script>
 
