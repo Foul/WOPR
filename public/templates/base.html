@@ -404,6 +404,17 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-abby-entry.active{
 
 
 
+/* ===== V10 — Suivi direct / Stock dans Gestion ===== */
+.topbar .topnav.topnav-grouped .wopr-suivi-direct,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-suivi-direct{
+  flex:0 0 94px!important;
+  width:94px!important;
+  min-width:94px!important;
+  max-width:94px!important;
+  margin:0!important;
+  box-sizing:border-box!important;
+}
+
 /* ===== V8 — Sécurité en accès direct ===== */
 .topbar .topnav.topnav-grouped .wopr-security-direct,
 body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
@@ -477,13 +488,9 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
         <button type="submit" aria-label="Rechercher">↵</button>
       </form>
 
-      <details class="wopr-nav-menu wopr-nav-repairs">
-        <summary class="nav-btn"><span class="nav-ico">🔧</span><span>Réparations</span><span class="nav-caret">▾</span></summary>
-        <div class="wopr-nav-dropdown">
-          <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}"><span>📋</span><span>Suivi</span></a>
-          <a href="{{ url_for('stock_page') }}" class="{% if request.endpoint in ['stock_page','stock_add','stock_edit','stock_delete','stock_image'] %}active{% endif %}"><span>📦</span><span>Stock</span></a>
-        </div>
-      </details>
+      <a class="nav-btn wopr-suivi-direct {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+        <span class="nav-ico">📋</span><span>Suivi</span>
+      </a>
 
       <details class="wopr-nav-menu wopr-nav-docs">
         <summary class="nav-btn"><span class="nav-ico">📄</span><span>Documents</span><span class="nav-caret">▾</span></summary>
@@ -501,6 +508,7 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
           <a href="{{ url_for('total_page') }}" class="{% if request.endpoint == 'total_page' %}active{% endif %}"><span>📊</span><span>CA / Déclarations</span></a>
           <a href="{{ url_for('antivirus_page') }}" class="{% if request.endpoint in ['antivirus_page','antivirus_add','antivirus_edit','antivirus_delete'] %}active{% endif %}"><span>🛡️</span><span>Antivirus</span></a>
           <a href="{{ url_for('contacts_page') }}" class="{% if request.endpoint in ['contacts_page','import_proton_contacts','import_proton_preview','client_edit','client_delete'] %}active{% endif %}"><span>👥</span><span>Clients</span></a>
+          <a href="{{ url_for('stock_page') }}" class="{% if request.endpoint in ['stock_page','stock_add','stock_edit','stock_delete','stock_image'] %}active{% endif %}"><span>📦</span><span>Stock</span></a>
         </div>
       </details>
 

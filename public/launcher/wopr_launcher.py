@@ -38,6 +38,7 @@ SERVER_OUT=DATA_DIR/"wopr-server.log"
 SERVER_ERR=DATA_DIR/"wopr-server-error.log"
 ADMIN_PIN_FILE=DATA_DIR/"admin_pin.json"
 SQLCIPHER_SETTINGS_FILE=DATA_DIR/"sqlcipher.json"
+
 def _find_existing_db():
     candidates = [
         p for p in DATA_DIR.glob("*.db")
@@ -62,8 +63,6 @@ def ensure_dirs():
         p.mkdir(parents=True,exist_ok=True)
 
 def pin_required_for_database():
-    # Dès qu'un PIN admin existe, le launcher le demande : soit pour migrer une
-    # ancienne base claire, soit pour déverrouiller SQLCipher.
     try:
         if ADMIN_PIN_FILE.is_file():
             return True
@@ -84,24 +83,25 @@ def db_env(pin=None):
 def log(msg):
     try:
         ensure_dirs()
-        # Le BOM permet aussi à Windows/Notepad de détecter l'UTF-8 au lieu
-        # d'interpréter les accents comme du Latin-1 (ex. « lancÃ© »).
         encoding = "utf-8" if LOG.exists() and LOG.stat().st_size else "utf-8-sig"
         with LOG.open("a",encoding=encoding) as f:
             f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
     except Exception:
         pass
 
-def alive():
+def alive(timeout=.7):
+    """Teste l'HTTP. Un timeout n'implique PAS que le processus WOPR est mort."""
     try:
-        with urllib.request.urlopen(APP_URL,timeout=.7) as r:
+        with urllib.request.urlopen(APP_URL,timeout=timeout) as r:
             return 200 <= int(r.status) < 500
     except Exception:
         return False
 
 def read_pid():
-    try: return int(PID_FILE.read_text(encoding="ascii").strip())
-    except Exception: return None
+    try:
+        return int(PID_FILE.read_text(encoding="ascii").strip())
+    except Exception:
+        return None
 
 def process_exists(pid):
     if not pid:
@@ -116,13 +116,10 @@ def process_exists(pid):
             )
             return str(pid) in cp.stdout
 
-        # Linux : un processus zombie possède encore un PID, mais il est déjà mort.
-        # os.kill(pid, 0) seul le considérait à tort comme encore actif.
         stat_path=Path(f"/proc/{pid}/stat")
         if stat_path.is_file():
             try:
                 stat=stat_path.read_text(encoding="utf-8",errors="ignore")
-                # /proc/<pid>/stat : PID (comm) STATE ...
                 end_comm=stat.rfind(")")
                 if end_comm != -1:
                     fields=stat[end_comm+2:].split()
@@ -136,68 +133,122 @@ def process_exists(pid):
     except Exception:
         return False
 
+def server_state():
+    """Retourne (http_ready, process_running, pid).
+
+    Important : pendant une requête longue, Flask peut ne pas répondre au probe HTTP
+    alors que son processus est parfaitement vivant.
+    """
+    pid=read_pid()
+    running=process_exists(pid)
+    ready=alive()
+    return ready,running,pid
+
 def req_hash():
-    if not REQ.exists(): return ""
+    if not REQ.exists():
+        return ""
     return hashlib.sha256(REQ.read_bytes()).hexdigest()
 
 def system_python():
     candidates=[["py","-3"],["python"],["python3"]] if IS_WINDOWS else [["python3"],["python"]]
     for cmd in candidates:
         try:
-            cp=subprocess.run(cmd+["-c","import sys;print(sys.version_info[0])"],capture_output=True,text=True,
-                              timeout=5,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if IS_WINDOWS else 0)
-            if cp.returncode==0 and cp.stdout.strip()=="3": return cmd
-        except Exception: pass
+            cp=subprocess.run(
+                cmd+["-c","import sys;print(sys.version_info[0])"],
+                capture_output=True,text=True,timeout=5,
+                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if IS_WINDOWS else 0
+            )
+            if cp.returncode==0 and cp.stdout.strip()=="3":
+                return cmd
+        except Exception:
+            pass
     return None
 
 def ensure_venv(status):
     ensure_dirs()
     if not PY.exists():
         cmd=system_python()
-        if not cmd: raise RuntimeError("Python 3 est introuvable.")
+        if not cmd:
+            raise RuntimeError("Python 3 est introuvable.")
         status("Création de l'environnement Python…")
         cp=subprocess.run(cmd+["-m","venv",str(VENV_DIR)],capture_output=True,text=True)
-        if cp.returncode: raise RuntimeError(cp.stderr or "Échec création venv.")
+        if cp.returncode:
+            raise RuntimeError(cp.stderr or "Échec création venv.")
     wanted=req_hash()
     installed=STAMP.read_text(encoding="ascii").strip() if STAMP.exists() else ""
-    if wanted and installed==wanted: return
+    if wanted and installed==wanted:
+        return
     status("Vérification des dépendances…")
-    cp=subprocess.run([str(PY),"-c","import flask,reportlab,qrcode; from sqlcipher3 import dbapi2 as _sqlcipher"],cwd=PUBLIC_DIR,
-                      capture_output=True,text=True)
+    cp=subprocess.run(
+        [str(PY),"-c","import flask,reportlab,qrcode; from sqlcipher3 import dbapi2 as _sqlcipher"],
+        cwd=PUBLIC_DIR,capture_output=True,text=True
+    )
     if cp.returncode==0 and wanted:
-        STAMP.write_text(wanted,encoding="ascii"); return
+        STAMP.write_text(wanted,encoding="ascii")
+        return
     status("Installation / mise à jour des dépendances…")
     with LOG.open("a",encoding="utf-8") as f:
-        cp=subprocess.run([str(PY),"-m","pip","install","-r",str(REQ)],cwd=PUBLIC_DIR,
-                          stdout=f,stderr=subprocess.STDOUT,text=True)
-    if cp.returncode: raise RuntimeError(f"Installation des dépendances échouée. Voir {LOG}")
-    if wanted: STAMP.write_text(wanted,encoding="ascii")
+        cp=subprocess.run(
+            [str(PY),"-m","pip","install","-r",str(REQ)],
+            cwd=PUBLIC_DIR,stdout=f,stderr=subprocess.STDOUT,text=True
+        )
+    if cp.returncode:
+        raise RuntimeError(f"Installation des dépendances échouée. Voir {LOG}")
+    if wanted:
+        STAMP.write_text(wanted,encoding="ascii")
 
 def start_server(status, db_pin=None):
-    if alive(): return read_pid() or 0
+    # HTTP répond : WOPR est déjà prêt.
+    if alive():
+        return read_pid() or 0
+
+    # CRITIQUE : si le PID WOPR existe toujours, ne JAMAIS démarrer un second
+    # app.py simplement parce qu'un probe HTTP a expiré pendant une requête longue.
     pid=read_pid()
-    if pid and not process_exists(pid): PID_FILE.unlink(missing_ok=True)
+    if pid and process_exists(pid):
+        status("WOPR est déjà actif • requête en cours…")
+        log(f"Démarrage ignoré : serveur déjà actif PID={pid} (HTTP momentanément indisponible)")
+        return pid
+
+    if pid:
+        PID_FILE.unlink(missing_ok=True)
+
     ensure_venv(status)
-    # Vérifie le PIN avant de lancer Flask : un mauvais PIN n'est pas un crash WOPR.
     validate_database_pin(db_pin)
     status("Lancement du serveur WOPR…")
     out=SERVER_OUT.open("a",encoding="utf-8")
     err=SERVER_ERR.open("a",encoding="utf-8")
-    kwargs=dict(cwd=str(PUBLIC_DIR),stdout=out,stderr=err,stdin=subprocess.DEVNULL,env=db_env(db_pin))
+    kwargs=dict(
+        cwd=str(PUBLIC_DIR),
+        stdout=out,
+        stderr=err,
+        stdin=subprocess.DEVNULL,
+        env=db_env(db_pin)
+    )
     if IS_WINDOWS:
         kwargs["creationflags"]=getattr(subprocess,"CREATE_NO_WINDOW",0)|getattr(subprocess,"CREATE_NEW_PROCESS_GROUP",0)
     else:
         kwargs["start_new_session"]=True
+
     p=subprocess.Popen([str(PY),str(APP_PATH)],**kwargs)
     PID_FILE.write_text(str(p.pid),encoding="ascii")
     log(f"Serveur lancé PID={p.pid}")
+
     end=time.monotonic()+90
     while time.monotonic()<end:
-        if alive(): status("WOPR est prêt."); return p.pid
+        if alive():
+            status("WOPR est prêt.")
+            return p.pid
         if p.poll() is not None:
             PID_FILE.unlink(missing_ok=True)
             raise RuntimeError("WOPR s'est arrêté pendant le démarrage.")
         time.sleep(.5)
+
+    # Le processus peut être vivant mais lent : ne pas le considérer comme crashé.
+    if process_exists(p.pid):
+        status("WOPR est actif mais ne répond pas encore…")
+        return p.pid
+
     raise RuntimeError(f"Délai dépassé. Voir les logs dans {DATA_DIR}")
 
 def discover_app_pids():
@@ -216,13 +267,16 @@ def discover_app_pids():
             "ForEach-Object { $_.ProcessId }"
         )
         try:
-            cp=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",ps],
-                              capture_output=True,text=True,timeout=8,
-                              creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            cp=subprocess.run(
+                ["powershell.exe","-NoProfile","-NonInteractive","-Command",ps],
+                capture_output=True,text=True,timeout=8,
+                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+            )
             for line in cp.stdout.splitlines():
                 try:
                     candidate=int(line.strip())
-                    if process_exists(candidate): pids.add(candidate)
+                    if process_exists(candidate):
+                        pids.add(candidate)
                 except Exception:
                     pass
         except Exception:
@@ -238,7 +292,8 @@ def discover_app_pids():
                     cmd=(proc/"cmdline").read_bytes().replace(b"\x00",b" ").decode(errors="ignore")
                     if app in cmd:
                         candidate=int(proc.name)
-                        if process_exists(candidate): pids.add(candidate)
+                        if process_exists(candidate):
+                            pids.add(candidate)
                 except Exception:
                     pass
     return sorted(pids)
@@ -322,8 +377,11 @@ def stop_server(status, db_pin=None):
     for pid in pids:
         try:
             if IS_WINDOWS:
-                subprocess.run(["taskkill","/PID",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                               creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+                subprocess.run(
+                    ["taskkill","/PID",str(pid)],
+                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+                )
             else:
                 os.kill(pid,signal.SIGTERM)
         except Exception:
@@ -338,8 +396,11 @@ def stop_server(status, db_pin=None):
             continue
         try:
             if IS_WINDOWS:
-                subprocess.run(["taskkill","/F","/PID",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                               creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+                subprocess.run(
+                    ["taskkill","/F","/PID",str(pid)],
+                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+                )
             else:
                 os.kill(pid,signal.SIGKILL)
         except Exception:
@@ -348,6 +409,7 @@ def stop_server(status, db_pin=None):
     end=time.monotonic()+3
     while time.monotonic()<end and any(process_exists(pid) for pid in pids):
         time.sleep(.15)
+
     remaining=[pid for pid in pids if process_exists(pid)]
     if remaining:
         raise RuntimeError("Impossible d'arrêter complètement WOPR (PID : " + ", ".join(map(str,remaining)) + ").")
@@ -362,7 +424,8 @@ def stop_server(status, db_pin=None):
     return backup
 
 def db_desc():
-    if not DB_FILE.exists(): return "Base : introuvable"
+    if not DB_FILE.exists():
+        return "Base : introuvable"
     s=DB_FILE.stat()
     return f"Base : {datetime.fromtimestamp(s.st_mtime):%d/%m/%Y %H:%M:%S}  •  {s.st_size/1048576:.2f} Mo"
 
@@ -380,8 +443,6 @@ class Launcher(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        # PIN uniquement en RAM : réutilisé pour l'arrêt si ce launcher
-        # a lui-même démarré WOPR. Jamais écrit sur disque.
         self._database_pin = None
 
         self.title("WOPR // SYSTEM LAUNCHER")
@@ -389,9 +450,6 @@ class Launcher(tk.Tk):
         self.resizable(False, False)
         self.configure(bg=self.BG)
 
-        # Icône de fenêtre : garde l'identité WOPR sous Windows et Linux.
-        # Le binaire Windows doit toujours être compilé avec --icon WOPR.ico
-        # pour l'icône de l'exécutable lui-même.
         self._wopr_window_icon = None
         try:
             if IS_WINDOWS and WINDOW_ICON_ICO.is_file():
@@ -408,142 +466,53 @@ class Launcher(tk.Tk):
         header = tk.Frame(self, bg=self.BG)
         header.pack(fill="x", padx=28, pady=(22, 0))
 
-        tk.Label(
-            header,
-            text=">_ WOPR",
-            bg=self.BG,
-            fg=self.GREEN,
-            font=("TkFixedFont", 28, "bold"),
-        ).pack(anchor="w")
+        tk.Label(header,text=">_ WOPR",bg=self.BG,fg=self.GREEN,font=("TkFixedFont", 28, "bold")).pack(anchor="w")
+        tk.Label(header,text="WORKFLOW D'ORGANISATION ET DE PILOTAGE DES RÉPARATIONS",bg=self.BG,fg=self.CYAN,font=("TkFixedFont", 9, "bold")).pack(anchor="w", pady=(2, 0))
+        tk.Label(header,text="[ 100% GRATUIT • OPEN SOURCE ]",bg=self.BG,fg=self.AMBER,font=("TkFixedFont", 9, "bold")).pack(anchor="w", pady=(5, 0))
 
-        tk.Label(
-            header,
-            text="WORKFLOW D'ORGANISATION ET DE PILOTAGE DES RÉPARATIONS",
-            bg=self.BG,
-            fg=self.CYAN,
-            font=("TkFixedFont", 9, "bold"),
-        ).pack(anchor="w", pady=(2, 0))
-
-        tk.Label(
-            header,
-            text="[ 100% GRATUIT • OPEN SOURCE ]",
-            bg=self.BG,
-            fg=self.AMBER,
-            font=("TkFixedFont", 9, "bold"),
-        ).pack(anchor="w", pady=(5, 0))
-
-        console = tk.Frame(
-            self,
-            bg=self.PANEL,
-            highlightbackground=self.BORDER,
-            highlightthickness=1,
-        )
+        console = tk.Frame(self,bg=self.PANEL,highlightbackground=self.BORDER,highlightthickness=1)
         console.pack(fill="x", padx=28, pady=(20, 14))
 
-        tk.Label(
-            console,
-            text=" SYSTEM STATUS",
-            bg=self.PANEL,
-            fg=self.MUTED,
-            font=("TkFixedFont", 8, "bold"),
-        ).pack(anchor="w", padx=14, pady=(10, 2))
+        tk.Label(console,text=" SYSTEM STATUS",bg=self.PANEL,fg=self.MUTED,font=("TkFixedFont", 8, "bold")).pack(anchor="w", padx=14, pady=(10, 2))
 
         self.status = tk.StringVar(value="[~] Vérification du système…")
-        self.status_label = tk.Label(
-            console,
-            textvariable=self.status,
-            bg=self.PANEL,
-            fg=self.AMBER,
-            font=("TkFixedFont", 12, "bold"),
-        )
+        self.status_label = tk.Label(console,textvariable=self.status,bg=self.PANEL,fg=self.AMBER,font=("TkFixedFont", 12, "bold"))
         self.status_label.pack(anchor="w", padx=14, pady=(2, 4))
 
         self.db = tk.StringVar(value=db_desc())
-        tk.Label(
-            console,
-            textvariable=self.db,
-            bg=self.PANEL,
-            fg=self.TEXT,
-            font=mono,
-        ).pack(anchor="w", padx=14, pady=(0, 3))
+        tk.Label(console,textvariable=self.db,bg=self.PANEL,fg=self.TEXT,font=mono).pack(anchor="w", padx=14, pady=(0, 3))
 
-        self.platform_text = tk.StringVar(
-            value=f"OS   : {platform.system()} {platform.release()}"
-        )
-        tk.Label(
-            console,
-            textvariable=self.platform_text,
-            bg=self.PANEL,
-            fg=self.MUTED,
-            font=mono,
-        ).pack(anchor="w", padx=14, pady=(0, 10))
+        self.platform_text = tk.StringVar(value=f"OS   : {platform.system()} {platform.release()}")
+        tk.Label(console,textvariable=self.platform_text,bg=self.PANEL,fg=self.MUTED,font=mono).pack(anchor="w", padx=14, pady=(0, 10))
 
         buttons = tk.Frame(self, bg=self.BG)
         buttons.pack(padx=28, pady=(0, 10), fill="x")
 
         def make_button(parent, text, command, fg):
             return tk.Button(
-                parent,
-                text=text,
-                command=command,
-                bg=self.PANEL_2,
-                fg=fg,
-                activebackground=self.BORDER,
-                activeforeground=fg,
-                disabledforeground="#405048",
-                relief="flat",
-                bd=0,
-                highlightthickness=1,
-                highlightbackground=self.BORDER,
-                cursor="hand2",
-                font=mono_bold,
-                padx=13,
-                pady=9,
+                parent,text=text,command=command,bg=self.PANEL_2,fg=fg,
+                activebackground=self.BORDER,activeforeground=fg,
+                disabledforeground="#405048",relief="flat",bd=0,
+                highlightthickness=1,highlightbackground=self.BORDER,
+                cursor="hand2",font=mono_bold,padx=13,pady=9
             )
 
-        self.openb = make_button(
-            buttons, "[▶] DÉMARRER WOPR", self.open_wopr, self.GREEN
-        )
+        self.openb = make_button(buttons, "[▶] DÉMARRER WOPR", self.open_wopr, self.GREEN)
         self.openb.pack(side="left", expand=True, fill="x", padx=(0, 6))
 
-        self.stopb = make_button(
-            buttons, "[■] ARRÊTER WOPR", self.stop_wopr, self.RED
-        )
+        self.stopb = make_button(buttons, "[■] ARRÊTER WOPR", self.stop_wopr, self.RED)
         self.stopb.pack(side="left", expand=True, fill="x", padx=6)
 
-        self.refreshb = make_button(
-            buttons, "[↻] ACTUALISER", self.refresh, self.CYAN
-        )
+        self.refreshb = make_button(buttons, "[↻] ACTUALISER", self.refresh, self.CYAN)
         self.refreshb.pack(side="left", expand=True, fill="x", padx=(6, 0))
 
         footer = tk.Frame(self, bg=self.BG)
         footer.pack(fill="x", padx=28, pady=(8, 0))
 
-        tk.Label(
-            footer,
-            text="root@wopr:",
-            bg=self.BG,
-            fg=self.GREEN,
-            font=("TkFixedFont", 8, "bold"),
-        ).pack(side="left")
+        tk.Label(footer,text="root@wopr:",bg=self.BG,fg=self.GREEN,font=("TkFixedFont", 8, "bold")).pack(side="left")
+        tk.Label(footer,text=str(WOPR_DIR),bg=self.BG,fg=self.MUTED,font=("TkFixedFont", 8),wraplength=520,justify="left").pack(side="left", padx=(5, 0))
 
-        tk.Label(
-            footer,
-            text=str(WOPR_DIR),
-            bg=self.BG,
-            fg=self.MUTED,
-            font=("TkFixedFont", 8),
-            wraplength=520,
-            justify="left",
-        ).pack(side="left", padx=(5, 0))
-
-        tk.Label(
-            self,
-            text="WOPR // local-first repair management",
-            bg=self.BG,
-            fg="#30483D",
-            font=("TkFixedFont", 8),
-        ).pack(side="bottom", pady=(0, 12))
+        tk.Label(self,text="WOPR // local-first repair management",bg=self.BG,fg="#30483D",font=("TkFixedFont", 8)).pack(side="bottom", pady=(0, 12))
 
         self.after(100, self.refresh)
         self.after(3000, self.tick)
@@ -552,22 +521,23 @@ class Launcher(tk.Tk):
         self.after(0, self.status.set, f"[~] {t}")
 
     def refresh(self):
-        run = alive()
+        ready,running,pid=server_state()
 
-        if run:
+        if ready:
             self.status.set("[●] WOPR ONLINE // 127.0.0.1:5000")
             self.status_label.config(fg=self.GREEN)
+            self.openb.config(text="[↗] OUVRIR WOPR")
+        elif running:
+            self.status.set("[~] WOPR OCCUPÉ // PROCESSUS ACTIF")
+            self.status_label.config(fg=self.AMBER)
+            self.openb.config(text="[↗] OUVRIR WOPR")
         else:
             self.status.set("[○] WOPR OFFLINE // READY")
             self.status_label.config(fg=self.RED)
+            self.openb.config(text="[▶] DÉMARRER WOPR")
 
         self.db.set(db_desc())
-        self.openb.config(
-            text="[↗] OUVRIR WOPR" if run else "[▶] DÉMARRER WOPR"
-        )
-        self.stopb.config(
-            state="normal" if run or process_exists(read_pid()) else "disabled"
-        )
+        self.stopb.config(state="normal" if running or ready else "disabled")
 
     def tick(self):
         self.refresh()
@@ -623,7 +593,11 @@ class Launcher(tk.Tk):
         )
 
     def open_wopr(self):
-        if alive():
+        ready,running,pid=server_state()
+
+        # Même si l'HTTP est temporairement occupé, un processus vivant interdit
+        # tout second lancement. On ouvre simplement l'URL existante.
+        if ready or running:
             webbrowser.open(APP_URL)
             return
 
@@ -649,11 +623,8 @@ class Launcher(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def stop_wopr(self):
-        # Réutilise le PIN saisi au démarrage tant que cette même instance
-        # du launcher est restée ouverte.
         db_pin = self._database_pin
         if pin_required_for_database() and not db_pin:
-            # Cas exceptionnel : launcher rouvert pendant que WOPR tourne déjà.
             db_pin=self.ask_database_pin("sauvegarder et arrêter")
             if db_pin is None:
                 return
@@ -673,7 +644,6 @@ class Launcher(tk.Tk):
                 self.after(0, self.refresh)
 
         threading.Thread(target=job, daemon=True).start()
-
 
 if __name__=="__main__":
     ensure_dirs()

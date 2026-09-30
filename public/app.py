@@ -192,10 +192,11 @@ SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
 ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
 SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
 TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
+TRACKING_STATS_HIDDEN_FILE = PRIVATE_ROOT / "data" / "tracking_stats_hidden.json"
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.6.1"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -986,6 +987,7 @@ def force_utf8_html(response):
             google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}"></script>'
             folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}"></script>'
             actions_8bit_runtime_js_tag = f'<script src="/static/wopr-8bit-actions-runtime.js?v={APP_VERSION}"></script>'
+            tracking_preview_js_tag = f'<script src="/static/wopr-tracking-preview.js?v={APP_VERSION}"></script>'
 
 
 
@@ -1002,6 +1004,8 @@ def force_utf8_html(response):
                 html = html.replace("</body>", folders_v248_js_tag + "\n</body>", 1)
             if "wopr-8bit-actions-runtime.js" not in html and "</body>" in html:
                 html = html.replace("</body>", actions_8bit_runtime_js_tag + "\n</body>", 1)
+            if "wopr-tracking-preview.js" not in html and "</body>" in html:
+                html = html.replace("</body>", tracking_preview_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
@@ -9311,6 +9315,27 @@ def home():
 
 
 
+def _tracking_stats_hidden_codes():
+    try:
+        if TRACKING_STATS_HIDDEN_FILE.is_file():
+            data = json.loads(TRACKING_STATS_HIDDEN_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return {str(x or "").strip().upper() for x in data if str(x or "").strip()}
+    except Exception:
+        pass
+    return set()
+
+
+def _tracking_stats_save_hidden_codes(codes):
+    TRACKING_STATS_HIDDEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = sorted({str(x or "").strip().upper() for x in codes if str(x or "").strip()})
+    TRACKING_STATS_HIDDEN_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+
 def _tracking_stats_datetime(value):
     raw = str(value or "").strip()
     if not raw:
@@ -9386,6 +9411,8 @@ def fetch_tracking_stats():
 @app.route("/suivi/stats")
 def tracking_stats_page():
     error = ""
+    show_hidden = request.args.get("hidden") == "1"
+    hidden_codes = _tracking_stats_hidden_codes()
     stats = {
         "today": {"views": 0, "unique_visitors": 0},
         "week": {"views": 0, "unique_visitors": 0},
@@ -9448,12 +9475,19 @@ def tracking_stats_page():
             continue
         code = str(item.get("code") or "").strip().upper()
         local = local_by_code.get(code, {})
+        tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+        preview_url = (
+            f"{tracking_site}/suivi.html?code={urllib.parse.quote(code)}&preview=1"
+            if tracking_site else ""
+        )
         enriched.append({
             "code": code,
             "views": int(item.get("views") or 0),
             "unique_visitors": int(item.get("unique_visitors") or 0),
             "first_view_at": _tracking_stats_datetime(item.get("first_view_at")),
             "last_view_at": _tracking_stats_datetime(item.get("last_view_at")),
+            "preview_url": preview_url,
+            "hidden": code in hidden_codes,
             **local,
         })
 
@@ -9464,8 +9498,91 @@ def tracking_stats_page():
         stats=stats,
         rows=enriched,
         error=error,
+        show_hidden=show_hidden,
         tracking_enabled=bool(read_tracking_settings().get("enabled", False)),
     )
+
+
+@app.post("/suivi/stats/<code>/hide")
+def tracking_stats_hide(code):
+    code = str(code or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9-]{3,19}", code):
+        abort(400)
+
+    hidden_codes = _tracking_stats_hidden_codes()
+    hide = request.form.get("hidden") == "1"
+    if hide:
+        hidden_codes.add(code)
+        flash(f"{code} masqué des statistiques WOPR.")
+    else:
+        hidden_codes.discard(code)
+        flash(f"{code} réaffiché dans les statistiques WOPR.")
+    _tracking_stats_save_hidden_codes(hidden_codes)
+    return redirect(url_for("tracking_stats_page", hidden=1 if not hide else None))
+
+
+
+@app.post("/suivi/stats/<code>/delete")
+def tracking_stats_delete(code):
+    code = str(code or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9-]{3,19}", code):
+        abort(400)
+
+    settings = read_tracking_settings()
+    endpoint = str(settings.get("api_url") or "").strip()
+    api_key = str(settings.get("api_key") or "").strip()
+    if not endpoint or not api_key:
+        flash("Suppression impossible : API de suivi non configurée.")
+        return redirect(url_for("tracking_stats_page"))
+
+    try:
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(
+                {"action": "delete_stats", "code": code},
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-WOPR-Key": api_key,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            raise RuntimeError(str(payload.get("error") or "Réponse invalide du portail."))
+
+        # Nettoie aussi un éventuel ancien masquage local.
+        hidden_codes = _tracking_stats_hidden_codes()
+        if code in hidden_codes:
+            hidden_codes.discard(code)
+            _tracking_stats_save_hidden_codes(hidden_codes)
+
+        if not payload.get("deleted"):
+            flash(f"Aucune statistique enregistrée pour {code} sur le serveur.")
+        elif payload.get("legacy_daily_preserved"):
+            flash(
+                f"Stats de {code} supprimées. Les anciens compteurs journaliers ne "
+                "pouvaient pas être recalculés exactement car ils datent de l'ancien format."
+            )
+        else:
+            flash(f"Statistiques de {code} supprimées définitivement.")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            parsed = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
+            if isinstance(parsed, dict):
+                detail = str(parsed.get("error") or "")
+        except Exception:
+            pass
+        flash(f"Suppression impossible : HTTP {exc.code}" + (f" — {detail}" if detail else ""))
+    except Exception as exc:
+        flash(f"Suppression impossible : {exc}")
+
+    return redirect(url_for("tracking_stats_page"))
 
 
 @app.route("/suivi")
@@ -11158,6 +11275,30 @@ def _stock_save_image(upload, old_name=""):
 
 
 
+def _stock_reference_parts(value):
+    """Découpe une saisie contenant plusieurs références."""
+    raw = " ".join(str(value or "").split()).strip()
+    if not raw:
+        return []
+
+    parts = re.split(r"\s*(?:/|;|,|\|)\s*", raw)
+    cleaned = []
+    seen = set()
+
+    for part in parts:
+        part = " ".join(str(part or "").split()).strip()
+        if not part:
+            continue
+        key = re.sub(r"[\s\-_./]+", "", part).casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(part)
+
+    return cleaned or [raw]
+
+
+
 def _stock_normalize_reference(value):
     return re.sub(r"[\s\-_./]+", "", str(value or "")).casefold()
 
@@ -11185,6 +11326,14 @@ def _stock_clean_search_text(value):
 
 def _stock_guess_from_reference(reference):
     """Déductions locales sûres quand la référence contient déjà l'information."""
+    parts = _stock_reference_parts(reference)
+    if len(parts) > 1:
+        for part in sorted(parts, key=lambda x: (len(_stock_normalize_reference(x)), len(x))):
+            guessed = _stock_guess_from_reference(part)
+            if guessed:
+                return guessed
+        return ""
+
     raw = " ".join(str(reference or "").split()).strip()
     low = raw.casefold()
     if not raw:
@@ -11236,6 +11385,35 @@ def _stock_guess_from_reference(reference):
     if "pd controller" in low or ("power delivery" in low and "controller" in low):
         return "Contrôleur USB-C / Power Delivery"
 
+    # Familles courantes de dépannage : on reconnaît la famille même quand
+    # le suffixe de valeur/boîtier n'est pas présent dans la saisie.
+    compact = re.sub(r"[\s\-_./]+", "", raw).upper()
+
+    # TAI-TECH HCBxxxxKF... : ferrite bead CMS (ex. HCB2012KF-121T50).
+    if re.fullmatch(r"HCB\d{4}KF[A-Z0-9]*", compact):
+        return "Ferrite / Ferrite bead CMS"
+
+    # LL4148 / LL4148-GS08 / variantes : diode signal rapide MiniMELF.
+    if compact.startswith("LL4148"):
+        return "Diode à commutation rapide"
+
+    # Famille ST VNxxx : interrupteurs intelligents / drivers high-side.
+    # Ex. VN820, VN750, VN920...
+    if re.fullmatch(r"VN\d{3,4}[A-Z0-9]*", compact):
+        return "High-side driver / Interrupteur intelligent"
+
+    # Famille TI TPS229xx : load switches.
+    if re.fullmatch(r"TPS229\d+[A-Z0-9]*", compact):
+        return "Interrupteur de charge / Load switch"
+
+    # onsemi NCP1014 + suffixes (ST100T3G, etc.).
+    if re.fullmatch(r"NCP1014[A-Z0-9]*", compact):
+        return "Contrôleur d’alimentation / Convertisseur Flyback"
+
+    # Familles Alpha & Omega les plus utilisées en dépannage.
+    if re.fullmatch(r"AO(?:N|D|I|T|C)\d+[A-Z0-9]*", compact):
+        return "MOSFET"
+
     # Famille 78Lxx : régulateurs linéaires positifs (78L05, 78L09, 78L12...)
     m = re.fullmatch(r"78l(\d{2})", re.sub(r"[\s\-_./]+", "", low))
     if m:
@@ -11284,11 +11462,72 @@ def _stock_function_from_description(description):
     if "buck-boost" in low or "buck boost" in low:
         return "Convertisseur Buck-Boost"
 
-    if "high-side driver" in low or "high side driver" in low:
-        return "High-side driver"
+    if "load switch" in low or "power distribution switch" in low or "power switch" in low:
+        extras = []
+        volts = re.search(r"(\d+(?:[.,]\d+)?)\s*[- ]*v", text, re.I)
+        amps = re.search(r"(\d+(?:[.,]\d+)?)\s*[- ]*a\b", text, re.I)
+        if volts:
+            extras.append(_stock_format_number_fr(volts.group(1)) + " V")
+        if amps:
+            extras.append(_stock_format_number_fr(amps.group(1)) + " A")
+        return "Interrupteur de charge / Load switch" + ((" " + " / ".join(extras)) if extras else "")
+
+    if "load switch" in low or "power distribution switch" in low:
+        return "Interrupteur de charge / Load switch"
+
+    if (
+        "power controller" in low
+        or "power management ic" in low
+        or "power-management ic" in low
+        or "power management controller" in low
+    ):
+        return "Contrôleur de gestion d’alimentation"
+
+    if (
+        "high-side driver" in low
+        or "high side driver" in low
+        or "high-side switch" in low
+        or "high side switch" in low
+        or "smart power high-side" in low
+        or "smart high-side" in low
+    ):
+        return "High-side driver / Interrupteur intelligent"
 
     if "low-side driver" in low or "low side driver" in low:
         return "Low-side driver"
+
+    if "gate driver" in low:
+        return "Driver de grille MOSFET"
+
+    if "battery charger" in low or "battery charging" in low or "charger ic" in low:
+        return "Contrôleur de charge batterie"
+
+    if "led driver" in low:
+        return "Driver LED"
+
+    if "level translator" in low or "level shifter" in low:
+        return "Traducteur de niveau logique"
+
+    if "analog switch" in low or "bilateral switch" in low:
+        return "Commutateur analogique"
+
+    if "current sense amplifier" in low:
+        return "Amplificateur de mesure de courant"
+
+    if "voltage supervisor" in low or "supervisor circuit" in low or "reset ic" in low:
+        return "Superviseur de tension / Reset"
+
+    if "hall effect sensor" in low or "hall-effect sensor" in low:
+        return "Capteur à effet Hall"
+
+    if "transceiver" in low:
+        if "can" in low:
+            return "Transceiver CAN"
+        if "rs-485" in low or "rs485" in low:
+            return "Transceiver RS-485"
+        if "usb" in low:
+            return "Transceiver USB"
+        return "Transceiver"
 
     if "power delivery" in low and "controller" in low:
         return "Contrôleur USB-C / Power Delivery"
@@ -11299,10 +11538,16 @@ def _stock_function_from_description(description):
     if "power management" in low or re.search(r"\bpmic\b", low):
         return "Contrôleur de gestion d’alimentation"
 
-    if "n-channel" in low and "mosfet" in low:
+    if (
+        ("n-channel" in low or re.search(r"\bn[\s-]*ch\b", low))
+        and "mosfet" in low
+    ):
         return "MOSFET canal N"
 
-    if "p-channel" in low and "mosfet" in low:
+    if (
+        ("p-channel" in low or re.search(r"\bp[\s-]*ch\b", low))
+        and "mosfet" in low
+    ):
         return "MOSFET canal P"
 
     if "mosfet" in low:
@@ -11314,14 +11559,26 @@ def _stock_function_from_description(description):
     if "schottky" in low and "diode" in low:
         return "Diode Schottky"
 
-    if "fast switching diode" in low or "switching diode" in low:
+    if (
+        "fast switching diode" in low
+        or "switching diode" in low
+        or "small signal diode" in low
+        or "high speed diode" in low
+        or "high-speed diode" in low
+    ):
         return "Diode à commutation rapide"
 
     if "esd protection" in low or ("esd" in low and "diode" in low):
         return "Diode de protection ESD"
 
-    if "ferrite bead" in low or "ferrite chip" in low:
-        return "Ferrite"
+    if (
+        "ferrite bead" in low
+        or "ferrite chip" in low
+        or "chip bead" in low
+        or "emi suppression ferrite" in low
+        or ("ferrite" in low and ("impedance" in low or "ohm" in low))
+    ):
+        return "Ferrite / Ferrite bead CMS"
 
     if re.search(r"\brelay\b", low):
         return "Relais"
@@ -11359,6 +11616,84 @@ def _stock_guess_function(reference, title, snippet):
     return _stock_function_from_description(f"{title} {snippet}")
 
 
+def _stock_extract_bing_results_full(page):
+    """Résultats Bing HTML avec URL quand disponible."""
+    results = []
+    blocks = re.findall(r'<li[^>]+class="b_algo"[^>]*>(.*?)</li>', str(page or ""), flags=re.I | re.S)
+    for block in blocks[:15]:
+        link_m = re.search(r'<h2[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, flags=re.I | re.S)
+        if link_m:
+            link = html.unescape(link_m.group(1))
+            title = _stock_clean_search_text(link_m.group(2))
+        else:
+            link = ""
+            title_m = re.search(r"<h2[^>]*>.*?<a[^>]*>(.*?)</a>", block, flags=re.I | re.S)
+            title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        snippet_m = re.search(r"<p[^>]*>(.*?)</p>", block, flags=re.I | re.S)
+        snippet = _stock_clean_search_text(snippet_m.group(1) if snippet_m else "")
+        if title or snippet:
+            results.append((title, snippet, link))
+    return results
+
+
+def _stock_bing_html_search(query, timeout=8):
+    url = (
+        "https://www.bing.com/search?q="
+        + urllib.parse.quote_plus(str(query or ""))
+        + "&setlang=en&cc=us"
+    )
+    page = _stock_http_text(url, timeout=timeout)
+    return _stock_extract_bing_results_full(page)
+
+
+def _stock_collect_search_results(query, timeout=8):
+    """Essaie plusieurs formats : HTML Bing, RSS Bing, puis DDG."""
+    merged = []
+    seen = set()
+
+    def add(title, snippet, link=""):
+        key = (str(title).casefold(), str(link).casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        merged.append((title, snippet, link))
+
+    try:
+        for title, snippet, link in _stock_bing_html_search(query, timeout=timeout):
+            add(title, snippet, link)
+    except Exception:
+        pass
+
+    try:
+        for title, snippet, link in _stock_search_bing_rss(query, timeout=timeout):
+            add(title, snippet, link)
+    except Exception:
+        pass
+
+    if not merged:
+        try:
+            q = urllib.parse.quote_plus(str(query or ""))
+            page = _stock_http_text("https://html.duckduckgo.com/html/?q=" + q, timeout=timeout)
+            for title, snippet in _stock_extract_ddg_results(page):
+                add(title, snippet, "")
+        except Exception:
+            pass
+
+    return merged[:20]
+
+
+def _stock_aos_family_hint(reference, title, snippet):
+    """AON/AOD/AOI sont des familles MOSFET Alpha & Omega ; n'utilise ce hint
+    que si le résultat Web cite bien AOS / Alpha & Omega.
+    """
+    ref = _stock_normalize_reference(reference).upper()
+    hay = f"{title} {snippet}".casefold()
+    if re.fullmatch(r"AO(?:N|D|I|T)\\d+[A-Z0-9]*", ref):
+        if "alpha" in hay and "omega" in hay or "aos" in hay:
+            return "MOSFET"
+    return ""
+
+
 def _stock_extract_bing_results(page):
     results = []
     blocks = re.findall(r'<li[^>]+class="b_algo"[^>]*>(.*?)</li>', page, flags=re.I | re.S)
@@ -11370,6 +11705,140 @@ def _stock_extract_bing_results(page):
         if title or snippet:
             results.append((title, snippet))
     return results
+
+
+
+def _stock_extract_bing_rss_results(page):
+    """Parse le flux RSS de Bing, plus stable que le HTML de la page de résultats."""
+    results = []
+    for item in re.findall(r"<item>(.*?)</item>", str(page or ""), flags=re.I | re.S):
+        title_m = re.search(r"<title>(.*?)</title>", item, flags=re.I | re.S)
+        link_m = re.search(r"<link>(.*?)</link>", item, flags=re.I | re.S)
+        desc_m = re.search(r"<description>(.*?)</description>", item, flags=re.I | re.S)
+        title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        link = html.unescape(_stock_clean_search_text(link_m.group(1) if link_m else ""))
+        snippet = _stock_clean_search_text(desc_m.group(1) if desc_m else "")
+        if title or snippet:
+            results.append((title, snippet, link))
+        if len(results) >= 12:
+            break
+    return results
+
+
+def _stock_search_bing_rss(query, timeout=7):
+    url = (
+        "https://www.bing.com/search?format=rss&setlang=en&q="
+        + urllib.parse.quote_plus(str(query or ""))
+    )
+    return _stock_extract_bing_rss_results(_stock_http_text(url, timeout=timeout))
+
+
+def _stock_result_source(url, title="", snippet=""):
+    hay = f"{url} {title} {snippet}".casefold()
+    sources = (
+        ("ti.com", "Texas Instruments"),
+        ("st.com", "STMicroelectronics"),
+        ("onsemi.com", "onsemi"),
+        ("infineon.com", "Infineon"),
+        ("nxp.com", "NXP"),
+        ("analog.com", "Analog Devices"),
+        ("microchip.com", "Microchip"),
+        ("monolithicpower.com", "Monolithic Power Systems"),
+        ("mps.com", "Monolithic Power Systems"),
+        ("diodes.com", "Diodes Incorporated"),
+        ("vishay.com", "Vishay"),
+        ("rohm.com", "ROHM"),
+        ("toshiba-semicon-storage.com", "Toshiba"),
+        ("renesas.com", "Renesas"),
+        ("digikey.", "DigiKey"),
+        ("mouser.", "Mouser"),
+        ("farnell.", "Farnell"),
+        ("newark.", "Newark"),
+        ("rs-online.", "RS"),
+        ("lcsc.com", "LCSC"),
+        ("alldatasheet.", "AllDataSheet"),
+        ("datasheetcatalog.", "DatasheetCatalog"),
+        ("aliexpress.", "AliExpress — à confirmer"),
+        ("aliexpress.com", "AliExpress — à confirmer"),
+    )
+    for needle, label in sources:
+        if needle in hay:
+            return label
+    return "Web"
+
+
+def _stock_reference_variants(reference):
+    """Variantes prudentes pour références complètes + suffixes de commande."""
+    raw = " ".join(str(reference or "").split()).strip()
+    norm = _stock_normalize_reference(raw)
+    variants = []
+    for value in (raw, norm):
+        if value and value not in variants:
+            variants.append(value)
+
+    # Ex. TPS22965DSGR -> TPS22965 ; suffixes de boîtier/commande courants.
+    if len(norm) >= 8:
+        stripped = re.sub(
+            r"(?:dsgr|dsgt|rger|rget|pwr|pw|dgk|dck|dbv|drb|drc|q1|tr|reel|tape)$",
+            "",
+            norm,
+            flags=re.I,
+        )
+        if len(stripped) >= 6 and stripped not in variants:
+            variants.append(stripped)
+    return variants[:4]
+
+
+def _stock_result_relevant(reference, title, snippet, link=""):
+    """Pertinence par référence exacte ou racine de famille suffisamment distinctive."""
+    hay = _stock_normalize_reference(f"{title} {snippet} {link}")
+    if not hay:
+        return False
+
+    variants = _stock_reference_variants(reference)
+    for variant in variants:
+        norm = _stock_normalize_reference(variant)
+        if len(norm) >= 4 and norm in hay:
+            return True
+
+    ref = _stock_normalize_reference(reference).upper()
+    roots = []
+
+    # HCB2012KF doit accepter HCB2012KF-121T50.
+    if re.fullmatch(r"HCB\d{4}KF[A-Z0-9]*", ref):
+        m = re.match(r"(HCB\d{4}KF)", ref)
+        if m:
+            roots.append(m.group(1))
+
+    # LL4148 doit accepter les suffixes fabricant/commande.
+    if ref.startswith("LL4148"):
+        roots.append("LL4148")
+
+    # VN820 accepte VN820-E / VN820SP-E, etc. si la racine reste présente.
+    m = re.match(r"(VN\d{3,4})", ref)
+    if m:
+        roots.append(m.group(1))
+
+    for root in roots:
+        if len(root) >= 5 and root.casefold() in hay.casefold():
+            return True
+
+    return False
+
+
+def _stock_search_candidate_queries(reference):
+    """Requêtes simples : l'exacte d'abord, spécialisées ensuite."""
+    ref = str(reference or "").strip()
+    return [
+        (f'"{ref}"', "exact"),
+        (f'"{ref}" datasheet', "datasheet"),
+        (f'"{ref}" MOSFET transistor IC', "semiconductor"),
+        (f'"{ref}" power controller power management', "power"),
+        (f'"{ref}" electronic component', "component"),
+        (f'"{ref}" site:digikey.com OR site:mouser.com OR site:lcsc.com', "distributeur"),
+        (f'"{ref}" site:aliexpress.com', "aliexpress"),
+    ]
+
 
 
 def _stock_extract_ddg_results(page):
@@ -11439,109 +11908,394 @@ def _stock_ti_marking_candidates(reference):
     return found[:5]
 
 
+def _stock_meta_description(page):
+    text = str(page or "")
+    patterns = (
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+        r'<meta[^>]+content=["\'](.*?)["\'][^>]+name=["\']description["\']',
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
+        r'<title[^>]*>(.*?)</title>',
+    )
+    parts = []
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.I | re.S)
+        if m:
+            value = _stock_clean_search_text(m.group(1))
+            if value and value not in parts:
+                parts.append(value)
+    return " — ".join(parts)
+
+
+def _stock_direct_ti(reference):
+    """Essai direct sur la page produit TI. Évite totalement les moteurs de recherche."""
+    ref = str(reference or "").strip().upper()
+    if not ref:
+        return []
+
+    # Les familles TI les plus fréquentes en dépannage.
+    likely_ti = bool(re.match(
+        r"^(TPS|TLV|LM|SN|BQ|DRV|TUSB|HD3SS|CD|UCC|INA|OPA|PCM|DP|TMP|PCA|TCA|TXS|TXB)",
+        ref,
+        re.I
+    ))
+    if not likely_ti:
+        return []
+
+    variants = _stock_reference_variants(ref)
+    # Pour les suffixes de commande, tente aussi la racine.
+    roots = []
+    for v in variants:
+        v = str(v).strip().upper()
+        if v and v not in roots:
+            roots.append(v)
+
+    results = []
+    for part in roots[:4]:
+        try:
+            url = "https://www.ti.com/product/" + urllib.parse.quote(part, safe="-")
+            page = _stock_http_text(url, timeout=10)
+        except Exception:
+            continue
+
+        clean = _stock_clean_search_text(page[:2_000_000])
+        meta = _stock_meta_description(page)
+        hay = f"{meta} {clean[:120000]}"
+        if _stock_normalize_reference(part) not in _stock_normalize_reference(hay):
+            continue
+
+        function = _stock_function_from_description(hay)
+        if not function:
+            # Certains anciens TI ont des pages pauvres : formulations connues.
+            low = hay.casefold()
+            if "power controller" in low or "power selector" in low:
+                function = "Contrôleur de gestion d’alimentation"
+            elif "load switch" in low:
+                function = "Interrupteur de charge / Load switch"
+        if function:
+            results.append({
+                "function": function,
+                "details": meta[:300] or f"Page produit TI : {part}",
+                "title": part,
+                "source": "Texas Instruments",
+            })
+            break
+    return results
+
+
+def _stock_direct_st(reference):
+    """Essai direct sur une page produit ST quand la famille est identifiable."""
+    ref = str(reference or "").strip().upper()
+    if not ref:
+        return []
+
+    if not re.fullmatch(r"(?:VN|VND|VNH|VNP|VIPER|L78|LD|STM32)[A-Z0-9._-]+", ref):
+        return []
+
+    slug = re.sub(r"[^a-z0-9-]+", "-", ref.casefold()).strip("-")
+    categories = (
+        "automotive-analog-and-power",
+        "power-management",
+        "motor-drivers",
+        "microcontrollers-microprocessors",
+    )
+
+    for category in categories:
+        url = f"https://www.st.com/en/{category}/{slug}.html"
+        try:
+            page = _stock_http_text(url, timeout=6)
+        except Exception:
+            continue
+
+        meta = _stock_meta_description(page)
+        hay = f"{meta} {_stock_clean_search_text(page[:500000])}"
+        if _stock_normalize_reference(ref) not in _stock_normalize_reference(hay):
+            continue
+
+        function = _stock_function_from_description(hay)
+        if function:
+            return [{
+                "function": function,
+                "details": meta[:300] or f"Page produit ST : {ref}",
+                "title": ref,
+                "source": "STMicroelectronics",
+            }]
+    return []
+
+
+
+def _stock_direct_aos(reference):
+    """Identification directe/famille Alpha & Omega (AON/AOD/AOI/AOT...)."""
+    ref = str(reference or "").strip().upper()
+    if not re.fullmatch(r"AO(?:N|D|I|T|C)\d+[A-Z0-9]*", ref):
+        return []
+
+    # Plusieurs chemins historiques existent chez AOS. On essaie les pages/PDF connus.
+    urls = [
+        f"https://www.aosmd.com/sites/default/files/res/data_sheets/{ref}.pdf",
+        f"https://aosmd.com/res/data_sheets/{ref}.pdf",
+        f"https://aosmd.com/pdfs/datasheet/{ref}.pdf",
+    ]
+
+    # Un PDF brut n'est pas facilement classifiable ici, mais si l'accès existe,
+    # la famille AON/AOD/AOI/AOT est bien une famille de MOSFET AOS.
+    reachable = False
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if resp.status == 200 and ("pdf" in ctype or "application/octet-stream" in ctype):
+                    reachable = True
+                    break
+        except Exception:
+            pass
+
+    # Même si le PDF constructeur a bougé, la famille est suffisamment spécifique
+    # pour proposer "MOSFET" sans inventer le canal.
+    return [{
+        "function": "MOSFET",
+        "details": "Famille MOSFET Alpha & Omega Semiconductor" + (" — fiche constructeur accessible" if reachable else ""),
+        "title": ref,
+        "source": "Alpha & Omega Semiconductor",
+    }]
+
+
+def _stock_extract_generic_engine_results(page):
+    """Extraction volontairement large pour moteurs HTML de secours."""
+    text = str(page or "")
+    results = []
+
+    # Liens + texte d'ancre.
+    for href, label in re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', text, flags=re.I | re.S):
+        title = _stock_clean_search_text(label)
+        link = html.unescape(href)
+        if not title or len(title) < 4:
+            continue
+        # Petit contexte après le lien.
+        results.append((title, "", link))
+        if len(results) >= 30:
+            break
+    return results
+
+
+def _stock_search_extra_engines(reference):
+    """Secours multi-moteur : Brave et Mojeek. Aucune dépendance à un seul moteur."""
+    ref = str(reference or "").strip()
+    queries = [f'"{ref}" datasheet', f'"{ref}" electronic component']
+    found = []
+
+    for query in queries:
+        encoded = urllib.parse.quote_plus(query)
+        urls = [
+            "https://search.brave.com/search?q=" + encoded + "&source=web",
+            "https://www.mojeek.com/search?q=" + encoded,
+        ]
+        for url in urls:
+            try:
+                page = _stock_http_text(url, timeout=8)
+            except Exception:
+                continue
+            for title, snippet, link in _stock_extract_generic_engine_results(page):
+                if _stock_result_relevant(reference, title, snippet, link):
+                    found.append((title, snippet, link))
+                    if len(found) >= 12:
+                        return found
+    return found
+
+
+def _stock_known_repair_parts(reference):
+    """Petit secours local pour références de dépannage récurrentes/non documentées publiquement."""
+    ref = _stock_normalize_reference(reference).upper()
+    known = {
+        "CD3301B": {
+            "function": "Contrôleur de gestion d’alimentation",
+            "details": "TI CD3301B / CD3301BRHHR — Power Controller / Power Selector, QFN-36",
+            "title": "CD3301B",
+            "source": "Base WOPR",
+        },
+    }
+    hit = known.get(ref)
+    return [hit] if hit else []
+
+
+
 def _stock_web_identify(reference):
-    """Identification électronique : sources constructeur d'abord,
-    recherche Web stricte ensuite. Aucun titre Web brut n'est proposé.
-    """
+    """Identification multi-source : direct fabricant d'abord, moteurs ensuite."""
     reference = str(reference or "").strip()
     if not reference:
-        return {"found": False, "candidates": []}
+        return {"found": False, "candidates": [], "searched_results": 0}
+
+    reference_parts = _stock_reference_parts(reference)
+    search_references = sorted(
+        reference_parts or [reference],
+        key=lambda x: (len(_stock_normalize_reference(x)), len(x))
+    )
 
     candidates = []
     seen = set()
+    searched_results = 0
 
     def add_candidate(candidate):
+        if not candidate:
+            return
         function = " ".join(str(candidate.get("function") or "").split()).strip()
         if not function:
             return
-        key = function.casefold()
+        source = str(candidate.get("source") or "Web")
+        key = (function.casefold(), source.casefold())
         if key in seen:
             return
         seen.add(key)
         candidates.append({
             "function": function,
-            "details": str(candidate.get("details") or "")[:300],
-            "title": str(candidate.get("title") or "")[:160],
-            "source": str(candidate.get("source") or ""),
+            "details": str(candidate.get("details") or "")[:320],
+            "title": str(candidate.get("title") or "")[:180],
+            "source": source,
         })
 
-    # 1) Si la saisie décrit déjà clairement le composant.
-    local_guess = _stock_guess_from_reference(reference)
-    if local_guess:
-        add_candidate({
-            "function": local_guess,
-            "details": "Déduit directement de la référence / description saisie.",
-            "source": "WOPR",
-        })
+    # 1) Déduction locale explicite, en testant chaque référence séparément.
+    for ref_part in search_references:
+        local_guess = _stock_guess_from_reference(ref_part)
+        if local_guess:
+            add_candidate({
+                "function": local_guess,
+                "details": f"Déduit directement de la référence {ref_part}.",
+                "title": ref_part,
+                "source": "WOPR",
+            })
 
-    # 2) Marquage boîtier Texas Instruments : source constructeur officielle.
-    for candidate in _stock_ti_marking_candidates(reference):
-        add_candidate(candidate)
+    # 1b) Familles à forte confiance : résultat immédiat.
+    # Important pour éviter 30+ secondes de recherches Web inutiles.
+    fast_patterns = (
+        r"HCB\d{4}KF[A-Z0-9]*",
+        r"LL4148[A-Z0-9]*",
+        r"VN\d{3,4}[A-Z0-9]*",
+        r"TPS229\d+[A-Z0-9]*",
+        r"AO(?:N|D|I|T|C)\d+[A-Z0-9]*",
+        r"NCP1014[A-Z0-9]*",
+    )
+    if candidates:
+        for ref_part in search_references:
+            compact_ref = re.sub(r"[\s\-_./]+", "", ref_part).upper()
+            if any(re.fullmatch(pattern, compact_ref) for pattern in fast_patterns):
+                return {
+                    "found": True,
+                    "function": candidates[0]["function"],
+                    "details": candidates[0]["details"],
+                    "candidates": candidates[:8],
+                    "source": candidates[0]["source"],
+                    "searched_results": 0,
+                }
 
-    # 3) Recherche Web stricte pour les autres fabricants / références.
-    ref_norm = _stock_normalize_reference(reference)
+    # 2) Sources directes, sans moteur de recherche.
+    for ref_part in search_references:
+        for c in _stock_direct_ti(ref_part):
+            add_candidate(c)
+        for c in _stock_direct_st(ref_part):
+            add_candidate(c)
+        for c in _stock_direct_aos(ref_part):
+            add_candidate(c)
+        for c in _stock_ti_marking_candidates(ref_part):
+            add_candidate(c)
+        for c in _stock_known_repair_parts(ref_part):
+            add_candidate(c)
 
-    def result_is_relevant(title, snippet):
-        hay = _stock_normalize_reference(f"{title} {snippet}")
-        return bool(ref_norm and ref_norm in hay)
+    # 3) Moteurs existants.
+    all_results = []
+    result_seen = set()
 
-    queries = [
-        f'"{reference}" datasheet semiconductor',
-        f'"{reference}" electronic component datasheet',
-        f'"{reference}" IC datasheet',
-    ]
+    for ref_part in search_references:
+        for query, kind in _stock_search_candidate_queries(ref_part):
+            try:
+                results = _stock_collect_search_results(query, timeout=8)
+            except Exception:
+                results = []
 
-    for q in queries:
-        if len(candidates) >= 5:
+            for title, snippet, link in results:
+                if not _stock_result_relevant(ref_part, title, snippet, link):
+                    continue
+
+                key = (str(title).casefold(), str(link).casefold())
+                if key in result_seen:
+                    continue
+
+                result_seen.add(key)
+                searched_results += 1
+                all_results.append((title, snippet, link, kind, ref_part))
+
+                function = _stock_guess_function(ref_part, title, snippet)
+                if not function:
+                    function = _stock_aos_family_hint(ref_part, title, snippet)
+                if not function:
+                    continue
+
+                source = _stock_result_source(link, title, snippet)
+                if kind == "aliexpress" and source == "Web":
+                    source = "AliExpress — à confirmer"
+
+                add_candidate({
+                    "function": function,
+                    "details": " — ".join(
+                        x for x in (title, snippet) if str(x or "").strip()
+                    )[:320],
+                    "title": title,
+                    "source": source,
+                })
+
+            if len(candidates) >= 8:
+                break
+
+        if len(candidates) >= 8:
             break
-        try:
-            url = "https://www.bing.com/search?q=" + urllib.parse.quote_plus(q) + "&setlang=en"
-            page = _stock_http_text(url, timeout=7)
-            for title, snippet in _stock_extract_bing_results(page):
-                if not result_is_relevant(title, snippet):
-                    continue
-                function = _stock_guess_function(reference, title, snippet)
-                if not function:
-                    continue
-                add_candidate({
-                    "function": function,
-                    "details": snippet,
-                    "title": title,
-                    "source": "Web",
-                })
-                if len(candidates) >= 5:
-                    break
-        except Exception:
-            pass
 
-    # Fallback DuckDuckGo, même filtre strict.
-    if not candidates:
-        try:
-            q = urllib.parse.quote_plus(f'"{reference}" datasheet semiconductor')
-            page = _stock_http_text("https://html.duckduckgo.com/html/?q=" + q, timeout=7)
-            for title, snippet in _stock_extract_ddg_results(page):
-                if not result_is_relevant(title, snippet):
-                    continue
-                function = _stock_guess_function(reference, title, snippet)
+    # 4) Brave/Mojeek si Bing/DDG ne donnent rien.
+    if searched_results == 0:
+        for ref_part in search_references:
+            for title, snippet, link in _stock_search_extra_engines(ref_part):
+                searched_results += 1
+                function = _stock_guess_function(ref_part, title, snippet)
+                if not function:
+                    function = _stock_aos_family_hint(ref_part, title, snippet)
                 if not function:
                     continue
+
                 add_candidate({
                     "function": function,
-                    "details": snippet,
+                    "details": title,
                     "title": title,
-                    "source": "Web",
+                    "source": _stock_result_source(link, title, snippet),
                 })
-                if len(candidates) >= 5:
-                    break
-        except Exception:
-            pass
+
+            if candidates:
+                break
+
+    priority = {
+        "WOPR": 0,
+        "Texas Instruments": 1,
+        "STMicroelectronics": 1,
+        "Alpha & Omega Semiconductor": 1,
+        "onsemi": 1,
+        "Infineon": 1,
+        "NXP": 1,
+        "Analog Devices": 1,
+        "Microchip": 1,
+        "Base WOPR": 2,
+        "DigiKey": 3,
+        "Mouser": 3,
+        "Farnell": 3,
+        "LCSC": 3,
+        "Web": 4,
+        "AliExpress — à confirmer": 5,
+    }
+    candidates.sort(key=lambda c: priority.get(c.get("source") or "", 4))
 
     return {
         "found": bool(candidates),
         "function": candidates[0]["function"] if candidates else "",
         "details": candidates[0]["details"] if candidates else "",
-        "candidates": candidates[:5],
+        "candidates": candidates[:8],
         "source": candidates[0]["source"] if candidates else "",
+        "searched_results": searched_results,
     }
 
 
@@ -11689,6 +12443,24 @@ def stock_identify():
     try:
         result = _stock_web_identify(reference)
         result["current_function"] = current_function
+        if current_function:
+            candidates = list(result.get("candidates") or [])
+            if not any(
+                str(c.get("function") or "").strip().casefold() == current_function.casefold()
+                for c in candidates
+            ):
+                candidates.insert(0, {
+                    "function": current_function,
+                    "details": "Fonction déjà enregistrée dans le stock WOPR.",
+                    "title": reference,
+                    "source": "Stock",
+                })
+            result["candidates"] = candidates[:8]
+            result["found"] = True
+            result["function"] = current_function
+            result["source"] = "Stock"
+            if not result.get("details"):
+                result["details"] = "Fonction déjà enregistrée dans le stock WOPR."
         return jsonify(result)
     except Exception as exc:
         return jsonify({
@@ -11734,11 +12506,25 @@ def stock_identify_existing(item_id):
             "candidates": [],
         }), 502
 
+    current_function = str(row["function"] or "").strip()
+    candidates = list(result.get("candidates") or [])
+    if current_function and not any(
+        str(c.get("function") or "").strip().casefold() == current_function.casefold()
+        for c in candidates
+    ):
+        candidates.insert(0, {
+            "function": current_function,
+            "details": "Fonction déjà enregistrée dans le stock WOPR.",
+            "title": str(row["reference"] or ""),
+            "source": "Stock",
+        })
+
+    found = bool(candidates)
     return jsonify({
-        "ok": bool(result.get("found")),
-        "current_function": str(row["function"] or "").strip(),
-        "candidates": result.get("candidates") or [],
-        "error": "" if result.get("found") else "Aucune fonction trouvée.",
+        "ok": found,
+        "current_function": current_function,
+        "candidates": candidates[:8],
+        "error": "" if found else "Aucune fonction trouvée.",
     })
 
 
@@ -13503,6 +14289,33 @@ def repair_detail(rid):
     r["system_password"] = ""  # jamais injecté en clair dans le HTML initial
     sign_url = f"http://{local_ip()}:5000/sign/{r['signature_token']}"
     return render_template("repair_detail.html", r=r, sign_url=sign_url)
+
+
+
+@app.route("/repair/<int:rid>/tracking-preview")
+def repair_tracking_preview(rid):
+    con = db()
+    row = con.execute(
+        "SELECT public_tracking_code FROM repairs WHERE id=?",
+        (rid,),
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return "Dossier introuvable", 404
+
+    code = str(row["public_tracking_code"] or "").strip()
+    if not code:
+        flash("Aucun code de suivi public pour ce dossier.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+    if not tracking_site:
+        flash("Portail de suivi non configuré.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    query = urllib.parse.urlencode({"code": code, "preview": "1"})
+    return redirect(f"{tracking_site}/suivi.html?{query}")
 
 
 @app.route("/repair/<int:rid>/delete", methods=["GET", "POST"])

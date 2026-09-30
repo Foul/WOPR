@@ -1,5 +1,15 @@
 # Changelog de la documentation
 
+## 2.6.1 - 30 septembre 2026 - maintenance recherche, suivi client et launcher
+
+- documentation alignée sur WOPR 2.6.1 ;
+- navigation actualisée : Suivi en accès direct et Stock dans Gestion ;
+- documentation de la recherche de composants améliorée, y compris références multiples et progression ;
+- documentation de l’Aperçu sans compteur ;
+- documentation de la suppression explicite des statistiques de test ;
+- documentation du correctif launcher anti double-démarrage et de l’état WOPR OCCUPÉ ;
+- README, manuel Markdown, documentation HTML, page de présentation et PDF alignés sur 2.6.1.
+
 ## 2.6.0 - 30 septembre 2026 - stock, statistiques et navigation groupée
 
 - ajout d’un module Stock volontairement simple : référence, fonction, quantité, remarques et image ;

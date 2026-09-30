@@ -56,6 +56,13 @@
 .stock-image-choice:hover{border-color:#3399ff}
 .stock-image-choice img{max-width:100%;height:125px;object-fit:contain}
 .stock-modal-status{padding:18px;text-align:center;font-weight:800}
+.stock-search-progress{display:inline-flex;align-items:center;gap:10px;justify-content:center}
+.stock-search-spinner{
+  width:18px;height:18px;border:3px solid #7b8b96;border-top-color:#2f86c7;
+  border-radius:50%;display:inline-block;animation:stockSpin .8s linear infinite;
+}
+.stock-search-elapsed{font-variant-numeric:tabular-nums;min-width:48px;text-align:left}
+@keyframes stockSpin{to{transform:rotate(360deg)}}
 .stock-identify-result{padding:14px;border:1px solid #9fc6ef;background:#eef6ff;margin-top:10px}
 .stock-identify-result strong{display:block;font-size:17px;margin-bottom:6px}
 
@@ -294,14 +301,60 @@
     });
   });
 
+  function formatElapsed(seconds){
+    const s=Math.max(0,Number(seconds)||0);
+    const mm=String(Math.floor(s/60)).padStart(2,'0');
+    const ss=String(s%60).padStart(2,'0');
+    return mm+':'+ss;
+  }
+
+  function startIdentifyProgress(status, reference){
+    const started=Date.now();
+
+    function render(){
+      const elapsed=Math.floor((Date.now()-started)/1000);
+      let note='Recherche de '+reference+'…';
+      if(elapsed>=10 && elapsed<25) note='Recherche de '+reference+'… toujours en cours';
+      if(elapsed>=25) note='Recherche approfondie de '+reference+'…';
+
+      status.style.display='block';
+      status.innerHTML='';
+
+      const wrap=document.createElement('span');
+      wrap.className='stock-search-progress';
+
+      const spinner=document.createElement('span');
+      spinner.className='stock-search-spinner';
+      spinner.setAttribute('aria-hidden','true');
+
+      const label=document.createElement('span');
+      label.textContent=note;
+
+      const elapsedNode=document.createElement('span');
+      elapsedNode.className='stock-search-elapsed';
+      elapsedNode.textContent=formatElapsed(elapsed);
+
+      wrap.appendChild(spinner);
+      wrap.appendChild(label);
+      wrap.appendChild(elapsedNode);
+      status.appendChild(wrap);
+    }
+
+    render();
+    const timer=window.setInterval(render,1000);
+
+    return function stop(){
+      window.clearInterval(timer);
+    };
+  }
+
   async function identify(reference, existingTarget){
     const modal=document.getElementById('stockIdentifyModal');
     const status=document.getElementById('stockIdentifyStatus');
     const result=document.getElementById('stockIdentifyResult');
-    status.style.display='block';
-    status.textContent='Recherche de ' + reference + '…';
     result.innerHTML='';
     openModal(modal);
+    const stopProgress=startIdentifyProgress(status,reference);
 
     try{
       let r, data;
@@ -315,6 +368,7 @@
         r=await fetch('{{ url_for("stock_identify") }}?reference='+encodeURIComponent(reference),{cache:'no-store'});
       }
       data=await r.json();
+      stopProgress();
       status.style.display='none';
 
       const current=(data.current_function||'').trim();
@@ -394,6 +448,7 @@
       });
       result.appendChild(box);
     }catch(e){
+      stopProgress();
       status.style.display='none';
       const err=document.createElement('div');
       err.className='stock-identify-result';

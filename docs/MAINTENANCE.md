@@ -1,6 +1,6 @@
 # Maintenance de la documentation WOPR
 
-Version de référence actuelle : **2.6.0**.
+Version de référence actuelle : **2.6.1**.
 
 À chaque évolution visible :
 1. mettre à jour `manuel.md` ;

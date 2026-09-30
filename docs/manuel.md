@@ -1,6 +1,6 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.6.0**
+**Version documentée : 2.6.1**
 **Documentation mise à jour : 30 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
@@ -113,9 +113,9 @@ La barre principale est regroupée par centres d’intérêt afin de rester comp
 
 - **Atelier** : accès direct au tableau de bord ;
 - **Recherche globale** : recherche directe dans WOPR ;
-- **Réparations** : **Suivi** et **Stock** ;
+- **Suivi** : accès direct aux réparations ;
 - **Documents** : **Factures**, **Facture simple**, **Devis** et **Achats / Ventes** ;
-- **Gestion** : **CA / Déclarations**, **Antivirus** et **Clients** ;
+- **Gestion** : **CA / Déclarations**, **Antivirus**, **Clients** et **Stock** ;
 - **Services** : **SumUp** et **Abby** ;
 - **Sécurité** : accès direct aux réglages de sécurité et sauvegardes ;
 - **Verrou** : bouton conservé seul à l’extrémité droite.
@@ -296,6 +296,13 @@ Depuis la version 2.6.0, WOPR peut récupérer des statistiques privées de cons
 - détail par code de suivi.
 
 Une consultation n’est comptée que lorsqu’un code valide affiche réellement un dossier. Les adresses IP ne sont pas conservées en clair pour ces statistiques.
+
+Depuis la version 2.6.1 :
+
+- **Aperçu sans compteur** permet à l’atelier d’ouvrir le suivi public sans ajouter de vue ;
+- le même aperçu est accessible directement depuis la fiche Suivi, à côté du code client ;
+- les statistiques d’un code de test peuvent être supprimées explicitement sans supprimer le dossier ;
+- l’écriture du fichier de statistiques est vérifiée avant d’annoncer une suppression réussie.
 
 ---
 
@@ -549,6 +556,14 @@ Le module propose également :
 - export PDF ;
 - recherche intégrée d’images ;
 - aide à l’identification de la fonction électronique.
+
+Depuis la version 2.6.1, l’identification est plus tolérante :
+
+- reconnaissance de familles et variantes de références ;
+- prise en charge de plusieurs références saisies ensemble (`/`, `;`, `,`, `|`) ;
+- priorité aux correspondances locales fiables pour éviter des recherches Web inutiles ;
+- recherche directe chez certains fabricants lorsque c’est pertinent ;
+- indicateur animé et compteur de durée pendant une recherche longue.
 
 L’identification automatique reste une aide : l’utilisateur garde la main sur les informations enregistrées.
 
@@ -878,7 +893,42 @@ La version 2.6.0 ajoute plusieurs évolutions importantes au travail quotidien d
 
 La version 2.6.0 conserve également les correctifs de la série 2.5.1 concernant le CA, SumUp, les filtres Atelier, le suivi public et le Mode Client.
 
-## 29. Crédit
+## 29. Nouveautés principales de la release 2.6.1
+
+La version 2.6.1 est une release de maintenance de la série 2.6.x.
+
+### Recherche de composants
+
+- identification plus fiable des familles et variantes de références ;
+- gestion des références multiples saisies dans un même champ ;
+- réponses immédiates pour certaines familles reconnues avec une forte confiance ;
+- réduction des recherches Web inutiles ;
+- indicateur animé et temps écoulé pendant les recherches longues.
+
+### Suivi client et statistiques
+
+- **Aperçu sans compteur** depuis la page des statistiques ;
+- **Aperçu sans compteur** directement depuis la fiche Suivi, à côté du code client ;
+- suppression explicite des statistiques d’un code de test sans supprimer le dossier ;
+- vérification réelle de l’écriture de `suivi-stats.json` avant confirmation ;
+- détail journalier par code pour permettre des suppressions plus propres à l’avenir ;
+- messages de retour repositionnés sous la barre de navigation pour rester lisibles.
+
+### Launcher
+
+- détection plus fiable d’un serveur déjà actif ;
+- état **WOPR OCCUPÉ** lorsqu’une requête longue bloque momentanément la réponse HTTP ;
+- protection contre le lancement accidentel d’un second serveur WOPR.
+
+### Navigation
+
+- **Suivi** est accessible directement depuis la barre principale ;
+- **Stock** est rangé dans **Gestion** ;
+- les groupes **Documents** et **Services** restent inchangés.
+
+La version 2.6.1 conserve les fonctions et correctifs introduits par la 2.6.0.
+
+## 30. Crédit
 
 **Développé par Foul-Fix, avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.**
 

@@ -11,7 +11,7 @@
 
 WOPR est une application locale de gestion d’atelier conçue pour centraliser le suivi des réparations, les clients, devis, factures, encaissements, achats, justificatifs, stock de composants et tâches administratives.
 
-**Version documentée : 2.6.0**
+**Version documentée : 2.6.1**
 
 > Développé avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -57,11 +57,13 @@ Le client consulte ensuite l’avancement de sa réparation depuis la page de su
 
 L’URL du portail et l’URL de l’API sont configurables : WOPR n’impose aucun domaine ni hébergeur particulier.
 
-Depuis la version 2.6.0, WOPR peut également récupérer des statistiques privées de consultation.
+Depuis la version 2.6.0, WOPR peut également récupérer des statistiques privées de consultation. La version 2.6.1 ajoute un aperçu atelier sans comptabilisation et permet de supprimer proprement les statistiques de test.
 
 ## Stock composants
 
 Le module Stock reste volontairement simple : Composant / Référence, Fonction, Quantité, Remarques et Image.
+
+Depuis la version 2.6.1, l’aide à l’identification reconnaît davantage de familles de composants, accepte plusieurs références séparées par `/`, `;`, `,` ou `|`, et affiche une progression pendant les recherches longues.
 
 Il propose également recherche instantanée, ajustement des quantités, aperçu des images, exports CSV/PDF et aide à l’identification.
 

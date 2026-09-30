@@ -1,123 +1,64 @@
 {% extends "base.html" %}
 {% block title %}Stats suivi - WOPR{% endblock %}
-
 {% block body %}
 <style>
 .tracking-stats-page{max-width:1450px;margin:0 auto;padding:18px}
 .tracking-stats-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px}
-.tracking-stats-head h1{margin:0 0 4px}
-.tracking-stats-sub{margin:0;color:#60717e}
-.tracking-stats-actions{display:flex;gap:8px;flex-wrap:wrap}
+.tracking-stats-head h1{margin:0 0 4px}.tracking-stats-sub{margin:0;color:#60717e}.tracking-stats-actions{display:flex;gap:8px;flex-wrap:wrap}
 .tracking-kpis{display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:12px;margin:16px 0 20px}
 .tracking-kpi{border:1px solid #b9c7d1;background:#fff;padding:15px 16px;border-radius:9px}
 .tracking-kpi span{display:block;font-size:12px;font-weight:800;text-transform:uppercase;color:#5f7180;margin-bottom:5px}
-.tracking-kpi strong{font-size:27px;line-height:1;color:#163d59}
-.tracking-kpi small{display:block;margin-top:7px;color:#71818d}
+.tracking-kpi strong{font-size:27px;line-height:1;color:#163d59}.tracking-kpi small{display:block;margin-top:7px;color:#71818d}
 .tracking-stats-error{padding:13px 15px;border:1px solid #dc9a9a;background:#fff0f0;color:#7a2020;margin:12px 0;border-radius:7px}
 .tracking-stats-info{padding:10px 13px;border-left:4px solid #3399ff;background:#eef6ff;margin:12px 0 16px;color:#405565}
-.tracking-stats-wrap{overflow-x:auto;border:1px solid #c8d3db;background:#fff}
-.tracking-stats-table{width:100%;border-collapse:collapse;min-width:1000px}
+.tracking-stats-wrap{overflow-x:auto;border:1px solid #c8d3db;background:#fff}.tracking-stats-table{width:100%;border-collapse:collapse;min-width:1100px}
 .tracking-stats-table th,.tracking-stats-table td{padding:9px 10px;border-bottom:1px solid #dde4e9;text-align:left;vertical-align:middle}
 .tracking-stats-table th{font-size:11px;text-transform:uppercase;background:#eef4f8;color:#395365;white-space:nowrap}
-.tracking-stats-table tbody tr:hover{background:#f7fbfe}
-.tracking-code{font-family:"DejaVu Sans Mono","Liberation Mono",monospace;font-weight:900;white-space:nowrap}
-.tracking-client{font-weight:800}
-.tracking-device{font-size:12px;color:#60717e;margin-top:2px}
-.tracking-number{text-align:center!important;font-weight:900;font-size:16px}
-.tracking-last{white-space:nowrap}
-.tracking-empty{text-align:center;padding:28px!important;color:#71818d}
-body.theme-8bit .tracking-kpi,
-body.theme-8bit .tracking-stats-wrap{
-  border:2px solid #08131f!important;border-radius:0!important;
-  box-shadow:2px 2px 0 #08131f!important
-}
+.tracking-stats-table tbody tr:hover{background:#f7fbfe}.tracking-code{font-family:"DejaVu Sans Mono","Liberation Mono",monospace;font-weight:900;white-space:nowrap}
+.tracking-client{font-weight:800}.tracking-device{font-size:12px;color:#60717e;margin-top:2px}.tracking-number{text-align:center!important;font-weight:900;font-size:16px}
+.tracking-last{white-space:nowrap}.tracking-empty{text-align:center;padding:28px!important;color:#71818d}.tracking-row-actions{display:flex;gap:6px;flex-wrap:wrap;min-width:220px}
+.tracking-row-actions form{margin:0}.tracking-row-actions .button{min-height:31px!important;padding:5px 8px!important;font-size:10px!important}
+body.theme-8bit .tracking-kpi,body.theme-8bit .tracking-stats-wrap{border:2px solid #08131f!important;border-radius:0!important;box-shadow:2px 2px 0 #08131f!important}
 @media(max-width:950px){.tracking-kpis{grid-template-columns:1fr 1fr}}
 </style>
-
 <div class="tracking-stats-page">
   <div class="tracking-stats-head">
-    <div>
-      <h1>📊 Statistiques du suivi en ligne</h1>
-      <p class="tracking-stats-sub">Consultations réelles de dossiers sur foul-fix.fr/suivi.html</p>
-    </div>
+    <div><h1>📊 Statistiques du suivi en ligne</h1><p class="tracking-stats-sub">Consultations réelles de dossiers sur foul-fix.fr/suivi.html</p></div>
     <div class="tracking-stats-actions">
       <a class="button wopr-action-open" href="{{ url_for('tracking_stats_page') }}">↻ Actualiser</a>
       <a class="button wopr-action-neutral" href="{{ url_for('atelier_dashboard') }}">← Atelier</a>
     </div>
   </div>
-
-  {% if error %}
-    <div class="tracking-stats-error">
-      <strong>Impossible de récupérer les statistiques.</strong><br>
-      {{ error }}
-    </div>
-  {% endif %}
-
+  {% if error %}<div class="tracking-stats-error"><strong>Impossible de récupérer les statistiques.</strong><br>{{ error }}</div>{% endif %}
   <div class="tracking-kpis">
-    <div class="tracking-kpi">
-      <span>Aujourd'hui</span>
-      <strong>{{ stats.get('today', {}).get('views', 0) }}</strong>
-      <small>{{ stats.get('today', {}).get('unique_visitors', 0) }} visiteur(s) distinct(s)</small>
-    </div>
-    <div class="tracking-kpi">
-      <span>7 derniers jours</span>
-      <strong>{{ stats.get('week', {}).get('views', 0) }}</strong>
-      <small>{{ stats.get('week', {}).get('unique_visitors', 0) }} visiteur(s) distinct(s)</small>
-    </div>
-    <div class="tracking-kpi">
-      <span>Ce mois-ci</span>
-      <strong>{{ stats.get('month', {}).get('views', 0) }}</strong>
-      <small>{{ stats.get('month', {}).get('unique_visitors', 0) }} visiteur(s) distinct(s)</small>
-    </div>
-    <div class="tracking-kpi">
-      <span>Total enregistré</span>
-      <strong>{{ stats.get('total_views', 0) }}</strong>
-      <small>consultation(s) de codes valides</small>
-    </div>
+    <div class="tracking-kpi"><span>Aujourd'hui</span><strong>{{ stats.get('today', {}).get('views', 0) }}</strong><small>{{ stats.get('today', {}).get('unique_visitors', 0) }} visiteur(s) distinct(s)</small></div>
+    <div class="tracking-kpi"><span>7 derniers jours</span><strong>{{ stats.get('week', {}).get('views', 0) }}</strong><small>{{ stats.get('week', {}).get('unique_visitors', 0) }} visiteur(s) distinct(s)</small></div>
+    <div class="tracking-kpi"><span>Ce mois-ci</span><strong>{{ stats.get('month', {}).get('views', 0) }}</strong><small>{{ stats.get('month', {}).get('unique_visitors', 0) }} visiteur(s) distinct(s)</small></div>
+    <div class="tracking-kpi"><span>Total enregistré</span><strong>{{ stats.get('total_views', 0) }}</strong><small>consultation(s) de codes valides</small></div>
   </div>
-
   <div class="tracking-stats-info">
-    Une vue est comptée uniquement lorsqu'un code de suivi valide affiche réellement un dossier.
-    Les visiteurs distincts sont dédupliqués sans conserver l'adresse IP en clair.
+    Le bouton « Aperçu sans compteur » ouvre le suivi public sans enregistrer ta consultation. « Effacer les stats » supprime réellement les statistiques de ce code sur le serveur, sans supprimer le dossier ni son suivi.
   </div>
-
   <div class="tracking-stats-wrap">
     <table class="tracking-stats-table">
-      <thead>
-        <tr>
-          <th>Code</th>
-          <th>Client / matériel</th>
-          <th>Statut</th>
-          <th>Vues</th>
-          <th>Visiteurs distincts</th>
-          <th>Première consultation</th>
-          <th>Dernière consultation</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Code</th><th>Client / matériel</th><th>Statut</th><th>Vues</th><th>Visiteurs distincts</th><th>Première consultation</th><th>Dernière consultation</th><th>Actions</th></tr></thead>
       <tbody>
       {% for item in rows %}
         <tr>
           <td class="tracking-code">{{ item.code }}</td>
-          <td>
-            <div class="tracking-client">{{ item.client_name or 'Dossier non retrouvé dans WOPR' }}</div>
-            {% if item.device %}<div class="tracking-device">{{ item.device }}</div>{% endif %}
-            {% if item.dossier_no %}<div class="tracking-device">Dossier {{ item.dossier_no }}</div>{% endif %}
-          </td>
-          <td>{{ item.status or '—' }}</td>
-          <td class="tracking-number">{{ item.views }}</td>
-          <td class="tracking-number">{{ item.unique_visitors }}</td>
-          <td class="tracking-last">{{ item.first_view_at or '—' }}</td>
-          <td class="tracking-last">{{ item.last_view_at or '—' }}</td>
+          <td><div class="tracking-client">{{ item.client_name or 'Dossier non retrouvé dans WOPR' }}</div>{% if item.device %}<div class="tracking-device">{{ item.device }}</div>{% endif %}{% if item.dossier_no %}<div class="tracking-device">Dossier {{ item.dossier_no }}</div>{% endif %}</td>
+          <td>{{ item.status or '—' }}</td><td class="tracking-number">{{ item.views }}</td><td class="tracking-number">{{ item.unique_visitors }}</td>
+          <td class="tracking-last">{{ item.first_view_at or '—' }}</td><td class="tracking-last">{{ item.last_view_at or '—' }}</td>
+          <td><div class="tracking-row-actions">
+            {% if item.preview_url %}<a class="button wopr-action-open" href="{{ item.preview_url }}" target="_blank" rel="noopener">👁 Aperçu sans compteur</a>{% endif %}
+            <form method="post" action="{{ url_for('tracking_stats_delete', code=item.code) }}"
+                  onsubmit="return confirm('Effacer définitivement les statistiques de {{ item.code }} ?\n\nLe dossier et le code de suivi resteront intacts.');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="button danger wopr-action-delete" type="submit">🗑 Effacer les stats</button>
+            </form>
+          </div></td>
         </tr>
-      {% else %}
-        <tr><td colspan="7" class="tracking-empty">
-          {% if error %}
-            Aucune statistique disponible tant que la connexion au portail échoue.
-          {% else %}
-            Aucune consultation enregistrée pour le moment.
-          {% endif %}
-        </td></tr>
-      {% endfor %}
+      {% else %}<tr><td colspan="8" class="tracking-empty">{% if error %}Aucune statistique disponible tant que la connexion au portail échoue.{% else %}Aucune consultation enregistrée pour le moment.{% endif %}</td></tr>{% endfor %}
       </tbody>
     </table>
   </div>
