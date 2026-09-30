@@ -26,7 +26,7 @@ footer{padding:0 20px 32px;text-align:center;color:var(--muted)}
 <main><pre># WOPR - Manuel utilisateur
 
 **Version documentée : 2.6.0**
-**Documentation mise à jour : 29 septembre 2026**
+**Documentation mise à jour : 30 septembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -134,22 +134,20 @@ Au démarrage, WOPR utilise la base officielle `private/data/wopr.db`.
 
 ## 4. Interface générale et thèmes
 
-La barre principale donne accès à :
+La barre principale est regroupée par centres d’intérêt afin de rester compacte, même sur les écrans moins larges :
 
-- **Atelier**
-- **Recherche globale**
-- **Suivi**
-- **Factures**
-- **Devis**
-- **Clients**
-- **Achats / Ventes**
-- **Antivirus**
-- **Abby**
-- **Sécurité**
-- **CA / Déclarations**
-- **Verrouiller**
+- **Atelier** : accès direct au tableau de bord ;
+- **Recherche globale** : recherche directe dans WOPR ;
+- **Réparations** : **Suivi** et **Stock** ;
+- **Documents** : **Factures**, **Facture simple**, **Devis** et **Achats / Ventes** ;
+- **Gestion** : **CA / Déclarations**, **Antivirus** et **Clients** ;
+- **Services** : **SumUp** et **Abby** ;
+- **Sécurité** : accès direct aux réglages de sécurité et sauvegardes ;
+- **Verrou** : bouton conservé seul à l’extrémité droite.
 
-La **Facture simple** reste dans la section Factures afin de ne pas dupliquer inutilement un bouton dans la barre supérieure.
+Sur un ordinateur équipé d’une souris, les menus groupés s’ouvrent au survol. Le clic reste disponible comme solution de repli, notamment pour les interfaces tactiles.
+
+<img src="images/capture-menu-2.6.0.png" alt="Nouvelle navigation groupée WOPR 2.6.0" style="display:block;max-width:100%;height:auto;margin:14px auto;">
 
 ### 4.1 Thèmes
 
@@ -868,7 +866,18 @@ La version 2.5.1 est une release de maintenance de la série 2.5.x.
 
 ## 28. Nouveautés principales de la release 2.6.0
 
-La version 2.6.0 ajoute deux fonctions importantes au travail quotidien de l’atelier.
+La version 2.6.0 ajoute plusieurs évolutions importantes au travail quotidien de l’atelier.
+
+### Navigation et ergonomie
+
+- nouvelle barre supérieure groupée par centres d’intérêt ;
+- menus **Réparations**, **Documents**, **Gestion** et **Services** ;
+- ouverture des menus au survol avec une souris, clic conservé en secours ;
+- **Sécurité** accessible directement sans sous-menu intermédiaire ;
+- bouton de verrouillage isolé à droite ;
+- **Gestion** regroupe les fonctions internes : CA / Déclarations, Antivirus et Clients ;
+- **Services** regroupe les services externes : SumUp et Abby ;
+- affichage direct des dix dernières sauvegardes locales dans la page Sécurité.
 
 ### Stock composants
 

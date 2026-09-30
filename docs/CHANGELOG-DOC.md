@@ -1,17 +1,21 @@
 # Changelog de la documentation
 
-## 2.6.0 - 29 septembre 2026 - stock composants et statistiques du suivi client
+## 2.6.0 - 30 septembre 2026 - stock, statistiques et navigation groupée
 
 - ajout d’un module Stock volontairement simple : référence, fonction, quantité, remarques et image ;
 - recherche instantanée dans le stock, ajustement rapide des quantités et agrandissement des images ;
 - export du stock en CSV et en PDF avec présentation de type catalogue ;
 - recherche intégrée d’images de composants et aide à l’identification de leur fonction ;
-- identification de composants conservée comme aide modifiable, sans écraser silencieusement les informations saisies ;
 - ajout des statistiques du suivi client en ligne : vues, visiteurs distincts, première et dernière consultation ;
 - comptabilisation uniquement lorsqu’un code de suivi valide affiche réellement un dossier ;
-- rapprochement des statistiques publiques avec les dossiers locaux WOPR ;
-- accès aux statistiques depuis le tableau de bord Atelier plutôt que depuis la navigation principale ;
-- conservation de la confidentialité : aucune adresse IP n’est stockée en clair pour les statistiques ;
+- accès aux statistiques depuis le tableau de bord Atelier ;
+- nouvelle barre supérieure groupée : Réparations, Documents, Gestion et Services ;
+- ouverture des menus au survol avec clic conservé comme solution de repli ;
+- Gestion regroupe CA / Déclarations, Antivirus et Clients ;
+- Services regroupe SumUp et Abby ;
+- Sécurité devient un accès direct et le verrou reste isolé à droite ;
+- les dix dernières sauvegardes locales sont visibles directement dans Sécurité ;
+- mise à jour des captures publiques avec des données entièrement fictives/anonymisées ;
 - maintien des correctifs 2.5.1 concernant le CA, SumUp, les filtres Atelier, le suivi public et le Mode Client.
 
 ## 2.4.8 - 18 septembre 2026 - nettoyage de l'écran des règlements
