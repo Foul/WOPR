@@ -337,3 +337,152 @@ body.theme-8bit .page .atelier-head .client-mode-toggle{
 }
 body.theme-8bit .page .atelier-head .client-mode-toggle:hover{filter:brightness(1.08)!important;transform:translate(1px,1px)!important}
 body.theme-8bit .page .atelier-head .client-mode-toggle:active{filter:brightness(.92)!important;transform:translate(3px,3px)!important}
+
+
+/* ==========================================================
+   WOPR 2.6.1 — FIX TOPBAR / MENU 8-BIT
+   Le hotfix est chargé en dernier : on neutralise ici les anciennes
+   règles de grille/positionnement du thème 8-bit pour la navigation.
+   ========================================================== */
+
+body.theme-8bit header.topbar{
+  display:flex !important;
+  grid-template-columns:none !important;
+  align-items:center !important;
+  justify-content:flex-start !important;
+  flex-wrap:nowrap !important;
+  width:100% !important;
+  min-width:0 !important;
+  max-width:100% !important;
+  height:auto !important;
+  min-height:0 !important;
+  overflow:visible !important;
+  box-sizing:border-box !important;
+  gap:8px !important;
+}
+
+body.theme-8bit header.topbar .brand-zone{
+  position:relative !important;
+  display:flex !important;
+  flex:0 0 auto !important;
+  width:auto !important;
+  min-width:0 !important;
+  max-width:none !important;
+  align-items:center !important;
+}
+
+body.theme-8bit header.topbar nav.topnav.topnav-grouped{
+  position:relative !important;
+  inset:auto !important;
+  left:auto !important;
+  right:auto !important;
+  top:auto !important;
+  bottom:auto !important;
+  transform:none !important;
+
+  display:flex !important;
+  grid-template-columns:none !important;
+  grid-template-rows:none !important;
+
+  flex:1 1 auto !important;
+  width:auto !important;
+  min-width:0 !important;
+  max-width:none !important;
+  height:auto !important;
+  min-height:0 !important;
+
+  align-items:center !important;
+  justify-content:flex-start !important;
+  flex-wrap:nowrap !important;
+  gap:0 !important;
+
+  margin:0 !important;
+  padding:0 !important;
+  overflow:visible !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  z-index:11010 !important;
+}
+
+body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-nav-cluster{
+  position:relative !important;
+  inset:auto !important;
+  transform:none !important;
+
+  display:flex !important;
+  grid-template-columns:none !important;
+  grid-template-rows:none !important;
+
+  flex:1 1 auto !important;
+  width:auto !important;
+  min-width:0 !important;
+  max-width:none !important;
+  height:auto !important;
+  min-height:0 !important;
+
+  align-items:center !important;
+  justify-content:flex-start !important;
+  flex-wrap:nowrap !important;
+  gap:4px !important;
+
+  margin:0 !important;
+  padding:0 !important;
+  overflow:visible !important;
+  visibility:visible !important;
+  opacity:1 !important;
+}
+
+body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-nav-cluster > *{
+  visibility:visible !important;
+  opacity:1 !important;
+}
+
+body.theme-8bit header.topbar nav.topnav.topnav-grouped .topbar-search{
+  position:relative !important;
+  inset:auto !important;
+  transform:none !important;
+  order:initial !important;
+  grid-column:auto !important;
+  grid-row:auto !important;
+
+  flex:1 1 220px !important;
+  width:auto !important;
+  min-width:150px !important;
+  max-width:280px !important;
+  height:auto !important;
+  margin:0 !important;
+}
+
+body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-nav-menu{
+  position:relative !important;
+  inset:auto !important;
+  transform:none !important;
+  display:block !important;
+  flex:0 0 auto !important;
+  width:auto !important;
+  min-width:0 !important;
+  max-width:none !important;
+  height:auto !important;
+  margin:0 !important;
+  overflow:visible !important;
+}
+
+body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-lock-form{
+  position:relative !important;
+  inset:auto !important;
+  transform:none !important;
+  display:block !important;
+  flex:0 0 64px !important;
+  width:64px !important;
+  min-width:64px !important;
+  max-width:64px !important;
+  margin:0 0 0 auto !important;
+}
+
+@media (max-width:1600px){
+  body.theme-8bit header.topbar nav.topnav.topnav-grouped .topbar-search{
+    flex:1 1 170px !important;
+    min-width:135px !important;
+    max-width:210px !important;
+  }
+}

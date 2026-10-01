@@ -17,14 +17,34 @@
       <details class="ledger-archive">
         <summary>Archives</summary>
         {% for archive_year in archive_years %}
-          <a href="{{ url_for('quotes_page', year=archive_year) }}">{{ archive_year }}</a>
+          <a href="{{ url_for('quotes_page', year=archive_year, month=selected_month or None) }}">{{ archive_year }}</a>
         {% endfor %}
       </details>
     {% endif %}
   {% else %}
-    <a class="button primary" href="{{ url_for('quotes_page', year=current_year) }}">← Retour {{ current_year }}</a>
+    <a class="button primary" href="{{ url_for('quotes_page', year=current_year, month=selected_month or None) }}">← Retour {{ current_year }}</a>
     <span class="ledger-year-archive">Archive {{ year }}</span>
   {% endif %}
+</div>
+
+<style>
+.wopr-period-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 14px}
+.wopr-period-filter form{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0}
+.wopr-period-filter select{min-height:34px;padding:5px 8px}
+.wopr-period-label{font-weight:700}
+</style>
+
+<div class="wopr-period-filter">
+  <form method="get" action="{{ url_for('quotes_page') }}">
+    <input type="hidden" name="year" value="{{ year }}">
+    <span class="wopr-period-label">Période :</span>
+    <select name="month" onchange="this.form.submit()">
+      <option value="0" {% if not selected_month %}selected{% endif %}>Toute l'année</option>
+      {% for m in range(1,13) %}
+        <option value="{{ m }}" {% if selected_month == m %}selected{% endif %}>{{ month_names[m] }}</option>
+      {% endfor %}
+    </select>
+  </form>
 </div>
 
 <form method="get" action="{{ url_for('quotes_page') }}" class="invoice-search-bar" style="margin-bottom:10px;">
@@ -33,7 +53,7 @@
          placeholder="N° devis, client, montant, description…" autocomplete="off">
   <button class="button" type="submit">🔎 Rechercher</button>
   {% if q %}
-    <a class="button" href="{{ url_for('quotes_page', year=year) }}">✕ Effacer</a>
+    <a class="button" href="{{ url_for('quotes_page', year=year, month=selected_month or None) }}">✕ Effacer</a>
   {% endif %}
 </form>
 {% if search_all_years %}

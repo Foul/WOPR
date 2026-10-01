@@ -9590,12 +9590,24 @@ def index():
     to_return_only = request.args.get("a_restituer") == "1"
     en_cours_only = request.args.get("en_cours") == "1"
     attente_piece_only = request.args.get("attente_piece") == "1"
+    overdue_only = request.args.get("overdue") == "1"
     client_search = str(request.args.get("q") or "").strip()
     client_search_folded = client_search.casefold()
     try:
         requested_year = int(request.args.get("year") or now().year)
     except Exception:
         requested_year = now().year
+
+    raw_month = request.args.get("month")
+    special_followup_filter = to_return_only or en_cours_only or attente_piece_only or overdue_only
+    try:
+        selected_month = int(raw_month) if raw_month not in (None, "") else (
+            0 if special_followup_filter else (now().month if requested_year == now().year else 0)
+        )
+    except (TypeError, ValueError):
+        selected_month = 0 if special_followup_filter else (now().month if requested_year == now().year else 0)
+    if selected_month not in range(1, 13):
+        selected_month = 0
 
     con = db()
 
@@ -9744,12 +9756,29 @@ def index():
     if attente_piece_only:
         rows = [row for row in rows if str(row["status"] or "") == "En attente pièce"]
 
+    # Filtre Atelier "Dossiers +14 j" : strictement la même définition que le KPI.
+    if overdue_only:
+        overdue_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation"}
+        cutoff_date = now().date() - timedelta(days=14)
+        overdue_rows = []
+        for row in rows:
+            if str(row["status"] or "") not in overdue_statuses:
+                continue
+            raw_date = str(row["received_date"] or "")[:10]
+            try:
+                received = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if received <= cutoff_date:
+                overdue_rows.append(row)
+        rows = overdue_rows
+
     # V2.3.82 : un encaissement effectué un autre mois que le suivi doit être
     # visible dans le mois d'encaissement, sans créer une seconde écriture comptable.
     # On fabrique donc uniquement une ligne d'affichage virtuelle.
     cross_month_payments = {}
     for source_row in rows:
-        if to_return_only or en_cours_only or attente_piece_only or client_search_folded:
+        if to_return_only or en_cours_only or attente_piece_only or overdue_only or client_search_folded:
             continue
         ay = source_row["accounting_year"]
         am = source_row["accounting_month"]
@@ -9850,6 +9879,8 @@ def index():
     yellow_count = 0
 
     for month in range(12,0,-1):
+        if selected_month and month != selected_month:
+            continue
         month_rows = []
         for row in rows:
             row_month = row["followup_month"]
@@ -9926,12 +9957,18 @@ def index():
         month_rows.extend(cross_month_payments.get(month, []))
 
         t = totals_map.get(month, {"service":0.0,"goods":0.0})
+
+        # Vue filtrée depuis le tableau de bord Atelier :
+        # ne pas afficher les mois sans aucun dossier correspondant.
+        if (to_return_only or en_cours_only or attente_piece_only or overdue_only) and not month_rows:
+            continue
+
         months.append({
             "number": month,
             "name": month_names[month],
             "rows": month_rows,
-            "service_total": 0.0 if to_return_only else t["service"],
-            "goods_total": 0.0 if to_return_only else t["goods"],
+            "service_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only or overdue_only) else t["service"],
+            "goods_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only or overdue_only) else t["goods"],
         })
 
     try:
@@ -9948,6 +9985,11 @@ def index():
         yellow_count=yellow_count,
         to_return_count=to_return_count,
         to_return_only=to_return_only,
+        en_cours_only=en_cours_only,
+        attente_piece_only=attente_piece_only,
+        overdue_only=overdue_only,
+        selected_month=selected_month,
+        month_names=month_names,
         client_search=client_search,
         search_all_years=bool(client_search_folded),
         edit_id=edit_id,
@@ -10236,6 +10278,16 @@ def quotes_page():
         year = current_year
     archive_years = [y for y in available_years if y != current_year]
 
+    raw_month = request.args.get("month")
+    try:
+        selected_month = int(raw_month) if raw_month not in (None, "") else (
+            now().month if year == current_year else 0
+        )
+    except (TypeError, ValueError):
+        selected_month = now().month if year == current_year else 0
+    if selected_month not in range(1, 13) or q_folded:
+        selected_month = 0
+
     if q_folded:
         quotes = []
         for quote in all_quotes:
@@ -10254,9 +10306,12 @@ def quotes_page():
             if q_folded in haystack:
                 quotes.append(quote)
     else:
+        period_prefix = f"{year:04d}-"
+        if selected_month:
+            period_prefix = f"{year:04d}-{selected_month:02d}-"
         quotes = [
             quote for quote in all_quotes
-            if str(quote.get("quote_date") or "").startswith(f"{year:04d}-")
+            if str(quote.get("quote_date") or "").startswith(period_prefix)
         ]
 
     archived_quotes = [quote for quote in quotes if quote["document_count"] > 0]
@@ -10292,6 +10347,8 @@ def quotes_page():
         year=year,
         current_year=current_year,
         archive_years=archive_years,
+        selected_month=selected_month,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
         q=q,
         search_all_years=bool(q_folded),
     )
@@ -13149,6 +13206,16 @@ def achats_ventes_page():
     # V2.3.98 — recherche manuelle uniquement : aucun rattachement automatique.
     search_q = str(request.args.get("q", "") or "").strip()
 
+    raw_month = request.args.get("month")
+    try:
+        selected_month = int(raw_month) if raw_month not in (None, "") else (
+            now().month if year == current_year else 0
+        )
+    except (TypeError, ValueError):
+        selected_month = now().month if year == current_year else 0
+    if selected_month not in range(1, 13) or search_q:
+        selected_month = 0
+
     # V2.3.96 — auto-répare les liens morts créés pendant les premières versions
     # des justificatifs fournisseurs, sans toucher aux fichiers eux-mêmes.
     repair_dead_supplier_document_links()
@@ -13249,6 +13316,11 @@ def achats_ventes_page():
     sales_total = sum(suivi_sales_by_month.values())
 
     entries = all_entries
+    if selected_month:
+        entries = [
+            row for row in all_entries
+            if str(row["entry_date"] or "").startswith(f"{year:04d}-{selected_month:02d}-")
+        ]
     if search_q:
         needle = search_q.casefold()
         def _ledger_search_text(row):
@@ -13270,6 +13342,8 @@ def achats_ventes_page():
     )
 
     for month in range(12, 0, -1):
+        if selected_month and month != selected_month:
+            continue
         month_entries = []
         month_purchases = 0.0
 
@@ -13305,6 +13379,8 @@ def achats_ventes_page():
         year=year,
         current_year=current_year,
         archive_years=archive_years,
+        selected_month=selected_month,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
         months=months,
         purchases_total=purchases_total,
         sales_total=sales_total,
@@ -16808,14 +16884,31 @@ def invoices_page():
         year = current_year
     archive_years = [y for y in available_years if y != current_year]
 
+    raw_month = request.args.get("month")
+    try:
+        selected_month = int(raw_month) if raw_month not in (None, "") else (
+            0 if unpaid_only else (now().month if year == current_year else 0)
+        )
+    except (TypeError, ValueError):
+        selected_month = 0 if unpaid_only else (now().month if year == current_year else 0)
+    if selected_month not in range(1, 13) or q:
+        selected_month = 0
+
     year_invoices = [
         inv for inv in invoices
         if str(inv.get("invoice_date") or "").startswith(f"{year:04d}-")
     ]
 
     # Une recherche ne doit jamais être limitée à l'année affichée.
-    # Sans recherche, on conserve la navigation annuelle normale.
-    invoice_search_source = invoices if q else year_invoices
+    # Sans recherche, on conserve la navigation annuelle / mensuelle normale.
+    period_invoices = year_invoices
+    if selected_month:
+        period_prefix = f"{year:04d}-{selected_month:02d}-"
+        period_invoices = [
+            inv for inv in year_invoices
+            if str(inv.get("invoice_date") or "").startswith(period_prefix)
+        ]
+    invoice_search_source = invoices if q else period_invoices
 
     # A query that looks like a price is treated as an exact invoice amount.
     # Examples: 12, 12€, 12 €, 12,00, 12.00, =12
@@ -16889,6 +16982,9 @@ def invoices_page():
         if not q:
             ledger_sql += " AND substr(COALESCE(le.entry_date,''),1,4)=?"
             ledger_params.append(str(year))
+            if selected_month:
+                ledger_sql += " AND substr(COALESCE(le.entry_date,''),6,2)=?"
+                ledger_params.append(f"{selected_month:02d}")
 
         ledger_sql += " ORDER BY le.entry_date DESC, le.id DESC"
 
@@ -17000,6 +17096,8 @@ def invoices_page():
         year=year,
         current_year=current_year,
         archive_years=archive_years,
+        selected_month=selected_month,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
         search_all_years=bool(q),
         sumup_enabled=bool(read_sumup_settings().get("enabled")),
         orphan_invoice_count=orphan_invoice_count,
@@ -21393,9 +21491,20 @@ def supplier_documents_audit():
 def contacts_page():
     q = " ".join(request.args.get("q", "").split()).strip()
     show_archived = str(request.args.get("archived") or "").strip().lower() in {"1", "true", "yes", "oui"}
-    google_errors_only = (not show_archived) and str(request.args.get("google_errors") or "").strip() in {"1", "true", "yes", "oui"}
+
+    google_status = str(request.args.get("google_status") or "").strip().lower()
+    if not google_status and str(request.args.get("google_errors") or "").strip() in {"1", "true", "yes", "oui"}:
+        google_status = "error"
+    if show_archived or google_status not in {"synced", "pending", "error"}:
+        google_status = ""
+
+    google_errors_only = google_status == "error"
     archive_clause = "COALESCE(archived,0)=1" if show_archived else "COALESCE(archived,0)=0"
-    status_clause = " AND google_sync_status='Erreur'" if google_errors_only else ""
+    status_clause = {
+        "synced": " AND google_sync_status='Synchronisé'",
+        "pending": " AND COALESCE(google_sync_status,'À synchroniser') NOT IN ('Synchronisé','Erreur')",
+        "error": " AND google_sync_status='Erreur'",
+    }.get(google_status, "")
     con = db()
 
     if q:
@@ -21481,6 +21590,7 @@ def contacts_page():
         google_libs_ok=GOOGLE_LIBS_OK,
         safe_duplicate_groups=safe_duplicate_groups,
         show_archived=show_archived,
+        google_status=google_status,
         google_errors_only=google_errors_only,
         archived_clients_count=archived_clients_count,
         google_synced_count=google_synced_count,

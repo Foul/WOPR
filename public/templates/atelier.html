@@ -30,24 +30,24 @@
       </select>
     </label>
   </form>
-  <a class="atelier-kpi" href="{{ url_for('index', year=current_year) }}">
+  <a class="atelier-kpi" href="{{ url_for('index', year=current_year, en_cours=1) }}">
     <span class="atelier-kpi-icon">🔧</span>
     <span class="atelier-kpi-label">En cours</span>
     <strong>{{ en_cours_count }}</strong>
     <small>dossiers actifs</small>
   </a>
-  <div class="atelier-kpi">
+  <a class="atelier-kpi" href="{{ url_for('index', year=current_year, attente_piece=1) }}">
     <span class="atelier-kpi-icon">📦</span>
     <span class="atelier-kpi-label">Attente pièce</span>
     <strong>{{ attente_piece_count }}</strong>
     <small>réparation(s)</small>
-  </div>
-  <div class="atelier-kpi {% if overdue_count %}atelier-kpi-alert{% endif %}">
+  </a>
+  <a class="atelier-kpi {% if overdue_count %}atelier-kpi-alert{% endif %}" href="{{ url_for('index', year=current_year, overdue=1) }}">
     <span class="atelier-kpi-icon">⏳</span>
     <span class="atelier-kpi-label">Dossiers +14 j</span>
     <strong>{{ overdue_count }}</strong>
     <small>encore actifs</small>
-  </div>
+  </a>
   <a class="atelier-kpi atelier-kpi-return" href="{{ url_for('index', year=current_year, a_restituer=1) }}">
     <span class="atelier-kpi-icon">✅</span>
     <span class="atelier-kpi-label">À restituer</span>
