@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Activité récente - WOPR{% endblock %}
+{% block body %}
+<style>
+.activity-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
+.activity-filters{display:flex;gap:6px;flex-wrap:wrap}
+.activity-list{display:grid;gap:8px;max-width:1100px}
+.activity-item{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #d8e0e8;background:#fff;border-radius:8px;padding:10px 12px;text-decoration:none;color:inherit}
+.activity-item:hover{filter:brightness(.985)}
+.activity-icon{font-size:1.35rem;text-align:center}
+.activity-main strong{display:block}.activity-main span{display:block;color:#5b6774;font-size:.9rem;margin-top:2px;overflow-wrap:anywhere}
+.activity-time{font-size:.8rem;color:#687684;white-space:nowrap;text-align:right}
+.activity-category{display:inline-block;margin-top:4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:#718096}
+</style>
+
+<div class="activity-head">
+  <div>
+    <h1>🕘 Activité récente</h1>
+    <p>Réparations, devis, achats/ventes et événements importants de WOPR.</p>
+  </div>
+  <div class="activity-filters">
+    {% for key, label in categories %}
+      <a class="button {% if selected_category == key %}primary{% endif %}"
+         href="{{ url_for('activity_page', category=key or None, limit=limit) }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="activity-list">
+{% for e in events %}
+  {% if e.href %}<a class="activity-item" href="{{ e.href }}">{% else %}<div class="activity-item">{% endif %}
+    <div class="activity-icon">{{ e.icon }}</div>
+    <div class="activity-main">
+      <strong>{{ e.title }}</strong>
+      {% if e.detail %}<span>{{ e.detail }}</span>{% endif %}
+      <small class="activity-category">{{ e.category }}</small>
+    </div>
+    <div class="activity-time">
+      {% if e.ts|length >= 16 %}
+        {{ e.ts[8:10] }}/{{ e.ts[5:7] }}/{{ e.ts[0:4] }}<br>{{ e.ts[11:16] }}
+      {% else %}
+        {{ e.ts }}
+      {% endif %}
+    </div>
+  {% if e.href %}</a>{% else %}</div>{% endif %}
+{% else %}
+  <div class="sheet-note">Aucune activité à afficher pour ce filtre.</div>
+{% endfor %}
+</div>
+{% endblock %}

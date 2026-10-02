@@ -89,6 +89,21 @@ MONTH_FOLDER_NAMES = {
     11: "11 - Novembre",
     12: "12 - Décembre",
 }
+
+MONTH_NAMES = {
+    1: "Janvier",
+    2: "Février",
+    3: "Mars",
+    4: "Avril",
+    5: "Mai",
+    6: "Juin",
+    7: "Juillet",
+    8: "Août",
+    9: "Septembre",
+    10: "Octobre",
+    11: "Novembre",
+    12: "Décembre",
+}
 def _database_score(path):
     """Évalue une base WOPR par son contenu réel, jamais par son nom."""
     try:
@@ -5796,6 +5811,74 @@ def seed_legacy_quotes37(con):
 def now():
     return datetime.now()
 
+
+def resolve_period_selection(
+    *,
+    requested_year=None,
+    available_years=None,
+    default_all_year=False,
+    search_active=False,
+):
+    """
+    Source unique pour les filtres année/mois de WOPR.
+
+    Règles :
+    - année courante + vue normale : mois courant par défaut ;
+    - année d'archive : toute l'année par défaut ;
+    - vue métier globale : toute l'année par défaut ;
+    - month=0 : « Toute l'année » explicite ;
+    - un mois choisi explicitement est conservé ;
+    - search_active neutralise le mois automatique.
+    """
+    current = now()
+    current_year = current.year
+
+    try:
+        year = int(requested_year if requested_year not in (None, "") else current_year)
+    except (TypeError, ValueError):
+        year = current_year
+
+    if available_years is not None:
+        valid_years = {int(y) for y in available_years}
+        if year not in valid_years:
+            year = current_year if current_year in valid_years else (
+                max(valid_years) if valid_years else current_year
+            )
+
+    raw_month = request.args.get("month")
+    explicit_month = raw_month not in (None, "")
+
+    if search_active:
+        selected_month = 0
+    elif explicit_month:
+        try:
+            selected_month = int(raw_month)
+        except (TypeError, ValueError):
+            selected_month = 0
+        if selected_month not in range(1, 13):
+            selected_month = 0
+    elif default_all_year:
+        selected_month = 0
+    elif year == current_year:
+        selected_month = current.month
+    else:
+        selected_month = 0
+
+    return year, selected_month
+
+
+def period_prefix(year, month=0):
+    """Retourne YYYY- ou YYYY-MM- pour les dates ISO de WOPR."""
+    if month:
+        return f"{int(year):04d}-{int(month):02d}-"
+    return f"{int(year):04d}-"
+
+
+def date_is_in_period(value, year, month=0):
+    """Teste l'appartenance d'une date texte ISO à une période."""
+    return str(value or "").startswith(period_prefix(year, month))
+
+
 def make_dossier_no():
     """
     Numéro de dossier lisible : JJMMAAAAHHMM (sans secondes).
@@ -9293,6 +9376,386 @@ def atelier_dashboard():
 
 
 
+@app.route("/etat-sante")
+def health_page():
+    """Contrôles de cohérence métier et technique, sans modifier les données."""
+    con = db()
+    checks = []
+
+    def add_check(key, title, count, level="ok", detail="", rows=None, href=None):
+        checks.append({
+            "key": key,
+            "title": title,
+            "count": int(count or 0),
+            "level": level,
+            "detail": detail,
+            "rows": list(rows or []),
+            "href": href,
+        })
+
+    # Base SQLite / SQLCipher : vérification légère et non destructive.
+    try:
+        quick = con.execute("PRAGMA quick_check").fetchone()
+        db_ok = bool(quick and str(quick[0]).strip().casefold() == "ok")
+    except Exception:
+        db_ok = False
+    add_check(
+        "database",
+        "Intégrité de la base",
+        0 if db_ok else 1,
+        "ok" if db_ok else "error",
+        "PRAGMA quick_check : OK" if db_ok else "La vérification rapide de la base a signalé un problème.",
+    )
+
+    # Dossiers terminés mais pas encore facturés.
+    rows = con.execute("""
+        SELECT r.id, r.dossier_no, r.received_date, r.problem, r.status,
+               c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(r.simple_invoice,0)=0
+          AND r.status='Terminé'
+          AND COALESCE(TRIM(r.invoice_no),'')=''
+          AND LOWER(TRIM(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+        ORDER BY r.received_date ASC, r.id ASC
+        LIMIT 20
+    """).fetchall()
+    count = con.execute("""
+        SELECT COUNT(*)
+        FROM repairs r
+        WHERE COALESCE(r.simple_invoice,0)=0
+          AND r.status='Terminé'
+          AND COALESCE(TRIM(r.invoice_no),'')=''
+          AND LOWER(TRIM(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+    """).fetchone()[0]
+    add_check(
+        "finished_no_invoice",
+        "Dossiers terminés sans facture",
+        count,
+        "warn" if count else "ok",
+        "À vérifier si le matériel doit encore être facturé.",
+        rows,
+        url_for("index", a_restituer=1) if count else None,
+    )
+
+    # Factures marquées payées sans mode de règlement.
+    rows = con.execute("""
+        SELECT r.id, r.invoice_no, r.accounting_date, r.received_date,
+               c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(TRIM(r.invoice_no),'')<>''
+          AND COALESCE(r.paid,0)=1
+          AND COALESCE(TRIM(r.payment_mode),'')=''
+          AND COALESCE(TRIM(r.payment_method),'')=''
+        ORDER BY COALESCE(r.accounting_date,r.received_date) DESC, r.id DESC
+        LIMIT 20
+    """).fetchall()
+    count = con.execute("""
+        SELECT COUNT(*)
+        FROM repairs
+        WHERE COALESCE(TRIM(invoice_no),'')<>''
+          AND COALESCE(paid,0)=1
+          AND COALESCE(TRIM(payment_mode),'')=''
+          AND COALESCE(TRIM(payment_method),'')=''
+    """).fetchone()[0]
+    add_check(
+        "paid_no_mode",
+        "Factures payées sans mode de règlement",
+        count,
+        "warn" if count else "ok",
+        "Le paiement est indiqué comme reçu, mais aucun mode n'est renseigné.",
+        rows,
+        url_for("invoices_page", month=0) if count else None,
+    )
+
+    # Factures payées sans date d'encaissement.
+    rows = con.execute("""
+        SELECT r.id, r.invoice_no, r.received_date, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(TRIM(r.invoice_no),'')<>''
+          AND COALESCE(r.paid,0)=1
+          AND COALESCE(TRIM(r.accounting_date),'')=''
+        ORDER BY r.received_date DESC, r.id DESC
+        LIMIT 20
+    """).fetchall()
+    count = con.execute("""
+        SELECT COUNT(*)
+        FROM repairs
+        WHERE COALESCE(TRIM(invoice_no),'')<>''
+          AND COALESCE(paid,0)=1
+          AND COALESCE(TRIM(accounting_date),'')=''
+    """).fetchone()[0]
+    add_check(
+        "paid_no_date",
+        "Factures payées sans date d'encaissement",
+        count,
+        "warn" if count else "ok",
+        "Utile à corriger pour garder une comptabilité mensuelle cohérente.",
+        rows,
+        url_for("invoices_page", month=0) if count else None,
+    )
+
+    # Achats sans justificatif.
+    rows = con.execute("""
+        SELECT id, party, entry_date, description, amount_ttc, invoice_no
+        FROM ledger_entries
+        WHERE LOWER(COALESCE(operation,''))='achat'
+          AND COALESCE(TRIM(document_path),'')=''
+        ORDER BY entry_date DESC, id DESC
+        LIMIT 20
+    """).fetchall()
+    count = con.execute("""
+        SELECT COUNT(*)
+        FROM ledger_entries
+        WHERE LOWER(COALESCE(operation,''))='achat'
+          AND COALESCE(TRIM(document_path),'')=''
+    """).fetchone()[0]
+    add_check(
+        "purchases_no_doc",
+        "Achats sans justificatif",
+        count,
+        "warn" if count else "ok",
+        "Facture fournisseur ou justificatif non encore lié dans Achats / Ventes.",
+        rows,
+        url_for("achats_ventes_page", month=0) if count else None,
+    )
+
+    # État Google Contacts.
+    pending_rows = con.execute("""
+        SELECT id, name, phone, email, google_sync_status
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+          AND COALESCE(google_sync_status,'À synchroniser') NOT IN ('Synchronisé','Erreur')
+        ORDER BY name COLLATE NOCASE
+        LIMIT 20
+    """).fetchall()
+    pending_count = con.execute("""
+        SELECT COUNT(*)
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+          AND COALESCE(google_sync_status,'À synchroniser') NOT IN ('Synchronisé','Erreur')
+    """).fetchone()[0]
+    add_check(
+        "google_pending",
+        "Clients Google à synchroniser",
+        pending_count,
+        "info" if pending_count else "ok",
+        "Fiches locales pas encore synchronisées vers Google Contacts.",
+        pending_rows,
+        url_for("contacts_page", google_status="pending") if pending_count else None,
+    )
+
+    error_rows = con.execute("""
+        SELECT id, name, phone, email, google_sync_status, google_sync_error
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+          AND google_sync_status='Erreur'
+        ORDER BY name COLLATE NOCASE
+        LIMIT 20
+    """).fetchall()
+    error_count = con.execute("""
+        SELECT COUNT(*)
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+          AND google_sync_status='Erreur'
+    """).fetchone()[0]
+    add_check(
+        "google_errors",
+        "Erreurs Google Contacts",
+        error_count,
+        "error" if error_count else "ok",
+        "Synchronisations Google ayant échoué et nécessitant une vérification.",
+        error_rows,
+        url_for("contacts_page", google_status="error") if error_count else None,
+    )
+
+    # Sauvegardes WOPR.
+    latest_backup = None
+    try:
+        candidates = [p for p in BACKUP_DIR.iterdir() if p.is_file()]
+        if candidates:
+            latest_backup = max(candidates, key=lambda p: p.stat().st_mtime)
+    except Exception:
+        latest_backup = None
+
+    if latest_backup:
+        age_hours = max(0.0, (time.time() - latest_backup.stat().st_mtime) / 3600.0)
+        backup_level = "ok" if age_hours <= 48 else "warn"
+        add_check(
+            "backup",
+            "Dernière sauvegarde WOPR",
+            0 if backup_level == "ok" else 1,
+            backup_level,
+            f"{latest_backup.name} · il y a {age_hours:.1f} h",
+        )
+    else:
+        add_check(
+            "backup",
+            "Dernière sauvegarde WOPR",
+            1,
+            "error",
+            "Aucune sauvegarde WOPR détectée dans le dossier interne.",
+        )
+
+    con.close()
+
+    problem_count = sum(c["count"] for c in checks if c["level"] in {"warn", "error"})
+    error_checks = sum(1 for c in checks if c["level"] == "error")
+    warning_checks = sum(1 for c in checks if c["level"] == "warn")
+
+    return render_template(
+        "health.html",
+        checks=checks,
+        problem_count=problem_count,
+        error_checks=error_checks,
+        warning_checks=warning_checks,
+    )
+
+
+@app.route("/activite")
+def activity_page():
+    """Timeline lisible des dernières activités métier et techniques."""
+    try:
+        limit = int(request.args.get("limit") or 80)
+    except (TypeError, ValueError):
+        limit = 80
+    limit = max(20, min(limit, 200))
+    category = str(request.args.get("category") or "").strip().lower()
+
+    con = db()
+    events = []
+
+    def push(ts, category_name, icon, title, detail="", href=None):
+        ts = str(ts or "").strip()
+        if not ts:
+            return
+        events.append({
+            "ts": ts,
+            "category": category_name,
+            "icon": icon,
+            "title": title,
+            "detail": str(detail or ""),
+            "href": href,
+        })
+
+    # Réparations créées.
+    for row in con.execute("""
+        SELECT r.id, r.dossier_no, r.created_at, r.problem, r.status, c.name AS client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(r.simple_invoice,0)=0
+        ORDER BY r.created_at DESC LIMIT 80
+    """).fetchall():
+        push(
+            row["created_at"], "atelier", "🔧",
+            f"Nouveau dossier · {row['client_name']}",
+            f"{row['dossier_no']} · {row['problem'] or 'Sans description'}",
+            url_for("repair_detail", rid=row["id"]),
+        )
+
+    # Dossiers terminés.
+    for row in con.execute("""
+        SELECT r.id, r.dossier_no, r.finished_at, r.invoice_no, c.name AS client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(r.simple_invoice,0)=0
+          AND COALESCE(TRIM(r.finished_at),'')<>''
+        ORDER BY r.finished_at DESC LIMIT 60
+    """).fetchall():
+        detail = row["dossier_no"]
+        if row["invoice_no"]:
+            detail += f" · facture {row['invoice_no']}"
+        push(
+            row["finished_at"], "atelier", "✅",
+            f"Dossier terminé · {row['client_name']}",
+            detail,
+            url_for("repair_detail", rid=row["id"]),
+        )
+
+    # Devis.
+    for row in con.execute("""
+        SELECT id, quote_no, client_name, status, created_at, updated_at
+        FROM quotes
+        ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 60
+    """).fetchall():
+        push(
+            row["updated_at"] or row["created_at"], "documents", "📝",
+            f"Devis {row['quote_no']} · {row['client_name']}",
+            row["status"] or "",
+            url_for("quote_edit", quote_id=row["id"]),
+        )
+
+    # Achats / ventes.
+    for row in con.execute("""
+        SELECT id, operation, party, entry_date, description, amount_ttc, created_at
+        FROM ledger_entries
+        ORDER BY created_at DESC LIMIT 80
+    """).fetchall():
+        push(
+            row["created_at"], "gestion", "🛍️" if str(row["operation"]).casefold() == "achat" else "💶",
+            f"{row['operation']} · {row['party'] or 'Sans tiers'}",
+            f"{float(row['amount_ttc'] or 0):.2f} € · {row['description'] or ''}",
+            url_for("achats_ventes_page", year=str(row["entry_date"] or "")[:4] or None),
+        )
+
+    # Journal technique/sécurité : on garde les plus parlants.
+    audit_labels = {
+        "BACKUP": ("système", "💾", "Sauvegarde créée"),
+        "BACKUP_RESTORE_ERROR": ("système", "⚠️", "Erreur de restauration"),
+        "EXTERNAL_BACKUP_TEST": ("système", "💾", "Test sauvegarde externe"),
+        "EXTERNAL_BACKUP_TEST_ERROR": ("système", "⚠️", "Erreur sauvegarde externe"),
+        "SUMUP_TEST_OK": ("services", "💳", "Test SumUp réussi"),
+        "SUMUP_TEST_ERROR": ("services", "⚠️", "Erreur SumUp"),
+        "KDECONNECT_SMS": ("services", "💬", "SMS envoyé"),
+        "KDECONNECT_TEST": ("services", "📱", "Test téléphone réussi"),
+        "KDECONNECT_TEST_ERROR": ("services", "⚠️", "Erreur téléphone"),
+        "INVOICE_EMAIL": ("documents", "📧", "Facture envoyée"),
+        "INVOICE_EMAIL_ERROR": ("documents", "⚠️", "Erreur envoi facture"),
+        "CLIENT_CREATE": ("clients", "👤", "Client créé"),
+        "CLIENT_ARCHIVE": ("clients", "🗄️", "Client archivé"),
+        "CLIENT_RESTORE": ("clients", "♻️", "Client restauré"),
+        "PROTON_IMPORT_START": ("clients", "📥", "Import Proton démarré"),
+        "ABBY_SYNC_CLIENTS": ("services", "🔄", "Synchronisation Abby"),
+        "ABBY_SYNC_CLIENTS_ERROR": ("services", "⚠️", "Erreur Abby"),
+        "SQLCIPHER_UNLOCK": ("système", "🔐", "Base déverrouillée"),
+        "PIN_CHANGED": ("système", "🔐", "PIN modifié"),
+    }
+    for row in con.execute("""
+        SELECT created_at, action, details
+        FROM audit_log
+        ORDER BY id DESC LIMIT 150
+    """).fetchall():
+        meta = audit_labels.get(str(row["action"] or ""))
+        if not meta:
+            continue
+        cat, icon, title = meta
+        push(row["created_at"], cat, icon, title, row["details"] or "")
+
+    con.close()
+
+    if category:
+        events = [e for e in events if e["category"] == category]
+    events.sort(key=lambda e: e["ts"], reverse=True)
+    events = events[:limit]
+
+    categories = [
+        ("", "Tout"),
+        ("atelier", "Atelier"),
+        ("documents", "Documents"),
+        ("gestion", "Gestion"),
+        ("clients", "Clients"),
+        ("services", "Services"),
+        ("système", "Système"),
+    ]
+    return render_template(
+        "activity.html",
+        events=events,
+        categories=categories,
+        selected_category=category,
+        limit=limit,
+    )
+
+
 @app.get("/_w/7f3a9c")
 def wopr_end_sequence_audio():
     """Sample audio privé de l'easter egg WOPR."""
@@ -9593,21 +10056,16 @@ def index():
     overdue_only = request.args.get("overdue") == "1"
     client_search = str(request.args.get("q") or "").strip()
     client_search_folded = client_search.casefold()
-    try:
-        requested_year = int(request.args.get("year") or now().year)
-    except Exception:
-        requested_year = now().year
-
-    raw_month = request.args.get("month")
-    special_followup_filter = to_return_only or en_cours_only or attente_piece_only or overdue_only
-    try:
-        selected_month = int(raw_month) if raw_month not in (None, "") else (
-            0 if special_followup_filter else (now().month if requested_year == now().year else 0)
-        )
-    except (TypeError, ValueError):
-        selected_month = 0 if special_followup_filter else (now().month if requested_year == now().year else 0)
-    if selected_month not in range(1, 13):
-        selected_month = 0
+    requested_year, selected_month = resolve_period_selection(
+        requested_year=request.args.get("year"),
+        default_all_year=(
+            to_return_only
+            or en_cours_only
+            or attente_piece_only
+            or overdue_only
+        ),
+        search_active=bool(client_search_folded),
+    )
 
     con = db()
 
@@ -10270,23 +10728,12 @@ def quotes_page():
         },
         reverse=True,
     )
-    try:
-        year = int(request.args.get("year", current_year))
-    except (TypeError, ValueError):
-        year = current_year
-    if year not in available_years:
-        year = current_year
+    year, selected_month = resolve_period_selection(
+        requested_year=request.args.get("year"),
+        available_years=available_years,
+        search_active=bool(q_folded),
+    )
     archive_years = [y for y in available_years if y != current_year]
-
-    raw_month = request.args.get("month")
-    try:
-        selected_month = int(raw_month) if raw_month not in (None, "") else (
-            now().month if year == current_year else 0
-        )
-    except (TypeError, ValueError):
-        selected_month = now().month if year == current_year else 0
-    if selected_month not in range(1, 13) or q_folded:
-        selected_month = 0
 
     if q_folded:
         quotes = []
@@ -10306,12 +10753,9 @@ def quotes_page():
             if q_folded in haystack:
                 quotes.append(quote)
     else:
-        period_prefix = f"{year:04d}-"
-        if selected_month:
-            period_prefix = f"{year:04d}-{selected_month:02d}-"
         quotes = [
             quote for quote in all_quotes
-            if str(quote.get("quote_date") or "").startswith(period_prefix)
+            if date_is_in_period(quote.get("quote_date"), year, selected_month)
         ]
 
     archived_quotes = [quote for quote in quotes if quote["document_count"] > 0]
@@ -10348,7 +10792,7 @@ def quotes_page():
         current_year=current_year,
         archive_years=archive_years,
         selected_month=selected_month,
-        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
+        month_names=MONTH_NAMES,
         q=q,
         search_all_years=bool(q_folded),
     )
@@ -13194,27 +13638,15 @@ def achats_ventes_page():
         reverse=True,
     )
 
-    try:
-        year = int(request.args.get("year", current_year))
-    except (TypeError, ValueError):
-        year = current_year
-    if year not in available_years:
-        year = current_year
-
-    archive_years = [y for y in available_years if y != current_year]
-
     # V2.3.98 — recherche manuelle uniquement : aucun rattachement automatique.
     search_q = str(request.args.get("q", "") or "").strip()
 
-    raw_month = request.args.get("month")
-    try:
-        selected_month = int(raw_month) if raw_month not in (None, "") else (
-            now().month if year == current_year else 0
-        )
-    except (TypeError, ValueError):
-        selected_month = now().month if year == current_year else 0
-    if selected_month not in range(1, 13) or search_q:
-        selected_month = 0
+    year, selected_month = resolve_period_selection(
+        requested_year=request.args.get("year"),
+        available_years=available_years,
+        search_active=bool(search_q),
+    )
+    archive_years = [y for y in available_years if y != current_year]
 
     # V2.3.96 — auto-répare les liens morts créés pendant les premières versions
     # des justificatifs fournisseurs, sans toucher aux fichiers eux-mêmes.
@@ -13228,7 +13660,7 @@ def achats_ventes_page():
     """).fetchall()
     all_entries = [
         row for row in all_entries_all_years
-        if str(row["entry_date"] or "").startswith(f"{year:04d}-")
+        if date_is_in_period(row["entry_date"], year)
     ]
     supplier_docs_count = sum(
         1 for row in all_entries
@@ -13380,7 +13812,7 @@ def achats_ventes_page():
         current_year=current_year,
         archive_years=archive_years,
         selected_month=selected_month,
-        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
+        month_names=MONTH_NAMES,
         months=months,
         purchases_total=purchases_total,
         sales_total=sales_total,
@@ -16876,38 +17308,25 @@ def invoices_page():
         },
         reverse=True,
     )
-    try:
-        year = int(request.args.get("year", current_year))
-    except (TypeError, ValueError):
-        year = current_year
-    if year not in available_years:
-        year = current_year
+    year, selected_month = resolve_period_selection(
+        requested_year=request.args.get("year"),
+        available_years=available_years,
+        default_all_year=unpaid_only,
+        search_active=bool(q),
+    )
     archive_years = [y for y in available_years if y != current_year]
-
-    raw_month = request.args.get("month")
-    try:
-        selected_month = int(raw_month) if raw_month not in (None, "") else (
-            0 if unpaid_only else (now().month if year == current_year else 0)
-        )
-    except (TypeError, ValueError):
-        selected_month = 0 if unpaid_only else (now().month if year == current_year else 0)
-    if selected_month not in range(1, 13) or q:
-        selected_month = 0
 
     year_invoices = [
         inv for inv in invoices
-        if str(inv.get("invoice_date") or "").startswith(f"{year:04d}-")
+        if date_is_in_period(inv.get("invoice_date"), year)
     ]
 
-    # Une recherche ne doit jamais être limitée à l'année affichée.
-    # Sans recherche, on conserve la navigation annuelle / mensuelle normale.
-    period_invoices = year_invoices
-    if selected_month:
-        period_prefix = f"{year:04d}-{selected_month:02d}-"
-        period_invoices = [
-            inv for inv in year_invoices
-            if str(inv.get("invoice_date") or "").startswith(period_prefix)
-        ]
+    # Une recherche ne doit jamais être limitée à la période affichée.
+    # Sans recherche, toutes les pages utilisent la même logique de période.
+    period_invoices = [
+        inv for inv in year_invoices
+        if date_is_in_period(inv.get("invoice_date"), year, selected_month)
+    ]
     invoice_search_source = invoices if q else period_invoices
 
     # A query that looks like a price is treated as an exact invoice amount.
@@ -17097,7 +17516,7 @@ def invoices_page():
         current_year=current_year,
         archive_years=archive_years,
         selected_month=selected_month,
-        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
+        month_names=MONTH_NAMES,
         search_all_years=bool(q),
         sumup_enabled=bool(read_sumup_settings().get("enabled")),
         orphan_invoice_count=orphan_invoice_count,
@@ -22675,7 +23094,103 @@ def export_ventes():
     return Response(data, mimetype="text/csv",
                     headers={"Content-Disposition":"attachment; filename=Achats_Ventes_Ventes.csv"})
 
+
+def run_wopr_self_tests():
+    """Tests de non-régression rapides, en lecture seule."""
+    tests = []
+
+    def record(name, ok, detail=""):
+        tests.append((name, bool(ok), str(detail or "")))
+
+    try:
+        state = initialize_database_security()
+        record("Sécurité base", state != "locked", state)
+        if state == "locked":
+            return tests
+        init_db()
+    except Exception as exc:
+        record("Initialisation base", False, f"{type(exc).__name__}: {exc}")
+        return tests
+
+    con = None
+    try:
+        con = db()
+        row = con.execute("PRAGMA quick_check").fetchone()
+        record("Intégrité SQLite/SQLCipher", bool(row and str(row[0]).casefold() == "ok"), row[0] if row else "")
+        tables = {
+            str(r[0]) for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        required = {"clients", "repairs", "ledger_entries", "quotes", "audit_log"}
+        record("Tables métier", required.issubset(tables), ", ".join(sorted(required - tables)))
+    except Exception as exc:
+        record("Lecture base", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+    current_year = now().year
+    current_month = now().month
+    urls = [
+        ("/atelier", "Atelier"),
+        (f"/suivi?year={current_year}&month={current_month}", "Suivi mois courant"),
+        (f"/suivi?year={current_year}&en_cours=1", "Suivi En cours"),
+        (f"/suivi?year={current_year}&attente_piece=1", "Suivi Attente pièce"),
+        (f"/suivi?year={current_year}&overdue=1", "Suivi +14 j"),
+        (f"/suivi?year={current_year}&a_restituer=1", "Suivi À restituer"),
+        ("/factures", "Factures"),
+        ("/factures?unpaid=1", "Factures impayées"),
+        ("/devis", "Devis"),
+        ("/achats-ventes", "Achats / Ventes"),
+        ("/contacts", "Clients"),
+        ("/contacts?google_status=pending", "Clients à synchroniser"),
+        ("/etat-sante", "État de santé"),
+        ("/activite", "Activité récente"),
+    ]
+
+    try:
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["admin_authenticated"] = True
+                sess["client_mode"] = False
+            for url, label in urls:
+                try:
+                    response = client.get(url, follow_redirects=False)
+                    record(label, response.status_code == 200, f"HTTP {response.status_code}")
+                except Exception as exc:
+                    record(label, False, f"{type(exc).__name__}: {exc}")
+    except Exception as exc:
+        record("Client Flask", False, f"{type(exc).__name__}: {exc}")
+
+    return tests
+
+
+def print_wopr_self_tests():
+    tests = run_wopr_self_tests()
+    failed = 0
+    print(f"WOPR {APP_VERSION} — tests de non-régression")
+    print("-" * 58)
+    for name, ok, detail in tests:
+        status = "OK " if ok else "FAIL"
+        suffix = f" — {detail}" if detail else ""
+        print(f"[{status}] {name}{suffix}")
+        if not ok:
+            failed += 1
+    print("-" * 58)
+    if failed:
+        print(f"ÉCHEC : {failed} test(s) en erreur.")
+        return 1
+    print(f"SUCCÈS : {len(tests)} test(s) validé(s).")
+    return 0
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        raise SystemExit(print_wopr_self_tests())
+
     if "--check-db-unlock" in sys.argv:
         try:
             initialize_database_security()
