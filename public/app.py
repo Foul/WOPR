@@ -35,7 +35,20 @@ import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet, InvalidToken
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+def europe_paris_tz():
+    """
+    Fuseau Europe/Paris robuste sous Linux et Windows.
+    Utilise tzdata/zoneinfo si disponible ; sinon retombe sur le fuseau local
+    de la machine, ce qui évite de casser SumUp si Windows n'a pas encore
+    installé la base IANA.
+    """
+    try:
+        return ZoneInfo("Europe/Paris")
+    except ZoneInfoNotFoundError:
+        return datetime.now().astimezone().tzinfo or timezone.utc
+
 
 try:
     from google.oauth2.credentials import Credentials
@@ -1863,7 +1876,7 @@ def _sumup_api_period(date_from, date_to):
     Convert inclusive local dates to SumUp UTC bounds.
     Foul-Fix operates in Europe/Paris; `newest_time` is exclusive here.
     """
-    tz = ZoneInfo("Europe/Paris")
+    tz = europe_paris_tz()
     start_local = datetime.combine(date_from, datetime.min.time(), tzinfo=tz)
     end_local = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=tz)
     return (
@@ -1980,7 +1993,7 @@ def _sumup_local_datetime(raw_timestamp):
         dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        local_dt = dt.astimezone(ZoneInfo("Europe/Paris"))
+        local_dt = dt.astimezone(europe_paris_tz())
         return local_dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
         return raw[:19].replace("T", " ")
@@ -9497,30 +9510,6 @@ def health_page():
         url_for("invoices_page", month=0) if count else None,
     )
 
-    # Achats sans justificatif.
-    rows = con.execute("""
-        SELECT id, party, entry_date, description, amount_ttc, invoice_no
-        FROM ledger_entries
-        WHERE LOWER(COALESCE(operation,''))='achat'
-          AND COALESCE(TRIM(document_path),'')=''
-        ORDER BY entry_date DESC, id DESC
-        LIMIT 20
-    """).fetchall()
-    count = con.execute("""
-        SELECT COUNT(*)
-        FROM ledger_entries
-        WHERE LOWER(COALESCE(operation,''))='achat'
-          AND COALESCE(TRIM(document_path),'')=''
-    """).fetchone()[0]
-    add_check(
-        "purchases_no_doc",
-        "Achats sans justificatif",
-        count,
-        "warn" if count else "ok",
-        "Facture fournisseur ou justificatif non encore lié dans Achats / Ventes.",
-        rows,
-        url_for("achats_ventes_page", month=0) if count else None,
-    )
 
     # État Google Contacts.
     pending_rows = con.execute("""
@@ -14304,12 +14293,9 @@ def repair_client_search():
 
 @app.route("/repair/new", methods=["GET", "POST"])
 def repair_new():
-    # Une nouvelle prise en charge reste un écran Atelier normal.
-    # Nettoie un éventuel ancien Mode Client resté en session.
-    if request.method == "GET":
-        session.pop("client_mode", None)
-        session.pop("client_mode_rid", None)
-
+    # En Mode Client, la prise en charge reste volontairement confidentielle
+    # pendant toute la création du dossier. Le retour en Mode Admin se fait
+    # uniquement via le bouton dédié.
     if request.method == "POST":
         selected_client_id_raw = request.form.get("client_id", "").strip()
 
@@ -14471,8 +14457,13 @@ def repair_new():
         con.commit()
         con.close()
 
-        session.pop("client_mode", None)
-        session.pop("client_mode_rid", None)
+        if session.get("client_mode"):
+            # Autorise uniquement ce nouveau dossier dans le Mode Client
+            # (détail, signature, QR et fiche d'entrée via security_gate()).
+            session["client_mode_rid"] = rid
+        else:
+            session.pop("client_mode_rid", None)
+
         # Publie le dossier initial si la synchronisation portail est activée.
         publish_tracking_snapshot(rid)
         try:
@@ -18601,7 +18592,7 @@ def sumup_transaction_relink_existing():
         try:
             tx_date = datetime.fromisoformat(
                 tx_timestamp.replace("Z", "+00:00")
-            ).astimezone(ZoneInfo("Europe/Paris")).date().isoformat()
+            ).astimezone(europe_paris_tz()).date().isoformat()
         except Exception:
             tx_date = ""
 
@@ -23133,6 +23124,107 @@ def run_wopr_self_tests():
             except Exception:
                 pass
 
+    # Environnement / portabilité -------------------------------------------------
+    try:
+        tz = ZoneInfo("Europe/Paris")
+        sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
+        record(
+            "Fuseau Europe/Paris",
+            sample.utcoffset() is not None,
+            f"{tz.key} · UTC{sample.utcoffset()}",
+        )
+    except Exception as exc:
+        record("Fuseau Europe/Paris", False, f"{type(exc).__name__}: {exc}")
+
+    req_file = BASE / "requirements.txt"
+    try:
+        req_text = req_file.read_text(encoding="utf-8") if req_file.is_file() else ""
+        has_tzdata = bool(re.search(r"(?im)^tzdata(?:[<>=!~].*)?$", req_text))
+        has_win_sqlcipher = (
+            "sqlcipher3==0.6.2" in req_text
+            and 'platform_system == "Windows"' in req_text
+        )
+        record(
+            "Préparation Windows",
+            req_file.is_file() and has_tzdata and has_win_sqlcipher,
+            "tzdata + SQLCipher Windows déclarés"
+            if req_file.is_file() and has_tzdata and has_win_sqlcipher
+            else "public/requirements.txt incomplet",
+        )
+    except Exception as exc:
+        record("Préparation Windows", False, f"{type(exc).__name__}: {exc}")
+
+    # Fichiers d'interface indispensables -----------------------------------------
+    important_templates = [
+        "base.html",
+        "atelier.html",
+        "index.html",
+        "invoices.html",
+        "quotes.html",
+        "achats_ventes.html",
+        "contacts.html",
+        "health.html",
+        "activity.html",
+    ]
+    missing_templates = [
+        name for name in important_templates
+        if not (BASE / "templates" / name).is_file()
+    ]
+    record(
+        "Templates principaux",
+        not missing_templates,
+        "OK" if not missing_templates else "manquants : " + ", ".join(missing_templates),
+    )
+
+    eight_bit_css = BASE / "static" / "wopr-8bit-hotfix.css"
+    try:
+        css_text = eight_bit_css.read_text(encoding="utf-8", errors="ignore") if eight_bit_css.is_file() else ""
+        css_ok = (
+            eight_bit_css.is_file()
+            and "theme-8bit" in css_text
+            and "wopr-nav-dropdown" in css_text
+        )
+        record(
+            "Assets thème 8-bit",
+            css_ok,
+            "hotfix + sous-menus détectés" if css_ok else "wopr-8bit-hotfix.css absent/incomplet",
+        )
+    except Exception as exc:
+        record("Assets thème 8-bit", False, f"{type(exc).__name__}: {exc}")
+
+    # Services optionnels : on vérifie la cohérence locale sans faire d'appel réseau.
+    try:
+        sumup = read_sumup_settings()
+        if sumup.get("enabled"):
+            api_ok = bool(str(sumup.get("api_key") or "").strip())
+            merchant_ok = bool(str(sumup.get("merchant_code") or "").strip())
+            record(
+                "Configuration SumUp",
+                api_ok and merchant_ok,
+                "activée · clé API + merchant code présents"
+                if api_ok and merchant_ok
+                else "activée mais configuration incomplète",
+            )
+        else:
+            record("Configuration SumUp", True, "désactivée")
+    except Exception as exc:
+        record("Configuration SumUp", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        if GOOGLE_LIBS_OK:
+            detail = "bibliothèques disponibles"
+            if GOOGLE_TOKEN.exists():
+                detail += " · jeton présent"
+            elif GOOGLE_CLIENT_SECRET.exists():
+                detail += " · OAuth configuré, pas encore connecté"
+            else:
+                detail += " · non configuré"
+            record("Google Contacts", True, detail)
+        else:
+            record("Google Contacts", False, "bibliothèques Google absentes")
+    except Exception as exc:
+        record("Google Contacts", False, f"{type(exc).__name__}: {exc}")
+
     current_year = now().year
     current_month = now().month
     urls = [
@@ -23163,6 +23255,40 @@ def run_wopr_self_tests():
                     record(label, response.status_code == 200, f"HTTP {response.status_code}")
                 except Exception as exc:
                     record(label, False, f"{type(exc).__name__}: {exc}")
+
+            # Le mode client ne doit exposer ni les impayés ni les règlements en attente.
+            try:
+                with client.session_transaction() as sess:
+                    sess["admin_authenticated"] = True
+                    sess["client_mode"] = True
+                response = client.get("/atelier", follow_redirects=False)
+                html = response.get_data(as_text=True)
+                hidden_ok = (
+                    response.status_code == 200
+                    and "Impayés" not in html
+                    and "Règlements en attente" not in html
+                )
+                record(
+                    "Mode client confidentiel",
+                    hidden_ok,
+                    "impayés/règlements masqués"
+                    if hidden_ok
+                    else f"HTTP {response.status_code} · contenu sensible encore visible",
+                )
+
+                # Ouvrir Nouvelle réparation ne doit plus désactiver le Mode Client.
+                response_new = client.get("/repair/new", follow_redirects=False)
+                with client.session_transaction() as sess:
+                    still_client = bool(sess.get("client_mode"))
+                record(
+                    "Mode client → Nouvelle réparation",
+                    response_new.status_code == 200 and still_client,
+                    "mode client conservé"
+                    if response_new.status_code == 200 and still_client
+                    else f"HTTP {response_new.status_code} · mode client perdu",
+                )
+            except Exception as exc:
+                record("Mode client confidentiel", False, f"{type(exc).__name__}: {exc}")
     except Exception as exc:
         record("Client Flask", False, f"{type(exc).__name__}: {exc}")
 

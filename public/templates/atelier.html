@@ -11,6 +11,7 @@
     <a class="navbtn navbtn-new" href="{{ url_for('repair_new') }}">
       <span class="nav-ico">➕</span><span>Nouvelle réparation</span>
     </a>
+    {% if not client_mode %}
     <a class="navbtn navbtn-new" href="{{ url_for('tracking_stats_page') }}">
       <span class="nav-ico">📊</span><span>Stats suivi</span>
     </a>
@@ -20,9 +21,21 @@
     <a class="navbtn navbtn-new" href="{{ url_for('activity_page') }}">
       <span class="nav-ico">🕘</span><span>Activité</span>
     </a>
+    {% endif %}
   </div>
 </div>
 
+{% if client_mode %}
+<section class="atelier-client-welcome">
+  <div class="atelier-client-welcome-icon">🛠️</div>
+  <div>
+    <h2>Accueil atelier</h2>
+    <p>Mode confidentiel actif. Utilise « Nouvelle réparation » pour enregistrer un nouveau dossier.</p>
+  </div>
+</section>
+{% endif %}
+
+{% if not client_mode %}
 <div class="atelier-kpis">
   <form class="atelier-period-picker" method="get">
     <label>Année
@@ -60,12 +73,14 @@
     <strong>{{ a_restituer_count }}</strong>
     <small>matériel(s) terminé(s)</small>
   </a>
+  {% if not client_mode %}
   <a class="atelier-kpi {% if unpaid_count %}atelier-kpi-alert{% endif %}" href="{{ url_for('invoices_page', unpaid=1) }}">
     <span class="atelier-kpi-icon">💳</span>
     <span class="atelier-kpi-label">Impayés</span>
     <strong>{{ unpaid_count }}</strong>
-    <small>{% if client_mode %}<span class="client-mode-redacted">••••</span>{% else %}{{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €{% endif %}</small>
+    <small>{{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €</small>
   </a>
+  {% endif %}
   <a class="atelier-kpi atelier-kpi-ca" href="{{ url_for('total_page') }}">
     <span class="atelier-kpi-icon">📈</span>
     <span class="atelier-kpi-label">CA {{ month_name }}</span>
@@ -121,17 +136,18 @@
     {% endif %}
   </section>
 
+  {% if not client_mode %}
   <section class="atelier-panel">
     <div class="atelier-panel-title">
       <h2>💶 Règlements en attente</h2>
-      <span>{% if client_mode %}{{ unpaid_count }} dossier(s) · <span class="client-mode-redacted">••••</span>{% else %}{{ unpaid_count }} dossier(s) · {{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €{% endif %}</span>
+      <span>{{ unpaid_count }} dossier(s) · {{ '%.2f'|format(unpaid_total)|replace('.', ',') }} €</span>
     </div>
     {% if unpaid_rows %}
       <div class="atelier-list">
       {% for r in unpaid_rows %}
         <a class="atelier-list-row" href="{{ url_for('repair_detail', rid=r['id']) }}">
-          <div>{% if client_mode %}<strong class="client-mode-redacted">Dossier masqué</strong><span class="client-mode-redacted">Informations confidentielles</span>{% else %}<strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['invoice_no'] }} · {{ r['problem'] or '' }}</span>{% endif %}</div>
-          <b>{% if client_mode %}<span class="client-mode-redacted">••••</span>{% else %}{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €{% endif %}</b>
+          <div><strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><span>{{ r['invoice_no'] }} · {{ r['problem'] or '' }}</span></div>
+          <b>{{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €</b>
         </a>
       {% endfor %}
       </div>
@@ -139,6 +155,7 @@
       <div class="atelier-empty">👌 Aucun règlement en attente.</div>
     {% endif %}
   </section>
+  {% endif %}
 
   <section class="atelier-panel atelier-panel-wide">
     <div class="atelier-panel-title">
@@ -154,7 +171,27 @@
     </div>
   </section>
 </div>
+{% endif %}
 <style>
+.atelier-client-welcome{
+  display:flex;align-items:center;gap:16px;max-width:760px;margin:28px auto 0;padding:24px;
+  border:1px solid rgba(120,140,160,.28);border-radius:12px;background:rgba(255,255,255,.03)
+}
+.atelier-client-welcome-icon{font-size:42px;line-height:1}
+.atelier-client-welcome h2{margin:0 0 6px}
+.atelier-client-welcome p{margin:0;opacity:.78}
+body.theme-8bit .atelier-client-welcome{
+  border:3px solid #07131d!important;border-radius:0!important;background:#dcecff!important;color:#103d66!important;
+  box-shadow:inset 3px 3px 0 rgba(255,255,255,.72),inset -3px -3px 0 rgba(0,0,0,.16),5px 5px 0 #07131d!important
+}
+body.theme-8bit .atelier-client-welcome-icon{
+  display:flex;align-items:center;justify-content:center;width:58px;height:58px;min-width:58px;
+  border:3px solid #07131d;background:#0c6d9f;box-shadow:inset 3px 3px 0 #2aaee7,inset -3px -3px 0 #064366,3px 3px 0 #07131d
+}
+body.theme-8bit .atelier-client-welcome h2,
+body.theme-8bit .atelier-client-welcome p{
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important
+}
 body.theme-8bit .atelier-head .mode-toggle-pixel{
   position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
   min-height:64px!important;min-width:148px!important;padding:0 8px!important;gap:7px!important;

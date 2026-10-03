@@ -568,6 +568,245 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-form{
 }
 
 
+
+
+/* ===== WOPR 2.6.1 — FIX DÉFINITIF TOPBAR 8-BIT WINDOWS / DPI =====
+   Sur Windows, la largeur CSS effective peut tomber sous 1900 px à cause du DPI.
+   app.css donne alors 100% de largeur à .brand-zone, tandis qu'une règle plus
+   tardive remet .topbar en nowrap : la navigation entière est repoussée hors écran.
+   On impose ici une vraie topbar 2 lignes uniquement dans cette plage :
+   identité en haut, navigation complète en dessous. */
+@media (max-width:1900px) and (min-width:901px){
+  html body.theme-8bit:has(.normal-mode-topbar-logo) .topbar{
+    display:flex!important;
+    flex-wrap:wrap!important;
+    align-items:center!important;
+    justify-content:flex-start!important;
+    gap:8px 12px!important;
+    min-height:auto!important;
+    overflow:visible!important;
+  }
+
+  html body.theme-8bit .topbar .brand-zone{
+    display:flex!important;
+    width:auto!important;
+    max-width:none!important;
+    flex:0 0 auto!important;
+    min-width:0!important;
+    margin:0!important;
+  }
+
+  html body.theme-8bit:has(.normal-mode-topbar-logo) .normal-mode-topbar-logo{
+    position:static!important;
+    left:auto!important;
+    right:auto!important;
+    top:auto!important;
+    transform:none!important;
+    flex:1 1 140px!important;
+    width:auto!important;
+    min-width:120px!important;
+    max-width:none!important;
+    height:62px!important;
+    margin:0 8px!important;
+  }
+
+  html body.theme-8bit:has(.normal-mode-topbar-logo) .normal-mode-topbar-logo img{
+    max-width:220px!important;
+    max-height:58px!important;
+    margin:auto!important;
+  }
+
+  /* La navigation occupe toute la deuxième ligne. */
+  html body.theme-8bit .topbar .topnav.topnav-grouped{
+    display:flex!important;
+    flex:0 0 100%!important;
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:3px 0 5px!important;
+    align-items:center!important;
+    justify-content:flex-start!important;
+    flex-wrap:nowrap!important;
+    overflow:visible!important;
+    gap:0!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-cluster{
+    display:flex!important;
+    flex:1 1 auto!important;
+    width:auto!important;
+    min-width:0!important;
+    max-width:none!important;
+    align-items:center!important;
+    justify-content:flex-start!important;
+    flex-wrap:nowrap!important;
+    overflow:visible!important;
+    gap:4px!important;
+  }
+
+  /* La recherche absorbe les différences de DPI au lieu de pousser les menus. */
+  html body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
+    flex:1 1 190px!important;
+    width:auto!important;
+    min-width:120px!important;
+    max-width:250px!important;
+    margin:0!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-suivi-direct{
+    flex:0 0 100px!important;
+    width:100px!important;
+    min-width:100px!important;
+    max-width:100px!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-docs > summary{
+    width:104px!important;
+    min-width:104px!important;
+    max-width:104px!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-management > summary{
+    width:96px!important;
+    min-width:96px!important;
+    max-width:96px!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-services > summary{
+    width:100px!important;
+    min-width:100px!important;
+    max-width:100px!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
+    flex:0 0 104px!important;
+    width:104px!important;
+    min-width:104px!important;
+    max-width:104px!important;
+  }
+
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-form{
+    flex:0 0 58px!important;
+    width:58px!important;
+    min-width:58px!important;
+    max-width:58px!important;
+    margin-left:4px!important;
+  }
+}
+
+/* En dessous, on autorise le retour à la ligne du cluster plutôt que de
+   faire disparaître des boutons hors écran. */
+@media (max-width:1250px) and (min-width:901px){
+  html body.theme-8bit .topbar .topnav.topnav-grouped{
+    align-items:flex-start!important;
+  }
+  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-cluster{
+    flex-wrap:wrap!important;
+  }
+  html body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
+    flex:1 1 210px!important;
+    max-width:none!important;
+  }
+}
+
+
+/* Mode Client — badge centré */
+.client-mode-nav{
+  flex:1 1 100% !important;
+  width:100% !important;
+  display:flex !important;
+  justify-content:center !important;
+  align-items:center !important;
+}
+.client-mode-badge{
+  margin:0 auto !important;
+  width:fit-content !important;
+  max-width:calc(100vw - 32px) !important;
+  text-align:center !important;
+}
+body.theme-8bit .client-mode-badge{
+  border:3px solid #07131d !important;
+  border-radius:0 !important;
+  background:#dcecff !important;
+  color:#103d66 !important;
+  padding:7px 12px !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -2px -2px 0 rgba(0,0,0,.14),
+    3px 3px 0 #07131d !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:900 !important;
+  text-transform:uppercase !important;
+}
+
+
+.client-mode-nav{
+  position:relative !important;
+}
+.client-mode-admin-form{
+  position:absolute;
+  right:0;
+  top:50%;
+  transform:translateY(-50%);
+  margin:0;
+}
+.client-mode-admin-btn{
+  appearance:none;
+  -webkit-appearance:none;
+  min-height:34px;
+  padding:6px 12px;
+  border:1px solid rgba(120,140,160,.35);
+  border-radius:8px;
+  background:rgba(255,255,255,.06);
+  color:inherit;
+  font:inherit;
+  font-weight:700;
+  cursor:pointer;
+}
+.client-mode-admin-btn:hover{
+  background:rgba(255,255,255,.12);
+}
+
+body.theme-8bit .client-mode-admin-btn{
+  border:3px solid #07131d !important;
+  border-radius:0 !important;
+  background:#ffedbd !important;
+  color:#6b4500 !important;
+  padding:7px 12px !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.70),
+    inset -2px -2px 0 rgba(0,0,0,.14),
+    3px 3px 0 #07131d !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:900 !important;
+  text-transform:uppercase !important;
+}
+body.theme-8bit .client-mode-admin-btn:hover{
+  transform:translate(1px,1px) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.60),
+    inset -2px -2px 0 rgba(0,0,0,.10),
+    2px 2px 0 #07131d !important;
+}
+body.theme-8bit .client-mode-admin-btn:active{
+  transform:translate(3px,3px) !important;
+  box-shadow:none !important;
+}
+
+@media (max-width:900px){
+  .client-mode-nav{
+    flex-wrap:wrap !important;
+    gap:8px !important;
+  }
+  .client-mode-admin-form{
+    position:static !important;
+    transform:none !important;
+    margin:0 auto !important;
+  }
+}
+
+
 </style>
 </head>
 <body>
@@ -616,6 +855,12 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-form{
   {% if client_mode %}
   <nav class="topnav client-mode-nav">
     <div class="client-mode-badge">👤 Mode Client — confidentialité activée</div>
+    <form class="client-mode-admin-form" method="post" action="{{ url_for('atelier_client_mode_off') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button class="client-mode-admin-btn" type="submit" title="Quitter le Mode Client">
+        🔓 Mode Admin
+      </button>
+    </form>
   </nav>
   {% else %}
   <nav class="topnav topnav-grouped">
@@ -1224,6 +1469,10 @@ document.addEventListener('click', async function (event) {
   }
 })();
 </script>
+
+
+
+
 
 </body>
 </html>

@@ -340,149 +340,456 @@ body.theme-8bit .page .atelier-head .client-mode-toggle:active{filter:brightness
 
 
 /* ==========================================================
-   WOPR 2.6.1 — FIX TOPBAR / MENU 8-BIT
-   Le hotfix est chargé en dernier : on neutralise ici les anciennes
-   règles de grille/positionnement du thème 8-bit pour la navigation.
+   WOPR 2.6.1 — harmonisation globale des boutons 8-BIT
    ========================================================== */
 
-body.theme-8bit header.topbar{
-  display:flex !important;
-  grid-template-columns:none !important;
+body.theme-8bit{
+  --w8-ui-dark:#07131d;
+  --w8-ui-blue:#dcecff;
+  --w8-ui-blue-fg:#103d66;
+  --w8-ui-green:#ddf5e6;
+  --w8-ui-green-fg:#14502e;
+  --w8-ui-amber:#ffedbd;
+  --w8-ui-amber-fg:#6b4500;
+  --w8-ui-purple:#eadcff;
+  --w8-ui-purple-fg:#4c2477;
+  --w8-ui-red:#ffdada;
+  --w8-ui-red-fg:#7c2020;
+}
+
+/* Boutons "normaux" de page :
+   Suivi, Factures, Devis, CA, Antivirus, Clients, Achats/Ventes... */
+body.theme-8bit .page :is(
+  a.button,
+  button.button,
+  input.button[type="submit"],
+  input.button[type="button"],
+  .contacts-toolbar button,
+  .google-panel button,
+  .credential-upload button,
+  .ca-year-controls button,
+  .ca-help a.button,
+  .sheet-actions a.button,
+  .followup-workshop-filters :is(a.button,button.button),
+  .ledger-audit-shortcut a.button,
+  .ledger-search-form :is(a.button,button.button)
+){
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  display:inline-flex !important;
   align-items:center !important;
-  justify-content:flex-start !important;
-  flex-wrap:nowrap !important;
+  justify-content:center !important;
+  box-sizing:border-box !important;
+  min-height:34px !important;
+  padding:6px 11px !important;
+  border:2px solid var(--w8-ui-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-ui-blue) !important;
+  background-image:none !important;
+  color:var(--w8-ui-blue-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -1px -1px 0 rgba(0,0,0,.14),
+    3px 3px 0 var(--w8-ui-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:11px !important;
+  font-weight:900 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  text-decoration:none !important;
+  text-shadow:none !important;
+  white-space:normal !important;
+  cursor:pointer !important;
+  transition:none !important;
+  filter:none !important;
+  clip-path:none !important;
+}
+
+/* Actions principales */
+body.theme-8bit .page :is(
+  a.button.primary,
+  button.button.primary,
+  button.primary,
+  input.button.primary,
+  .contacts-toolbar button.primary,
+  .google-panel button.primary,
+  .credential-upload button.primary,
+  .ca-save-button
+){
+  background:var(--w8-ui-green) !important;
+  color:var(--w8-ui-green-fg) !important;
+}
+
+/* Actions dangereuses */
+body.theme-8bit .page :is(
+  .button.danger,
+  .button.danger-btn,
+  button.danger,
+  button.danger-btn,
+  .wopr-action-delete
+){
+  background:var(--w8-ui-red) !important;
+  color:var(--w8-ui-red-fg) !important;
+}
+
+/* Effet borne d'arcade */
+body.theme-8bit .page :is(
+  a.button,
+  button.button,
+  input.button[type="submit"],
+  input.button[type="button"],
+  .contacts-toolbar button,
+  .google-panel button,
+  .credential-upload button,
+  .ca-year-controls button
+):hover{
+  transform:translate(1px,1px) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.62),
+    inset -1px -1px 0 rgba(0,0,0,.10),
+    2px 2px 0 var(--w8-ui-dark) !important;
+  filter:brightness(1.035) !important;
+}
+body.theme-8bit .page :is(
+  a.button,
+  button.button,
+  input.button[type="submit"],
+  input.button[type="button"],
+  .contacts-toolbar button,
+  .google-panel button,
+  .credential-upload button,
+  .ca-year-controls button
+):active{
+  transform:translate(3px,3px) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.45) !important;
+}
+
+/* Archives */
+body.theme-8bit .page .ledger-archive{
+  position:relative !important;
+}
+body.theme-8bit .page .ledger-archive > summary{
+  list-style:none !important;
+  min-height:34px !important;
+  padding:6px 11px !important;
+  border:2px solid var(--w8-ui-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-ui-purple) !important;
+  color:var(--w8-ui-purple-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -1px -1px 0 rgba(0,0,0,.14),
+    3px 3px 0 var(--w8-ui-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:11px !important;
+  font-weight:900 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  cursor:pointer !important;
+}
+body.theme-8bit .page .ledger-archive > summary::-webkit-details-marker{display:none !important;}
+body.theme-8bit .page .ledger-archive > summary::after{content:" ▼";font-size:9px;}
+body.theme-8bit .page .ledger-archive[open] > summary::after{content:" ▲";}
+body.theme-8bit .page .ledger-archive > a{
+  display:block !important;
+  margin:5px 0 0 !important;
+  padding:7px 10px !important;
+  border:2px solid var(--w8-ui-dark) !important;
+  border-radius:0 !important;
+  background:#f4efff !important;
+  color:var(--w8-ui-purple-fg) !important;
+  box-shadow:2px 2px 0 var(--w8-ui-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:900 !important;
+  text-decoration:none !important;
+  text-transform:uppercase !important;
+}
+
+/* Blocs Ajouter... : Achats/Ventes, Antivirus, etc. */
+body.theme-8bit .page details:not(.ledger-archive) > summary{
+  list-style:none !important;
+  width:fit-content !important;
+  max-width:100% !important;
+  min-height:38px !important;
+  box-sizing:border-box !important;
+  padding:8px 13px !important;
+  border:2px solid var(--w8-ui-dark) !important;
+  border-radius:0 !important;
+  background:var(--w8-ui-green) !important;
+  color:var(--w8-ui-green-fg) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -1px -1px 0 rgba(0,0,0,.14),
+    3px 3px 0 var(--w8-ui-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:11px !important;
+  font-weight:900 !important;
+  line-height:1.05 !important;
+  text-transform:uppercase !important;
+  cursor:pointer !important;
+}
+body.theme-8bit .page details:not(.ledger-archive) > summary::-webkit-details-marker{display:none !important;}
+body.theme-8bit .page details:not(.ledger-archive) > summary:hover,
+body.theme-8bit .page .ledger-archive > summary:hover{
+  transform:translate(1px,1px) !important;
+  box-shadow:2px 2px 0 var(--w8-ui-dark) !important;
+}
+body.theme-8bit .page details:not(.ledger-archive) > summary:active,
+body.theme-8bit .page .ledger-archive > summary:active{
+  transform:translate(3px,3px) !important;
+  box-shadow:none !important;
+}
+
+/* CA / Déclarations */
+body.theme-8bit .page .ca-year-controls .ca-save-button{
+  background:var(--w8-ui-green) !important;
+  color:var(--w8-ui-green-fg) !important;
+}
+body.theme-8bit .page .ca-year-controls button[name="reset_year"]{
+  background:var(--w8-ui-amber) !important;
+  color:var(--w8-ui-amber-fg) !important;
+}
+
+/* Clients / Google */
+body.theme-8bit .page .google-panel .contacts-toolbar form:nth-of-type(1) button{
+  background:var(--w8-ui-green) !important;
+  color:var(--w8-ui-green-fg) !important;
+}
+body.theme-8bit .page .google-panel .contacts-toolbar form:nth-of-type(2) button{
+  background:var(--w8-ui-blue) !important;
+  color:var(--w8-ui-blue-fg) !important;
+}
+body.theme-8bit .page .google-panel .contacts-toolbar form:nth-of-type(3) button{
+  background:var(--w8-ui-red) !important;
+  color:var(--w8-ui-red-fg) !important;
+}
+
+/* Sélecteurs de période */
+body.theme-8bit .page .wopr-period-filter select{
+  min-height:34px !important;
+  border:2px solid var(--w8-ui-dark) !important;
+  border-radius:0 !important;
+  background:#fff !important;
+  color:#152a3a !important;
+  box-shadow:2px 2px 0 var(--w8-ui-dark) !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-weight:800 !important;
+}
+
+
+/* Sous-menus de la barre principale
+   Version renforcée : mini-boutons 8-BIT assortis au menu principal,
+   avec face, tranche, ombres dures et effet d'enfoncement. */
+
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown{
+  display:none !important;
+  position:absolute !important;
+  top:calc(100% + 10px) !important;
+  left:0 !important;
+  right:auto !important;
+  z-index:32000 !important;
+
+  width:250px !important;
+  min-width:250px !important;
+  max-width:250px !important;
+  height:auto !important;
+
+  margin:0 !important;
+  padding:10px !important;
+
+  border:4px solid #061019 !important;
+  border-radius:0 !important;
+  background:#0b1e2b !important;
+
+  outline:2px solid #3e7898 !important;
+  outline-offset:-7px !important;
+
+  box-shadow:
+    inset 3px 3px 0 #173c52,
+    inset -3px -3px 0 #061019,
+    0 5px 0 #061019,
+    5px 5px 0 #02070b !important;
+
+  image-rendering:pixelated !important;
+}
+
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-menu[open] > .wopr-nav-dropdown{
+  display:block !important;
+}
+
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a{
+  --face:#087fbd;
+  --face-hi:#2aaee7;
+  --face-mid:#087fbd;
+  --face-low:#05577f;
+  --edge:#033851;
+
+  position:relative !important;
+  display:grid !important;
+  grid-template-columns:36px minmax(0,1fr) !important;
+  align-items:center !important;
+
   width:100% !important;
   min-width:0 !important;
-  max-width:100% !important;
-  height:auto !important;
-  min-height:0 !important;
-  overflow:visible !important;
+  height:44px !important;
+  min-height:44px !important;
   box-sizing:border-box !important;
-  gap:8px !important;
+
+  margin:0 0 9px 0 !important;
+  padding:0 9px 0 6px !important;
+
+  border:3px solid #061019 !important;
+  border-radius:0 !important;
+
+  background:
+    linear-gradient(
+      to bottom,
+      var(--face-hi) 0 16%,
+      var(--face-mid) 16% 68%,
+      var(--face-low) 68% 100%
+    ) !important;
+
+  color:#fff !important;
+
+  box-shadow:
+    inset 3px 3px 0 rgba(255,255,255,.33),
+    inset -3px -3px 0 rgba(0,0,0,.22),
+    0 4px 0 var(--edge),
+    0 7px 0 #061019 !important;
+
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  letter-spacing:.015em !important;
+  text-transform:uppercase !important;
+  text-decoration:none !important;
+  text-shadow:
+    1px 1px 0 #062032,
+    2px 2px 0 rgba(0,0,0,.28) !important;
+
+  transform:translate(0,0) !important;
+  transition:none !important;
+  filter:none !important;
+  cursor:pointer !important;
 }
 
-body.theme-8bit header.topbar .brand-zone{
-  position:relative !important;
+/* Couleurs proches des boutons principaux */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:nth-child(4n+2){
+  --face:#0b9395;
+  --face-hi:#2bbabd;
+  --face-mid:#0b9395;
+  --face-low:#066366;
+  --edge:#043e41;
+}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:nth-child(4n+3){
+  --face:#72529b;
+  --face-hi:#9876bd;
+  --face-mid:#72529b;
+  --face-low:#50356f;
+  --edge:#312147;
+}
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:nth-child(4n+4){
+  --face:#be7414;
+  --face-hi:#e39b35;
+  --face-mid:#be7414;
+  --face-low:#814a08;
+  --edge:#4c2b05;
+}
+
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:last-child{
+  margin-bottom:0 !important;
+}
+
+/* Tuile icône en relief, façon petit bouton imbriqué */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a > span:first-child{
   display:flex !important;
-  flex:0 0 auto !important;
-  width:auto !important;
-  min-width:0 !important;
-  max-width:none !important;
   align-items:center !important;
+  justify-content:center !important;
+
+  width:27px !important;
+  min-width:27px !important;
+  height:27px !important;
+  margin:0 8px 0 0 !important;
+
+  border:2px solid #041018 !important;
+  border-radius:0 !important;
+  background:#0c2a3d !important;
+  color:#fff !important;
+
+  box-shadow:
+    inset 2px 2px 0 #326681,
+    inset -2px -2px 0 #07151f,
+    2px 2px 0 #031018 !important;
+
+  font-size:14px !important;
+  line-height:1 !important;
+  text-shadow:1px 1px 0 #000 !important;
 }
 
-body.theme-8bit header.topbar nav.topnav.topnav-grouped{
-  position:relative !important;
-  inset:auto !important;
-  left:auto !important;
-  right:auto !important;
-  top:auto !important;
-  bottom:auto !important;
-  transform:none !important;
-
-  display:flex !important;
-  grid-template-columns:none !important;
-  grid-template-rows:none !important;
-
-  flex:1 1 auto !important;
-  width:auto !important;
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a > span:last-child{
   min-width:0 !important;
-  max-width:none !important;
-  height:auto !important;
-  min-height:0 !important;
-
-  align-items:center !important;
-  justify-content:flex-start !important;
-  flex-wrap:nowrap !important;
-  gap:0 !important;
-
-  margin:0 !important;
-  padding:0 !important;
-  overflow:visible !important;
-  visibility:visible !important;
-  opacity:1 !important;
-  z-index:11010 !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
 }
 
-body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-nav-cluster{
-  position:relative !important;
-  inset:auto !important;
-  transform:none !important;
+/* Hover : bouton "sorti" de la façade */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:hover,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a.active{
+  transform:translate(-1px,-2px) !important;
+  filter:brightness(1.08) !important;
 
-  display:flex !important;
-  grid-template-columns:none !important;
-  grid-template-rows:none !important;
-
-  flex:1 1 auto !important;
-  width:auto !important;
-  min-width:0 !important;
-  max-width:none !important;
-  height:auto !important;
-  min-height:0 !important;
-
-  align-items:center !important;
-  justify-content:flex-start !important;
-  flex-wrap:nowrap !important;
-  gap:4px !important;
-
-  margin:0 !important;
-  padding:0 !important;
-  overflow:visible !important;
-  visibility:visible !important;
-  opacity:1 !important;
+  box-shadow:
+    inset 3px 3px 0 rgba(255,255,255,.42),
+    inset -3px -3px 0 rgba(0,0,0,.18),
+    0 6px 0 var(--edge),
+    0 9px 0 #061019 !important;
 }
 
-body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-nav-cluster > *{
-  visibility:visible !important;
-  opacity:1 !important;
+/* Curseur arcade */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:hover::before,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a.active::before{
+  content:"▶" !important;
+  position:absolute !important;
+  left:-9px !important;
+  top:50% !important;
+  transform:translateY(-50%) !important;
+  color:#ffe24f !important;
+  font-size:9px !important;
+  line-height:1 !important;
+  text-shadow:
+    1px 1px 0 #000,
+    2px 2px 0 #5d4300 !important;
 }
 
-body.theme-8bit header.topbar nav.topnav.topnav-grouped .topbar-search{
-  position:relative !important;
-  inset:auto !important;
-  transform:none !important;
-  order:initial !important;
-  grid-column:auto !important;
-  grid-row:auto !important;
+/* Clic : effet bouton réellement enfoncé */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown > a:active{
+  transform:translate(0,4px) !important;
+  filter:brightness(.92) !important;
 
-  flex:1 1 220px !important;
-  width:auto !important;
-  min-width:150px !important;
-  max-width:280px !important;
-  height:auto !important;
-  margin:0 !important;
+  box-shadow:
+    inset 3px 3px 0 rgba(0,0,0,.20),
+    inset -2px -2px 0 rgba(255,255,255,.15),
+    0 1px 0 var(--edge),
+    0 2px 0 #061019 !important;
 }
 
-body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-nav-menu{
-  position:relative !important;
-  inset:auto !important;
-  transform:none !important;
-  display:block !important;
-  flex:0 0 auto !important;
-  width:auto !important;
-  min-width:0 !important;
-  max-width:none !important;
-  height:auto !important;
-  margin:0 !important;
-  overflow:visible !important;
+/* Logos SumUp / Abby gardés, mais même volume */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-service-entry,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry{
+  height:46px !important;
+  min-height:46px !important;
+  padding-top:0 !important;
+  padding-bottom:0 !important;
 }
 
-body.theme-8bit header.topbar nav.topnav.topnav-grouped .wopr-lock-form{
-  position:relative !important;
-  inset:auto !important;
-  transform:none !important;
-  display:block !important;
-  flex:0 0 64px !important;
-  width:64px !important;
-  min-width:64px !important;
-  max-width:64px !important;
-  margin:0 0 0 auto !important;
-}
-
-@media (max-width:1600px){
-  body.theme-8bit header.topbar nav.topnav.topnav-grouped .topbar-search{
-    flex:1 1 170px !important;
-    min-width:135px !important;
-    max-width:210px !important;
-  }
+/* Rien de moderne dans ce menu */
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown *,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown *::before,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-dropdown *::after{
+  border-radius:0 !important;
+  transition:none !important;
 }

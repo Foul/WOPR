@@ -1,6 +1,119 @@
 {% extends "base.html" %}
-{% block title %}Nouvelle prise en charge{% endblock %}
+{% block title %}Nouvelle prise en charge
+
+
+{% endblock %}
 {% block body %}
+<style id="repairForm8BitFinal">
+.repair-create-actions{
+  display:flex !important;
+  align-items:center !important;
+  gap:14px !important;
+  flex-wrap:wrap !important;
+}
+
+/* STYLE FINAL : spécificité volontairement supérieure aux règles globales du thème */
+html body.theme-8bit main.page form.sheet-form
+div.footer-actions.repair-create-actions
+button.repair-create-btn.primary{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  min-height:48px !important;
+  padding:9px 18px !important;
+  border:3px solid #07131d !important;
+  border-radius:0 !important;
+
+  background:#27b85d !important;
+  background-image:
+    linear-gradient(
+      to bottom,
+      #73eea1 0 18%,
+      #2cbc63 18% 70%,
+      #168747 70% 100%
+    ) !important;
+
+  color:#071d10 !important;
+  box-shadow:
+    inset 3px 3px 0 rgba(255,255,255,.45),
+    inset -3px -3px 0 rgba(0,0,0,.22),
+    0 4px 0 #0c5b2b,
+    4px 7px 0 #07131d !important;
+
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:13px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  text-transform:uppercase !important;
+  text-shadow:1px 1px 0 rgba(255,255,255,.20) !important;
+
+  transform:none !important;
+  transition:none !important;
+  filter:none !important;
+}
+
+html body.theme-8bit main.page form.sheet-form
+div.footer-actions.repair-create-actions
+button.repair-cancel-btn{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  min-height:48px !important;
+  padding:9px 18px !important;
+  border:3px solid #07131d !important;
+  border-radius:0 !important;
+
+  background:#e33131 !important;
+  background-image:
+    linear-gradient(
+      to bottom,
+      #ff7878 0 18%,
+      #e33131 18% 70%,
+      #a21414 70% 100%
+    ) !important;
+
+  color:#ffffff !important;
+  box-shadow:
+    inset 3px 3px 0 rgba(255,255,255,.40),
+    inset -3px -3px 0 rgba(0,0,0,.25),
+    0 4px 0 #721010,
+    4px 7px 0 #07131d !important;
+
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:13px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  text-transform:uppercase !important;
+  text-shadow:1px 1px 0 rgba(0,0,0,.50) !important;
+
+  transform:none !important;
+  transition:none !important;
+  filter:none !important;
+}
+
+html body.theme-8bit main.page form.sheet-form
+div.footer-actions.repair-create-actions
+button.repair-create-btn.primary:hover,
+html body.theme-8bit main.page form.sheet-form
+div.footer-actions.repair-create-actions
+button.repair-cancel-btn:hover{
+  transform:translate(-1px,-2px) !important;
+  filter:brightness(1.08) !important;
+}
+
+html body.theme-8bit main.page form.sheet-form
+div.footer-actions.repair-create-actions
+button.repair-create-btn.primary:active,
+html body.theme-8bit main.page form.sheet-form
+div.footer-actions.repair-create-actions
+button.repair-cancel-btn:active{
+  transform:translate(3px,4px) !important;
+  box-shadow:
+    inset 3px 3px 0 rgba(0,0,0,.25),
+    inset -2px -2px 0 rgba(255,255,255,.15),
+    0 1px 0 #07131d !important;
+  filter:brightness(.92) !important;
+}
+</style>
+
 <div class="sheet-banner narrow">
   <div class="banner-top">{{ config.website }} &nbsp; - &nbsp; {{ config.email }} &nbsp; - &nbsp; {{ config.phone }}</div>
   <div class="banner-title">Prise en charge / Suivi de réparation</div>
@@ -64,8 +177,11 @@
     <label>Remarques<textarea name="remarks" rows="3"></textarea></label>
   </div>
 
-  <div class="footer-actions">
-    <button class="primary" type="submit">Créer le dossier</button>
+  <div class="footer-actions repair-create-actions">
+    <button class="primary repair-create-btn" type="submit">Créer le dossier</button>
+    {% if client_mode %}
+    <button class="repair-cancel-btn" type="button" onclick="history.back()">✖ Annuler</button>
+    {% endif %}
   </div>
 </form>
 

@@ -3,7 +3,52 @@
 {% block body %}
 <style>
 .activity-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
-.activity-filters{display:flex;gap:6px;flex-wrap:wrap}
+.activity-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.activity-filter{
+  --af-bg:#263238;
+  --af-shadow:#111;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:92px;
+  min-height:38px;
+  padding:8px 12px;
+  border:3px solid #111 !important;
+  border-radius:0 !important;
+  background:var(--af-bg) !important;
+  color:#fff !important;
+  font-weight:800;
+  font-size:.83rem;
+  line-height:1;
+  text-transform:uppercase;
+  letter-spacing:.045em;
+  text-decoration:none !important;
+  box-shadow:4px 4px 0 var(--af-shadow);
+  transform:translate(0,0);
+  transition:none !important;
+  text-shadow:1px 1px 0 rgba(0,0,0,.45);
+}
+.activity-filter:hover{
+  filter:brightness(1.10);
+  transform:translate(1px,1px);
+  box-shadow:3px 3px 0 var(--af-shadow);
+}
+.activity-filter:active,
+.activity-filter.active{
+  transform:translate(4px,4px);
+  box-shadow:0 0 0 var(--af-shadow);
+  filter:brightness(.92);
+}
+.activity-filter:nth-child(1){--af-bg:#2e7d32;--af-shadow:#17451a}
+.activity-filter:nth-child(2){--af-bg:#1565c0;--af-shadow:#0b3565}
+.activity-filter:nth-child(3){--af-bg:#9a6a00;--af-shadow:#533900}
+.activity-filter:nth-child(4){--af-bg:#6a1b9a;--af-shadow:#350d4f}
+.activity-filter:nth-child(5){--af-bg:#00838f;--af-shadow:#00454b}
+.activity-filter:nth-child(6){--af-bg:#c45100;--af-shadow:#692b00}
+.activity-filter:nth-child(7){--af-bg:#455a64;--af-shadow:#253137}
+@media (max-width:700px){
+  .activity-filter{min-width:auto;flex:1 1 120px}
+}
 .activity-list{display:grid;gap:8px;max-width:1100px}
 .activity-item{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #d8e0e8;background:#fff;border-radius:8px;padding:10px 12px;text-decoration:none;color:inherit}
 .activity-item:hover{filter:brightness(.985)}
@@ -20,7 +65,7 @@
   </div>
   <div class="activity-filters">
     {% for key, label in categories %}
-      <a class="button {% if selected_category == key %}primary{% endif %}"
+      <a class="activity-filter {% if selected_category == key %}active{% endif %}"
          href="{{ url_for('activity_page', category=key or None, limit=limit) }}">{{ label }}</a>
     {% endfor %}
   </div>
