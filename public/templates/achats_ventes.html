@@ -1,6 +1,164 @@
 {% extends "base.html" %}
 {% block title %}Achats / Ventes {{ year }} - WOPR{% endblock %}
 {% block body %}
+<style>
+  .wopr-period-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 14px}
+  .wopr-period-filter form{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0}
+  .wopr-period-filter select{min-height:34px;padding:5px 8px}
+  .wopr-period-label{font-weight:700}
+
+  .ledger-table .ledger-document,
+  .ledger-table th:nth-child(8),
+  .ledger-table td:nth-child(8){
+    width:150px !important;
+    min-width:150px !important;
+  }
+  .ledger-table th:nth-child(8),
+  .ledger-table td:nth-child(8){
+    text-align:center;
+  }
+
+  .ledger-document-actions{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:5px;
+    width:100%;
+  }
+  .ledger-document-actions .mini-btn,
+  .ledger-document-actions form,
+  .ledger-document-actions button{
+    box-sizing:border-box;
+    min-width:0;
+    margin:0;
+  }
+  .ledger-document-actions .mini-btn,
+  .ledger-document-actions button{
+    min-width:92px;
+    text-align:center;
+  }
+  .ledger-document-actions .mini-btn{
+    padding-left:5px;
+    padding-right:5px;
+    text-align:center;
+    white-space:nowrap;
+  }
+
+  /* Le type Achat/Vente doit rester clairement modifiable en mode édition,
+     indépendamment du thème global et de la couleur de la ligne. */
+  .ledger-row.editing td:first-child .ledger-display{
+    display:none !important;
+  }
+  .ledger-row.editing td:first-child .ledger-edit{
+    display:block !important;
+    visibility:visible !important;
+    opacity:1 !important;
+  }
+  .ledger-row.editing td:first-child{
+    vertical-align:middle !important;
+  }
+  .ledger-row.editing td:first-child .ledger-edit{
+    margin:0 !important;
+    padding:0 !important;
+  }
+  .ledger-row.editing td:first-child .ledger-edit select{
+    display:block !important;
+    width:100% !important;
+    min-width:88px !important;
+    min-height:34px !important;
+    margin:0 !important;
+    padding:4px 6px !important;
+    box-sizing:border-box !important;
+    color:#111 !important;
+    background:#fff !important;
+    -webkit-text-fill-color:#111 !important;
+    opacity:1 !important;
+    visibility:visible !important;
+    cursor:pointer !important;
+  }
+  .ledger-row.editing td:first-child .ledger-edit select option{
+    color:#111 !important;
+    background:#fff !important;
+  }
+
+  /* Etat visuel fiable de la colonne Achat/Vente.
+     Le thème/zébrage global pouvait remettre la cellule en blanc tout en gardant
+     le texte Vente en blanc : la valeur était bien sauvée mais devenait invisible. */
+  .ledger-row-vente td:first-child{
+    background:#3795ed !important;
+    color:#fff !important;
+  }
+  .ledger-row-vente td:first-child .ledger-display,
+  .ledger-row-vente td:first-child .ledger-display strong,
+  .ledger-row-vente td:first-child .operation-vente{
+    color:#fff !important;
+    -webkit-text-fill-color:#fff !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+
+  .ledger-row-achat td:first-child{
+    background:#fff !important;
+    color:#111 !important;
+  }
+  .ledger-row-achat td:first-child .ledger-display,
+  .ledger-row-achat td:first-child .ledger-display strong,
+  .ledger-row-achat td:first-child .operation-achat{
+    color:#111 !important;
+    -webkit-text-fill-color:#111 !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+
+  /* En édition, le sélecteur passe toujours au-dessus du style Achat/Vente. */
+  .ledger-row.editing td:first-child{
+    background:#fff !important;
+    color:#111 !important;
+  }
+
+  /* Bouton Ajouter : rendu 8-bit explicite et toujours visible */
+  .ledger-form-actions{
+    display:flex !important;
+    justify-content:flex-start !important;
+    align-items:center !important;
+    margin-top:8px !important;
+  }
+  .ledger-add-submit{
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    min-width:150px !important;
+    min-height:42px !important;
+    padding:8px 14px !important;
+    box-sizing:border-box !important;
+
+    border:3px solid #111 !important;
+    border-radius:0 !important;
+    box-shadow:3px 3px 0 #111 !important;
+
+    font-weight:800 !important;
+    font-family:monospace !important;
+    letter-spacing:.5px !important;
+    text-transform:uppercase !important;
+
+    color:#111 !important;
+    background:#ffd86a !important;
+    -webkit-text-fill-color:#111 !important;
+
+    opacity:1 !important;
+    visibility:visible !important;
+    cursor:pointer !important;
+  }
+  .ledger-add-submit:hover{
+    transform:translate(-1px,-1px) !important;
+    box-shadow:4px 4px 0 #111 !important;
+  }
+  .ledger-add-submit:active{
+    transform:translate(2px,2px) !important;
+    box-shadow:1px 1px 0 #111 !important;
+  }
+</style>
 <div class="ledger-audit-shortcut">
   <a class="button" href="{{ url_for('supplier_documents_audit') }}">🔍 Vérifier les justificatifs liés</a>
 </div>
@@ -13,25 +171,22 @@
   </div>
 
   <div class="ledger-year-switch">
-    {% if year == 2026 %}
-      <span class="ledger-year-current">2026</span>
+    {% if year == current_year %}
+      <span class="ledger-year-current">{{ current_year }}</span>
+      {% if archive_years %}
       <details class="ledger-archive">
         <summary>Archives</summary>
-        <a href="{{ url_for('achats_ventes_page', year=2025, month=selected_month or None) }}">2025</a>
+        {% for archive_year in archive_years %}
+          <a href="{{ url_for('achats_ventes_page', year=archive_year, month=0) }}">{{ archive_year }}</a>
+        {% endfor %}
       </details>
+      {% endif %}
     {% else %}
-      <a class="button primary" href="{{ url_for('achats_ventes_page', year=2026, month=selected_month or None) }}">← Retour 2026</a>
-      <span class="ledger-year-archive">Archive 2025</span>
+      <a class="button primary" href="{{ url_for('achats_ventes_page', year=current_year) }}">← Retour {{ current_year }}</a>
+      <span class="ledger-year-archive">Archive {{ year }}</span>
     {% endif %}
   </div>
 </div>
-
-<style>
-.wopr-period-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 14px}
-.wopr-period-filter form{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0}
-.wopr-period-filter select{min-height:34px;padding:5px 8px}
-.wopr-period-label{font-weight:700}
-</style>
 
 <div class="wopr-period-filter">
   <form method="get" action="{{ url_for('achats_ventes_page') }}">
@@ -39,7 +194,7 @@
     <span class="wopr-period-label">Période :</span>
     <select name="month" onchange="this.form.submit()">
       <option value="0" {% if not selected_month %}selected{% endif %}>Toute l'année</option>
-      {% for m in range(1,13) %}
+      {% for m in range(1, 13) %}
         <option value="{{ m }}" {% if selected_month == m %}selected{% endif %}>{{ month_names[m] }}</option>
       {% endfor %}
     </select>
@@ -79,7 +234,7 @@
     <input type="search" name="q" value="{{ search_q or '' }}" placeholder="Fournisseur, facture, article, montant…" aria-label="Rechercher dans Achats / Ventes">
     <button class="button" type="submit">🔎 Rechercher</button>
     {% if search_q %}
-      <a class="button" href="{{ url_for('achats_ventes_page', year=year, month=selected_month or None) }}">✕ Effacer</a>
+      <a class="button" href="{{ url_for('achats_ventes_page', year=year) }}">✕ Effacer</a>
     {% endif %}
   </form>
   {% if search_q %}
@@ -141,7 +296,7 @@
     </label>
 
     <div class="wide ledger-form-actions">
-      <button class="primary" type="submit">AJOUTER</button>
+      <button class="mini-btn wopr-action-save ledger-add-submit" type="submit">AJOUTER</button>
     </div>
   </form>
 </details>
@@ -188,13 +343,18 @@
         </thead>
         <tbody>
         {% for e in month['entries'] %}
-          <tr class="ledger-row ledger-row-{{ e['operation']|lower }}" data-ledger-row="{{ e['id'] }}">
+          {% set operation_key = (e['operation'] or '')|trim|lower %}
+          {% set operation_label = 'Vente' if operation_key == 'vente' else 'Achat' if operation_key == 'achat' else (e['operation'] or '') %}
+          <tr class="ledger-row ledger-row-{{ operation_key }}" data-ledger-row="{{ e['id'] }}">
             <td>
-              <div class="ledger-display"><strong class="operation-{{ e['operation']|lower }}">{{ e['operation'] }}</strong></div>
+              <div class="ledger-display"><strong class="operation-{{ operation_key }}">{{ operation_label }}</strong></div>
               <div class="ledger-edit">
-                <select name="operation" form="ledger-edit-{{ e['id'] }}">
-                  <option value="Achat" {% if e['operation']=='Achat' %}selected{% endif %}>Achat</option>
-                  <option value="Vente" {% if e['operation']=='Vente' %}selected{% endif %}>Vente</option>
+                <select data-ledger-operation-select="{{ e['id'] }}"
+                        aria-label="Type d'opération"
+                        title="Choisir Achat ou Vente"
+                        onchange="document.querySelector('[data-ledger-operation-hidden=&quot;{{ e['id'] }}&quot;]').value=this.value;">
+                  <option value="Achat" {% if operation_key=='achat' %}selected{% endif %}>Achat</option>
+                  <option value="Vente" {% if operation_key=='vente' %}selected{% endif %}>Vente</option>
                 </select>
               </div>
             </td>
@@ -236,9 +396,27 @@
             </td>
 
             <td class="ledger-document-cell">
-              {% if e['operation']=='Achat' %}
+              {% if operation_key=='achat' %}
                 {% if e['document_path'] %}
-                  <a class="mini-btn ledger-doc-link wopr-action-open" href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture fournisseur">📄 Ouvrir</a>
+                  <div class="ledger-document-actions">
+                    <a class="mini-btn ledger-doc-link wopr-action-open"
+                       href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}"
+                       target="_blank"
+                       title="Ouvrir la facture fournisseur"
+                       style="white-space:nowrap;">📄 Ouvrir</a>
+
+                    <form method="post"
+                          action="{{ url_for('achats_ventes_document_unlink', entry_id=e['id']) }}"
+                          class="ledger-unlink-form"
+                          style="margin:0;"
+                          onsubmit="return confirm('Délier ce justificatif de cet achat ? Le fichier restera conservé sur le disque.');">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit"
+                              class="mini-btn wopr-action-delete"
+                              title="Délier le justificatif sans supprimer le fichier"
+                              style="white-space:nowrap;">🔗 Délier</button>
+                    </form>
+                  </div>
                 {% else %}
                   <form method="post" enctype="multipart/form-data" action="{{ url_for('achats_ventes_document_add', entry_id=e['id']) }}" class="ledger-attach-form">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
@@ -262,8 +440,14 @@
             </td>
 
             <td class="ledger-row-actions">
-              <form id="ledger-edit-{{ e['id'] }}" method="post" action="{{ url_for('achats_ventes_edit', entry_id=e['id']) }}">
+              <form id="ledger-edit-{{ e['id'] }}"
+                    method="post"
+                    action="{{ url_for('achats_ventes_edit', entry_id=e['id'], year=year, month=month['number']) }}">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden"
+                       name="operation"
+                       value="{{ e['operation'] }}"
+                       data-ledger-operation-hidden="{{ e['id'] }}">
               </form>
 
               <div class="ledger-normal-actions">
@@ -273,7 +457,7 @@
                   <button type="submit" class="mini-btn danger-btn wopr-action-delete">Supprimer</button>
                 </form>
 
-                {% if e['operation']=='Achat' %}
+                {% if operation_key=='achat' %}
                   <button type="button"
                           class="mini-btn ledger-folder-btn wopr-action-folder"
                           data-wopr-folder-url="{{ url_for('achats_ventes_document_folder', entry_id=e['id']) }}">
@@ -289,7 +473,12 @@
               </div>
 
               <div class="ledger-edit-actions">
-                <button type="submit" form="ledger-edit-{{ e['id'] }}" class="mini-btn primary wopr-action-save">Enregistrer</button>
+                <button type="submit"
+                        form="ledger-edit-{{ e['id'] }}"
+                        class="mini-btn primary wopr-action-save"
+                        onclick="const s=document.querySelector('[data-ledger-operation-select=&quot;{{ e['id'] }}&quot;]');const h=document.querySelector('[data-ledger-operation-hidden=&quot;{{ e['id'] }}&quot;]');if(s&amp;&amp;h){h.value=s.value;}">
+                  Enregistrer
+                </button>
                 <button type="button" class="mini-btn wopr-action-neutral" data-ledger-cancel="{{ e['id'] }}">Annuler</button>
               </div>
             </td>
@@ -305,6 +494,105 @@
   </section>
 {% endfor %}
 </div>
+
+
+<style id="ledger-final-8bit-fix">
+  /* Les ventes doivent rester bleues même face au zébrage global 8-bit. */
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-vente > td:first-child{
+    background:#3795ed !important;
+    color:#fff !important;
+  }
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-vente > td:first-child .ledger-display,
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-vente > td:first-child .ledger-display strong,
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-vente > td:first-child .operation-vente{
+    color:#fff !important;
+    -webkit-text-fill-color:#fff !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-achat > td:first-child{
+    background:#fff !important;
+    color:#111 !important;
+  }
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-achat > td:first-child .ledger-display,
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-achat > td:first-child .ledger-display strong,
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row-achat > td:first-child .operation-achat{
+    color:#111 !important;
+    -webkit-text-fill-color:#111 !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+
+  /* En édition, le select Achat/Vente doit toujours être parfaitement visible. */
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row.editing > td:first-child{
+    background:#fff !important;
+    color:#111 !important;
+  }
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row.editing > td:first-child .ledger-display{
+    display:none !important;
+  }
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row.editing > td:first-child .ledger-edit{
+    display:block !important;
+    visibility:visible !important;
+    opacity:1 !important;
+    margin:0 !important;
+    padding:0 !important;
+  }
+  body.theme-8bit .page table.ledger-table tbody tr.ledger-row.editing > td:first-child .ledger-edit select{
+    display:block !important;
+    width:100% !important;
+    min-width:92px !important;
+    min-height:32px !important;
+    margin:0 !important;
+    padding:4px 6px !important;
+    border:2px solid var(--px-dark, #07131d) !important;
+    border-radius:0 !important;
+    background:#fff !important;
+    color:#111 !important;
+    -webkit-text-fill-color:#111 !important;
+    font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+    font-weight:800 !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+
+  /* AJOUTER : même langage visuel que les autres boutons 8-bit WOPR. */
+  body.theme-8bit .page details.ledger-add-box form.ledger-add-form .ledger-form-actions button.ledger-add-submit{
+    appearance:none !important;
+    -webkit-appearance:none !important;
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    min-width:120px !important;
+    min-height:32px !important;
+    padding:5px 10px !important;
+    border:2px solid var(--px-dark, #07131d) !important;
+    border-radius:0 !important;
+    background:var(--px-green-bg, #ddf5e6) !important;
+    background-image:none !important;
+    color:var(--px-green-fg, #14502e) !important;
+    -webkit-text-fill-color:var(--px-green-fg, #14502e) !important;
+    box-shadow:
+      inset 2px 2px 0 rgba(255,255,255,.70),
+      inset -1px -1px 0 rgba(0,0,0,.12),
+      2px 2px 0 var(--px-dark, #07131d) !important;
+    font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+    font-size:10px !important;
+    font-weight:800 !important;
+    line-height:1.05 !important;
+    text-transform:uppercase !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+  body.theme-8bit .page details.ledger-add-box form.ledger-add-form .ledger-form-actions button.ledger-add-submit:hover{
+    transform:translate(1px,1px) !important;
+    box-shadow:
+      inset 2px 2px 0 rgba(255,255,255,.60),
+      inset -1px -1px 0 rgba(0,0,0,.10),
+      1px 1px 0 var(--px-dark, #07131d) !important;
+  }
+</style>
 
 <script>
 (() => {
@@ -322,6 +610,19 @@
     btn.addEventListener('click', () => setEdit(btn.dataset.ledgerEdit, true));
   });
 
+  document.querySelectorAll('[data-ledger-operation-select]').forEach(select => {
+    const id = select.dataset.ledgerOperationSelect;
+    const hidden = document.querySelector(`[data-ledger-operation-hidden="${id}"]`);
+    const syncOperation = () => {
+      if (hidden) hidden.value = select.value;
+    };
+    select.addEventListener('change', syncOperation);
+
+    const form = document.getElementById(`ledger-edit-${id}`);
+    if (form) {
+      form.addEventListener('submit', syncOperation);
+    }
+  });
 
   document.querySelectorAll('[data-ledger-cancel]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -335,6 +636,9 @@
           }
         });
       }
+      const opSelect = row ? row.querySelector('[data-ledger-operation-select]') : null;
+      const opHidden = document.querySelector(`[data-ledger-operation-hidden="${btn.dataset.ledgerCancel}"]`);
+      if (opSelect && opHidden) opHidden.value = opSelect.value;
       setEdit(btn.dataset.ledgerCancel, false);
     });
   });

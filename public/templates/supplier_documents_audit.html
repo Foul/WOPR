@@ -1,13 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Contrôle justificatifs - WOPR{% endblock %}
 {% block body %}
+<style>
+  .audit-diag-table{width:100%;border-collapse:collapse}
+  .audit-diag-table th,.audit-diag-table td{vertical-align:top;padding:7px}
+  .audit-diag-table code{white-space:normal;overflow-wrap:anywhere}
+  .audit-reason{min-width:260px}
+  .audit-rows{min-width:310px}
+  .audit-files{min-width:260px}
+  .audit-small{font-size:.88em;opacity:.9}
+  .audit-good{font-weight:700}
+  .audit-warn{font-weight:700}
+  .audit-detail{margin:4px 0}
+</style>
+
 <div class="sheet-banner narrow">
   <div class="banner-top">WOPR</div>
   <div class="banner-title">Contrôle des justificatifs</div>
 </div>
 
 <div class="audit-readonly-notice">
-  🔒 Contrôle en lecture seule : cette page ne copie, ne renomme, ne déplace et ne supprime aucun fichier.
+  🔒 Diagnostic en lecture seule : aucune ligne n'est rattachée, modifiée ou supprimée depuis cette page.
 </div>
 
 <div class="audit-stats">
@@ -16,75 +29,138 @@
   <div class="{% if broken_rows %}audit-bad{% endif %}">
     <strong>{{ broken_rows|length }}</strong><span>liens cassés</span>
   </div>
-  <div class="{% if duplicate_file_groups %}audit-bad{% endif %}">
-    <strong>{{ duplicate_file_groups|length }}</strong><span>PDF liés plusieurs fois</span>
+<div class="{% if orphan_files %}audit-bad{% endif %}">
+    <strong>{{ orphan_files|length }}</strong><span>vrais non rattachés</span>
   </div>
-  <div><strong>{{ orphan_files|length }}</strong><span>fichiers non rattachés</span></div>
 </div>
 
 {% if broken_rows %}
 <h2>⚠️ Liens cassés</h2>
 <div class="table-wrap">
-  <table>
-    <thead><tr><th>Date</th><th>Fournisseur</th><th>Facture</th><th>Fichier attendu</th></tr></thead>
-    <tbody>
-      {% for e in broken_rows %}
-      <tr>
-        <td>{{ e.entry_date }}</td>
-        <td>{{ e.party or '' }}</td>
-        <td>{{ e.invoice_no or '—' }}</td>
-        <td><code>{{ e.document_original_name or e.document_path }}</code></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<table>
+  <thead><tr><th>ID</th><th>Date</th><th>Fournisseur</th><th>Facture</th><th>Fichier attendu</th></tr></thead>
+  <tbody>
+  {% for e in broken_rows %}
+  <tr>
+    <td>{{ e.id }}</td>
+    <td>{{ e.entry_date }}</td>
+    <td>{{ e.party or '' }}</td>
+    <td><code>{{ e.invoice_no or '—' }}</code></td>
+    <td><code>{{ e.document_original_name or e.document_path }}</code></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
 </div>
 {% else %}
-<div class="audit-ok">✅ Tous les justificatifs liés pointent vers un fichier existant.</div>
+<div class="audit-ok">✅ Tous les justificatifs déjà liés pointent vers un fichier existant.</div>
 {% endif %}
 
 {% if duplicate_file_groups %}
-<h2>🔎 Même fichier lié à plusieurs achats</h2>
-<p class="muted">
-  Ce n’est pas forcément une erreur : une même facture peut contenir plusieurs lignes d’achat.
-  Cette liste sert uniquement à repérer les cas à vérifier.
+<h2>📦 Factures couvrant plusieurs lignes d’achat</h2>
+<p>
+  ✅ Cas normal : une même facture fournisseur peut contenir plusieurs articles et donc être liée
+  à plusieurs lignes d’achat. Le partage du même justificatif n’est pas considéré comme un doublon.
 </p>
-<div class="table-wrap">
-  <table>
-    <thead><tr><th>Fichier</th><th>Lignes liées</th><th>Détails</th></tr></thead>
-    <tbody>
-      {% for group in duplicate_file_groups %}
-      <tr>
-        <td><code>{{ group.path }}</code></td>
-        <td>{{ group.count }}</td>
-        <td>
-          {% for e in group.rows %}
-            <div>{{ e.entry_date }} · {{ e.party or '—' }} · {{ e.invoice_no or '—' }} · {{ '%.2f'|format(e.amount_ttc or 0) }} €</div>
-          {% endfor %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% for group in duplicate_file_groups %}
+<div class="audit-detail">
+  <code>{{ group.path }}</code> — {{ group.count }} ligne(s) d’achat
+  <ul>
+  {% for e in group.rows %}
+    <li>#{{ e.id }} — {{ e.entry_date }} — {{ e.party or '—' }} — facture <code>{{ e.invoice_no or '—' }}</code></li>
+  {% endfor %}
+  </ul>
 </div>
+{% endfor %}
 {% endif %}
 
-{% if orphan_files %}
-<h2>📄 Fichiers fournisseurs non rattachés</h2>
-<p class="muted">
-  Ces fichiers existent sur disque mais ne sont actuellement liés à aucune ligne d’achat.
-  Ils peuvent être légitimes (archive, avoir, document annexe) : aucune action automatique n’est effectuée.
+
+<h2>📄 Fichiers fournisseurs non rattachés — diagnostic</h2>
+<p>
+  Pour chaque fichier, WOPR affiche maintenant la référence détectée, les lignes de base correspondantes,
+  leur <code>document_path</code>, le résultat du résolveur et la raison précise du non-rattachement.
 </p>
+
+{% if orphan_diagnostics %}
 <div class="table-wrap">
-  <table>
-    <thead><tr><th>Fichier</th></tr></thead>
-    <tbody>
-      {% for path in orphan_files %}
-      <tr><td><code>{{ path }}</code></td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<table class="audit-diag-table">
+  <thead>
+    <tr>
+      <th>Fichier</th>
+      <th>Référence détectée</th>
+      <th class="audit-rows">Lignes trouvées</th>
+      <th class="audit-files">Résolveur / fichiers concurrents</th>
+      <th class="audit-reason">Diagnostic</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for d in orphan_diagnostics %}
+    <tr>
+      <td>
+        <code>{{ d.path }}</code>
+        <div class="audit-small">stem : <code>{{ d.stem_key }}</code></div>
+      </td>
+      <td>
+        {% if d.matched_invoice_keys %}
+          {% for k in d.matched_invoice_keys %}<code>{{ k }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}
+        {% else %}
+          —
+        {% endif %}
+        {% if d.filename_keys %}
+          <div class="audit-small">clés nom : {{ d.filename_keys|join(', ') }}</div>
+        {% endif %}
+      </td>
+      <td>
+        {% if d.candidate_rows %}
+          {% for e in d.candidate_rows %}
+            <div class="audit-detail">
+              #{{ e.id }} · {{ e.operation }} · {{ e.entry_date }} · {{ e.party or '—' }}<br>
+              facture : <code>{{ e.invoice_no or '—' }}</code><br>
+              document_path :
+              {% if e.document_path %}
+                <code>{{ e.document_path }}</code>
+              {% else %}
+                <span class="audit-warn">VIDE</span>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+      <td>
+        {% if d.resolver_results %}
+          {% for r in d.resolver_results %}
+            <div class="audit-detail">
+              ligne #{{ r.row_id }} →
+              {% if r.error %}
+                <code>{{ r.error }}</code>
+              {% elif r.result %}
+                <code>{{ r.result }}</code>
+              {% else %}
+                <span class="audit-warn">aucun résultat</span>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="audit-small">Résolveur non applicable.</div>
+        {% endif %}
+
+        {% if d.matching_files %}
+          <div class="audit-small">Fichier(s) portant cette référence :</div>
+          {% for f in d.matching_files %}
+            <code>{{ f }}</code>{% if not loop.last %}<br>{% endif %}
+          {% endfor %}
+        {% endif %}
+      </td>
+      <td>{{ d.reason }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 </div>
+{% else %}
+<div class="audit-ok">✅ Aucun fichier fournisseur non rattaché.</div>
 {% endif %}
 
 <p><a class="button" href="{{ url_for('achats_ventes_page') }}">← Achats / Ventes</a></p>

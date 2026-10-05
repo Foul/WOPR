@@ -1,5 +1,15 @@
 # Changelog de la documentation
 
+## 2.6.2 - 5 octobre 2026 - fiabilisation Achats/Ventes et justificatifs fournisseurs
+
+- correction du retour sur la période réellement affichée après modification dans Achats / Ventes ;
+- fiabilisation de la modification du type Achat / Vente et contrôle de la valeur enregistrée ;
+- harmonisation du bouton Ajouter et des actions Achats / Ventes avec le thème 8-BIT ;
+- audit fournisseurs clarifié : une même facture peut couvrir plusieurs lignes d’achat sans être considérée comme un doublon ;
+- suppression de l’affichage des copies / justificatifs alternatifs lorsqu’aucune action n’est nécessaire ;
+- contrôle des justificatifs fournisseurs conservé en lecture seule ;
+- documentation et version publique alignées sur WOPR 2.6.2.
+
 ## 2.6.1 - 30 septembre 2026 - maintenance recherche, suivi client et launcher
 
 - documentation alignée sur WOPR 2.6.1 ;
