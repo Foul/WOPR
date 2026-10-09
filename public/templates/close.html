@@ -13,6 +13,30 @@
 <form method="post" class="invoice-entry" id="invoice-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="return_to" value="{{ request.args.get('return','') }}">
+  {% if r["simple_invoice"] and r["invoice_no"] %}
+  <div class="simple-invoice-client-editor">
+    <div class="section-title">Client de la facture</div>
+    <input type="hidden" name="selected_client_id" id="selected-client-id" value="{{ r['client_id'] }}">
+
+    <div class="grid one">
+      <label>Rechercher / changer le client
+        <input id="invoice-client-search"
+               type="search"
+               autocomplete="off"
+               value="{{ ((r['client_first_name'] or '') ~ ' ' ~ (r['client_last_name'] or r['client_name'] or ''))|trim }}{% if r['client_company'] and r['client_company'] != r['client_name'] %} — {{ r['client_company'] }}{% endif %}"
+               placeholder="Tape un nom, prénom ou une entreprise…">
+        <small id="invoice-client-help">Tape quelques lettres puis choisis le client. Seule cette facture sera rattachée à la fiche sélectionnée.</small>
+      </label>
+
+      <select id="invoice-client-results" size="7" hidden aria-label="Résultats clients">
+        {% for c in invoice_clients %}
+          <option value="{{ c['id'] }}" data-label="{{ c['display_name']|e }}">{{ c['display_name'] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  {% endif %}
+
   {% if not r["invoice_no"] or r["status"] == "Laissé pour pièces" %}
   <div class="no-invoice-parts-box">
     <label class="checkboxline no-invoice-parts-check">
@@ -233,6 +257,86 @@
 </template>
 
 <script>
+const clientSearch=document.getElementById('invoice-client-search');
+const clientResults=document.getElementById('invoice-client-results');
+const selectedClientId=document.getElementById('selected-client-id');
+const clientHelp=document.getElementById('invoice-client-help');
+
+if(clientSearch&&clientResults&&selectedClientId){
+  const allInvoiceClients=Array.from(clientResults.options).map(option=>({
+    id:option.value,
+    label:option.dataset.label||option.textContent.trim()
+  }));
+
+  const normalizeClientSearch=value=>String(value||'')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .toLocaleLowerCase('fr-FR')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  function renderInvoiceClients(){
+    const q=normalizeClientSearch(clientSearch.value);
+    clientResults.innerHTML='';
+
+    if(!q){
+      clientResults.hidden=true;
+      if(clientHelp)clientHelp.textContent='Tape quelques lettres puis choisis le client. Seule cette facture sera rattachée à la fiche sélectionnée.';
+      return;
+    }
+
+    const matches=allInvoiceClients.filter(client=>normalizeClientSearch(client.label).includes(q));
+    matches.slice(0,12).forEach(client=>{
+      const option=document.createElement('option');
+      option.value=client.id;
+      option.textContent=client.label;
+      option.dataset.label=client.label;
+      clientResults.appendChild(option);
+    });
+
+    clientResults.size=Math.min(Math.max(matches.length,2),7);
+    clientResults.hidden=matches.length===0;
+    if(clientHelp)clientHelp.textContent=matches.length ? `${matches.length} client(s) trouvé(s)` : 'Aucun client correspondant.';
+  }
+
+  function chooseInvoiceClient(){
+    const option=clientResults.options[clientResults.selectedIndex];
+    if(!option)return;
+    selectedClientId.value=option.value;
+    clientSearch.value=option.dataset.label||option.textContent.trim();
+    clientResults.hidden=true;
+    if(clientHelp)clientHelp.textContent='✓ Client sélectionné : '+clientSearch.value;
+  }
+
+  clientSearch.addEventListener('input',()=>{
+    selectedClientId.value='';
+    renderInvoiceClients();
+  });
+  clientSearch.addEventListener('focus',()=>{
+    if(clientSearch.value.trim())renderInvoiceClients();
+  });
+  clientResults.addEventListener('change',chooseInvoiceClient);
+  clientResults.addEventListener('dblclick',chooseInvoiceClient);
+  clientSearch.addEventListener('keydown',event=>{
+    if(event.key==='ArrowDown'&&!clientResults.hidden&&clientResults.options.length){
+      event.preventDefault();
+      clientResults.focus();
+      clientResults.selectedIndex=0;
+    }
+  });
+  clientResults.addEventListener('keydown',event=>{
+    if(event.key==='Enter'){
+      event.preventDefault();
+      chooseInvoiceClient();
+      clientSearch.focus();
+    }else if(event.key==='Escape'){
+      event.preventDefault();
+      clientResults.hidden=true;
+      clientSearch.focus();
+    }
+  });
+}
+
 const tbody = document.getElementById('invoice-lines');
 const tpl = document.getElementById('line-template');
 function autoGrowDescription(el){ if(!el)return; el.style.height='auto'; el.style.height=Math.max(48,el.scrollHeight)+'px'; }

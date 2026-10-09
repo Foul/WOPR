@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Supprimer facture simple {{ r['invoice_no'] }}{% endblock %}
+{% block body %}
+<h1>Supprimer la facture simple</h1>
+
+<div class="sheet-note">
+  <strong>Facture :</strong> {{ r['invoice_no'] }}<br>
+  <strong>Client :</strong> {{ r['client_name'] }}<br>
+  <strong>Montant :</strong> {{ '%.2f'|format((r['service_amount'] or 0) + (r['goods_amount'] or 0))|replace('.', ',') }} €
+</div>
+
+{% if payment_locked %}
+<div class="flash error">
+  Suppression bloquée : cette facture possède déjà un règlement ou une transaction SumUp.
+</div>
+<div class="footer-actions">
+  <a class="button wopr-action-open" href="{{ url_for('invoices_page') }}">Retour aux factures</a>
+</div>
+{% else %}
+<p>Une sauvegarde de la base sera créée avant suppression. La fiche client sera conservée.</p>
+<form method="post" class="sheet-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <label>Pour confirmer, tape <strong>SUPPRIMER</strong>
+    <input name="confirm_delete" autocomplete="off" required>
+  </label>
+  <div class="footer-actions">
+    <button type="submit" class="button danger-btn wopr-action-delete">🗑 Supprimer cette facture</button>
+    <a class="button wopr-action-open" href="{{ url_for('invoices_page') }}">Annuler</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

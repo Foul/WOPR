@@ -85,6 +85,25 @@
       <a class="button" href="https://messages.google.com/web/" target="_blank" rel="noopener">💬 Google Messages</a>
     </div>
 
+    {% if r and r['public_tracking_code'] %}
+    <div class="client-message-actions tracking-resend-actions">
+      <form method="post"
+            action="{{ url_for('repair_tracking_resend', rid=r['id']) }}"
+            onsubmit="return confirm('Renvoyer maintenant le code de suivi au client ?');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button wopr-action-send">🔁 Renvoyer le code de suivi</button>
+      </form>
+
+      {% if r['tracking_initial_notification_sent'] %}
+        <span class="client-notification-sent">✓ Envoi initial déjà marqué comme envoyé</span>
+      {% elif r['tracking_initial_notification_error'] %}
+        <span class="client-notification-error">Dernier échec : {{ r['tracking_initial_notification_error'] }}</span>
+      {% else %}
+        <span class="muted">Le code de suivi n'a pas encore été confirmé comme envoyé.</span>
+      {% endif %}
+    </div>
+    {% endif %}
+
     <div class="client-message-tip">
       <strong>KDE Connect :</strong>
       le bouton 📲 envoie maintenant réellement le SMS depuis ton téléphone Android via <code>kdeconnect-cli</code>.

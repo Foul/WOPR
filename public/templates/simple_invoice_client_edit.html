@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Corriger client - Facture {{ r['invoice_no'] }}{% endblock %}
+{% block body %}
+<h1>Corriger le client de la facture simple</h1>
+<p class="muted">Facture <strong>{{ r['invoice_no'] }}</strong>. Tu peux rattacher directement la facture à un client existant, ou corriger l’identité manuellement.</p>
+
+<form method="post" class="sheet-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="selected_client_id" id="selected-client-id" value="{{ r['client_id'] }}">
+
+  <div class="section-title">Choisir un client existant</div>
+  <div class="grid one">
+    <label>Rechercher un client
+      <input id="client-search"
+             type="search"
+             autocomplete="off"
+             value="{% for c in clients %}{% if c['id'] == r['client_id'] %}{{ c['display_name'] }}{% endif %}{% endfor %}"
+             placeholder="Tape un nom, prénom ou une entreprise…">
+      <small id="client-search-help">Commence à taper : la liste est classée alphabétiquement et se filtre automatiquement.</small>
+    </label>
+
+    <select id="client-results" size="8" hidden aria-label="Résultats clients">
+      {% for c in clients %}
+        <option value="{{ c['id'] }}" data-label="{{ c['display_name']|e }}">
+          {{ c['display_name'] }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="section-title">Ou corriger l’identité manuellement</div>
+  <div class="grid two">
+    <label>Prénom
+      <input name="first_name" value="{{ r['first_name'] or '' }}" autocomplete="given-name">
+    </label>
+    <label>Nom
+      <input name="last_name" value="{{ r['last_name'] or '' }}" autocomplete="family-name">
+    </label>
+    <label class="wide">Entreprise
+      <input name="company" value="{{ r['company'] or '' }}" autocomplete="organization">
+    </label>
+  </div>
+
+  <div class="footer-actions">
+    <button type="submit" class="button primary wopr-action-save">Enregistrer la correction</button>
+    <a class="button wopr-action-open" href="{{ url_for('invoices_page') }}">Annuler</a>
+  </div>
+</form>
+
+<script>
+(() => {
+  const search = document.getElementById('client-search');
+  const results = document.getElementById('client-results');
+  const hiddenId = document.getElementById('selected-client-id');
+  const help = document.getElementById('client-search-help');
+
+  const allClients = Array.from(results.options).map(option => ({
+    id: option.value,
+    label: option.dataset.label || option.textContent.trim()
+  }));
+
+  const normalize = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('fr-FR')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const render = query => {
+    const q = normalize(query);
+    results.innerHTML = '';
+
+    if (!q) {
+      results.hidden = true;
+      help.textContent = 'Commence à taper : la liste est classée alphabétiquement et se filtre automatiquement.';
+      return;
+    }
+
+    const matches = allClients.filter(client => normalize(client.label).includes(q));
+
+    matches.slice(0, 12).forEach(client => {
+      const option = document.createElement('option');
+      option.value = client.id;
+      option.textContent = client.label;
+      option.dataset.label = client.label;
+      results.appendChild(option);
+    });
+
+    results.size = Math.min(Math.max(matches.length, 2), 8);
+    results.hidden = matches.length === 0;
+
+    if (!matches.length) {
+      help.textContent = 'Aucun client correspondant.';
+    } else {
+      help.textContent = `${matches.length} client(s) trouvé(s) — clique sur le bon client.`;
+    }
+  };
+
+  const choose = () => {
+    const option = results.options[results.selectedIndex];
+    if (!option) return;
+    hiddenId.value = option.value;
+    search.value = option.dataset.label || option.textContent.trim();
+    results.hidden = true;
+    help.textContent = '✓ Client sélectionné : ' + search.value;
+  };
+
+  search.addEventListener('input', () => {
+    hiddenId.value = '';
+    render(search.value);
+  });
+
+  search.addEventListener('focus', () => {
+    if (search.value.trim()) render(search.value);
+  });
+
+  results.addEventListener('change', choose);
+  results.addEventListener('dblclick', choose);
+
+  search.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' && !results.hidden && results.options.length) {
+      event.preventDefault();
+      results.focus();
+      results.selectedIndex = 0;
+    }
+  });
+
+  results.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      choose();
+      search.focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      results.hidden = true;
+      search.focus();
+    }
+  });
+})();
+</script>
+{% endblock %}

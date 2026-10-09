@@ -42,7 +42,22 @@
       <th>Date</th><td>{{ r['received_date'] }}</td>
       <th>Entreprise</th><td>{% if r['client_company'] %}<strong>{{ r['client_company'] }}</strong>{% else %}—{% endif %}</td>
     </tr>
-    <tr><th>Téléphone</th><td>{{ r['client_phone'] }}</td><th>Courriel</th><td>{{ r['client_email'] }}</td></tr>
+    <tr>
+      <th>Téléphone</th>
+      <td>
+        {{ r['client_phone'] or '—' }}
+        {% if r['client_phone_secondary'] %}
+          <br><small>Tél. secondaire : {{ r['client_phone_secondary'] }}</small>
+        {% endif %}
+      </td>
+      <th>Courriel</th>
+      <td>
+        {{ r['client_email'] or '—' }}
+        {% if r['client_email_secondary'] %}
+          <br><small>Courriel secondaire : {{ r['client_email_secondary'] }}</small>
+        {% endif %}
+      </td>
+    </tr>
     <tr><th>Adresse</th><td colspan="3" class="postal-address">
       {% if r['client_company'] %}<strong>{{ r['client_company'] }}</strong><br>{% endif %}
       <strong>{{ r['client_first_name'] or '' }} {{ r['client_last_name'] or r['client_name'] or '' }}</strong><br>
@@ -190,7 +205,7 @@
   {% elif r['status'] in ['Terminé', 'Restitué'] and (r['tracking_completion_notification_sent'] or r['tracking_completion_sms_sent']) %}
     <span class="client-notification-sent">✓ Client prévenu{% if r['tracking_notification_channel'] %} par {{ 'SMS' if r['tracking_notification_channel'] == 'sms' else 'e-mail' }}{% endif %}</span>
   {% endif %}
-  {% if r['client_phone'] %}
+  {% if r['client_phone'] or r['client_phone_secondary'] %}
     <a class="button client-message-btn wopr-action-send" href="{{ url_for('client_message', rid=r['id']) }}">💬 Message client</a>
   {% endif %}
   <select class="pdf-lang-select button wopr-action-open" aria-label="Langue PDF suivi" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
@@ -213,7 +228,7 @@
       <a class="button wopr-action-send" href="{{ url_for('invoice_email', rid=r['id']) }}">📧 Envoyer la facture</a>
       <a class="button primary wopr-action-send" href="{{ url_for('invoice_email', rid=r['id'], with_followup=1) }}">📧 Envoyer facture + suivi</a>
     {% endif %}
-    {% if r['client_phone'] %}
+    {% if r['client_phone'] or r['client_phone_secondary'] %}
 {% endif %}
   {% endif %}
 </div>

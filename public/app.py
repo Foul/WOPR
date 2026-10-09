@@ -1673,7 +1673,7 @@ def _send_tracking_email(recipient, subject, message):
         return False, f"E-mail non envoyé : {exc}"
 
 
-def send_tracking_notification(rid, phase):
+def send_tracking_notification(rid, phase, force=False):
     """Envoie une notification unique sur un seul canal (SMS ou e-mail)."""
     if not bool(cfg().get("tracking_notifications_enabled", False)):
         return False, "Notifications de suivi désactivées", ""
@@ -1698,18 +1698,46 @@ def send_tracking_notification(rid, phase):
         if phase == "initial"
         else int(row["tracking_completion_notification_sent"] or 0) or int(row["tracking_completion_sms_sent"] or 0)
     )
-    if already_sent:
+    if already_sent and not force:
         con.close()
         return False, "Notification déjà envoyée", str(row["tracking_notification_channel"] or "")
 
     channel = str(row["tracking_notification_channel"] or "").strip().lower()
-    phone = normalize_sms_phone(row["phone"] or "") or normalize_sms_phone(row["phone_secondary"] or "")
+
+    # Pour les notifications automatiques, un numéro français fixe (01 à 05, 09)
+    # ne doit pas bloquer un second numéro mobile disponible.
+    # On privilégie donc le premier 06/07 parmi téléphone principal et secondaire.
+    def _tracking_sms_phone(*values):
+        normalized_values = [
+            normalize_sms_phone(value)
+            for value in values
+            if str(value or "").strip()
+        ]
+        for candidate in normalized_values:
+            if re.fullmatch(r"\+33[67][0-9]{8}", candidate):
+                return candidate
+        # Les numéros internationaux restent acceptés s'ils sont déjà au format +...
+        # et ne correspondent pas à un numéro français fixe.
+        for candidate in normalized_values:
+            if (
+                re.fullmatch(r"\+[0-9]{6,15}", candidate)
+                and not re.fullmatch(r"\+33[1-59][0-9]{8}", candidate)
+            ):
+                return candidate
+        return ""
+
+    phone = _tracking_sms_phone(row["phone"], row["phone_secondary"])
     email = str(row["email"] or row["email_secondary"] or "").strip()
     if channel not in {"sms", "email"}:
         channel = "sms" if phone else "email" if email and "@" in email else ""
+    if channel == "sms" and not phone:
+        channel = "email" if email and "@" in email else ""
+    elif channel == "email" and not (email and "@" in email):
+        channel = "sms" if phone else ""
+
     if not channel:
         con.close()
-        return False, "Aucun téléphone ou e-mail disponible", ""
+        return False, "Aucun mobile SMS ou e-mail disponible", ""
 
     ident = business_identity()
     message = _tracking_message(rid, phase, row, ident)
@@ -10789,7 +10817,37 @@ def tracking_stats_page():
             **local,
         })
 
-    enriched.sort(key=lambda x: (int(x["views"]), str(x["last_view_at"])), reverse=True)
+    # Stats : afficher les dossiers réellement consultés le plus récemment en premier.
+    # Ne pas trier sur la date déjà formatée en JJ/MM/AAAA : ce serait un tri lexical.
+    def _tracking_stats_sort_datetime(value):
+        raw = str(value or "").strip()
+        if not raw:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    for row in enriched:
+        source = next(
+            (
+                item for item in (stats.get("codes") or [])
+                if isinstance(item, dict)
+                and str(item.get("code") or "").strip().upper() == row["code"]
+            ),
+            {},
+        )
+        row["_last_view_sort"] = _tracking_stats_sort_datetime(source.get("last_view_at"))
+
+    enriched.sort(
+        key=lambda x: (x["_last_view_sort"], int(x["views"]), x["code"]),
+        reverse=True,
+    )
+    for row in enriched:
+        row.pop("_last_view_sort", None)
 
     return render_template(
         "tracking_stats.html",
@@ -15672,6 +15730,41 @@ def client_message_from_client(client_id):
     )
 
 
+@app.route("/repair/<int:rid>/tracking-resend", methods=["POST"])
+def repair_tracking_resend(rid):
+    """Renvoye volontairement le code de suivi initial depuis l'écran Message client."""
+    con = db()
+    row = con.execute("""
+        SELECT public_tracking_code
+        FROM repairs
+        WHERE id=?
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not row:
+        return "Dossier introuvable", 404
+
+    code = str(row["public_tracking_code"] or "").strip()
+    if not code:
+        flash("Aucun code de suivi public n'est disponible pour ce dossier.")
+        return redirect(url_for("client_message", rid=rid))
+
+    sent, detail, channel = send_tracking_notification(rid, "initial", force=True)
+
+    if sent:
+        label = "SMS" if channel == "sms" else "e-mail"
+        flash(f"Code de suivi renvoyé par {label}.")
+        audit_event(
+            "TRACKING_INITIAL_RESEND",
+            f"Code de suivi renvoyé repair_id={rid}; channel={channel}",
+            request.remote_addr,
+        )
+    else:
+        flash(f"Échec du renvoi du code de suivi : {detail}")
+
+    return redirect(url_for("client_message", rid=rid))
+
+
 @app.route("/repair/<int:rid>/message-client")
 def client_message(rid):
     """Prépare un SMS/message client sans l'envoyer automatiquement."""
@@ -15681,7 +15774,10 @@ def client_message(rid):
                c.name client_name,
                c.first_name client_first_name,
                c.last_name client_last_name,
-               c.phone client_phone
+               c.phone client_phone,
+               c.phone_secondary client_phone_secondary,
+               c.email client_email,
+               c.email_secondary client_email_secondary
         FROM repairs r
         JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
@@ -16609,7 +16705,9 @@ def repair_update(rid):
 def repair_close(rid):
     con = db()
     r = con.execute("""
-        SELECT r.*, c.name client_name, c.email client_email, c.email_secondary client_email_secondary, c.phone client_phone,
+        SELECT r.*, c.name client_name, c.first_name client_first_name, c.last_name client_last_name,
+               c.company client_company,
+               c.email client_email, c.email_secondary client_email_secondary, c.phone client_phone,
                c.phone_secondary client_phone_secondary,
                c.address_street client_address_street, c.postal_code client_postal_code,
                c.city client_city
@@ -16620,6 +16718,25 @@ def repair_close(rid):
         return "Dossier introuvable", 404
 
     if request.method == "POST":
+        selected_invoice_client_id = None
+        if int(r["simple_invoice"] or 0) == 1 and r["invoice_no"]:
+            selected_client_raw = str(request.form.get("selected_client_id") or "").strip()
+            if selected_client_raw:
+                if not selected_client_raw.isdigit():
+                    con.close()
+                    flash("Client sélectionné invalide.")
+                    return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
+                selected_client = con.execute("""
+                    SELECT id, name
+                    FROM clients
+                    WHERE id=? AND COALESCE(archived,0)=0
+                """, (int(selected_client_raw),)).fetchone()
+                if not selected_client:
+                    con.close()
+                    flash("Client sélectionné introuvable.")
+                    return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
+                selected_invoice_client_id = int(selected_client["id"])
+
         quantities = request.form.getlist("line_qty[]")
         descriptions = request.form.getlist("line_desc[]")
         prices = request.form.getlist("line_price[]")
@@ -17094,6 +17211,14 @@ def repair_close(rid):
 
         record_repair_status_change(con, rid, r["status"], close_status, "Facturation")
 
+        client_changed = False
+        if selected_invoice_client_id is not None and selected_invoice_client_id != int(r["client_id"]):
+            con.execute(
+                "UPDATE repairs SET client_id=? WHERE id=?",
+                (selected_invoice_client_id, rid)
+            )
+            client_changed = True
+
         con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
         for line in lines:
             con.execute("""
@@ -17103,11 +17228,23 @@ def repair_close(rid):
 
         con.commit()
         con.close()
+
+        archive_refresh_ok = True
+        archive_refresh_info = ""
+        if client_changed and int(r["simple_invoice"] or 0) == 1:
+            archive_refresh_ok, archive_refresh_info = refresh_simple_invoice_archive(rid)
+
         tracking_published = publish_tracking_snapshot(rid)
         if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
             flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
         else:
             flash("Facture modifiée." if r["invoice_no"] else "Facture créée.")
+
+        if client_changed:
+            if archive_refresh_ok:
+                flash("Client de la facture modifié et PDF archivé actualisé.")
+            else:
+                flash(f"Client modifié, mais archive PDF à vérifier : {archive_refresh_info}")
         if read_tracking_settings().get("enabled"):
             flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
 
@@ -17235,10 +17372,37 @@ def repair_close(rid):
     ), 2)
     payment_summary = payment_summary_for_repair(con, rid, current_invoice_total)
     payment_rows = invoice_payment_rows(con, rid)
+    invoice_clients = []
+    if int(r["simple_invoice"] or 0) == 1 and r["invoice_no"]:
+        client_rows = con.execute("""
+            SELECT id, name, first_name, last_name, company
+            FROM clients
+            WHERE COALESCE(archived,0)=0
+        """).fetchall()
+        for item in client_rows:
+            item = dict(item)
+            first_name = str(item.get("first_name") or "").strip()
+            last_name = str(item.get("last_name") or item.get("name") or "").strip()
+            company = str(item.get("company") or "").strip()
+            person = " ".join(x for x in (first_name, last_name) if x).strip()
+            if person and company and normalize_global_search(person) != normalize_global_search(company):
+                display_name = f"{person} — {company}"
+            else:
+                display_name = person or company or str(item.get("name") or "").strip()
+            item["display_name"] = display_name
+            invoice_clients.append(item)
+        invoice_clients.sort(
+            key=lambda item: (
+                normalize_global_search(item.get("display_name") or ""),
+                int(item.get("id") or 0),
+            )
+        )
+
     con.close()
     return render_template(
         "close.html",
         r=r,
+        invoice_clients=invoice_clients,
         invoice_lines=lines,
         invoice_was_reconstructed=invoice_was_reconstructed,
         original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
@@ -18073,6 +18237,356 @@ def simple_invoice_done(rid):
         total=total,
         payment_summary=payment_summary,
         sumup_enabled=bool(read_sumup_settings().get("enabled")),
+    )
+
+
+
+
+def refresh_simple_invoice_archive(rid):
+    """
+    Réaligne l'archive PDF d'une facture simple après correction du client.
+
+    - supprime uniquement les PDF archivés portant le même numéro de facture ;
+    - régénère immédiatement la version FR avec le client actuellement rattaché ;
+    - ne touche à aucune autre facture.
+    """
+    con = db()
+    row = con.execute("""
+        SELECT id, invoice_no, finished_at, received_date
+        FROM repairs
+        WHERE id=? AND COALESCE(simple_invoice,0)=1
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not row or not str(row["invoice_no"] or "").strip():
+        return False, "Facture simple introuvable"
+
+    invoice_no = str(row["invoice_no"]).strip()
+    invoice_date_value = invoice_no_date(invoice_no)
+    if not invoice_date_value:
+        invoice_date_value = str(row["finished_at"] or row["received_date"] or "")[:10]
+    try:
+        datetime.strptime(str(invoice_date_value or ""), "%Y-%m-%d")
+    except Exception:
+        invoice_date_value = now().strftime("%Y-%m-%d")
+
+    invoice_folder = year_month_folder(
+        FACTURES_ROOT,
+        invoice_date_value,
+        create=True
+    )
+
+    token = safe_filename(invoice_no)
+    removed = []
+    for pdf in invoice_folder.glob(f"*_{token}_*.pdf"):
+        try:
+            pdf.unlink()
+            removed.append(pdf.name)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            app.logger.warning(
+                "Impossible de supprimer l'ancienne archive facture %s : %s",
+                pdf, exc
+            )
+
+    try:
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess.update(dict(session))
+            response = client.get(
+                url_for("invoice_pdf", rid=rid, lang="fr", inline="1")
+            )
+            if response.status_code != 200 or not bytes(response.data).startswith(b"%PDF"):
+                return False, (
+                    f"ancienne(s) archive(s) supprimée(s): {len(removed)}, "
+                    f"mais régénération PDF impossible (HTTP {response.status_code})"
+                )
+    except Exception as exc:
+        app.logger.exception(
+            "Régénération archive facture simple %s impossible", invoice_no
+        )
+        return False, (
+            f"ancienne(s) archive(s) supprimée(s): {len(removed)}, "
+            f"mais régénération impossible: {exc}"
+        )
+
+    return True, f"{len(removed)} ancienne(s) archive(s) remplacée(s)"
+
+
+@app.route("/invoice/simple/<int:rid>/client", methods=["GET", "POST"])
+def simple_invoice_client_edit(rid):
+    """Corrige l'identité client d'une facture simple sans toucher aux autres factures."""
+    con = db()
+    row = con.execute("""
+        SELECT r.id, r.invoice_no, r.client_id, r.simple_invoice,
+               c.name, c.first_name, c.last_name, c.company,
+               c.address, c.address_street, c.postal_code, c.city,
+               c.phone, c.phone_secondary, c.email, c.email_secondary, c.notes
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=? AND COALESCE(r.simple_invoice,0)=1
+    """, (rid,)).fetchone()
+
+    if not row:
+        con.close()
+        return "Facture simple introuvable", 404
+
+    if request.method == "POST":
+        selected_client_id_raw = request.form.get("selected_client_id", "").strip()
+
+        if selected_client_id_raw.isdigit():
+            selected_client = con.execute("""
+                SELECT *
+                FROM clients
+                WHERE id=? AND COALESCE(archived,0)=0
+            """, (int(selected_client_id_raw),)).fetchone()
+
+            if not selected_client:
+                con.close()
+                flash("Client sélectionné introuvable.")
+                return redirect(url_for("simple_invoice_client_edit", rid=rid))
+
+            old_client_id = int(row["client_id"])
+            new_client_id = int(selected_client["id"])
+            con.execute(
+                "UPDATE repairs SET client_id=? WHERE id=?",
+                (new_client_id, rid)
+            )
+            con.commit()
+            con.close()
+
+            archive_ok, archive_info = refresh_simple_invoice_archive(rid)
+
+            audit_event(
+                "SIMPLE_INVOICE_CLIENT_REASSIGN",
+                (
+                    f"repair_id={rid}; invoice={row['invoice_no']}; "
+                    f"old_client_id={old_client_id}; new_client_id={new_client_id}"
+                ),
+                request.remote_addr
+            )
+            if archive_ok:
+                flash(
+                    f"Facture {row['invoice_no']} rattachée à {selected_client['name']} "
+                    "et PDF archivé actualisé."
+                )
+            else:
+                flash(
+                    f"Facture {row['invoice_no']} rattachée à {selected_client['name']}, "
+                    f"mais archive PDF à vérifier : {archive_info}"
+                )
+            return redirect(url_for("invoices_page"))
+
+        first_name = request.form.get("first_name", "").strip()
+        last_name = request.form.get("last_name", "").strip()
+        company = request.form.get("company", "").strip()
+        name = compose_client_name(last_name, first_name).strip() or company
+
+        if not name:
+            con.close()
+            flash("Choisis un client existant ou renseigne au moins un prénom/nom ou une entreprise.")
+            return redirect(url_for("simple_invoice_client_edit", rid=rid))
+
+        old_client_id = int(row["client_id"])
+
+        # Si cette fiche client n'est utilisée QUE par cette facture simple,
+        # on la corrige directement. Sinon on duplique la fiche afin de ne pas
+        # modifier rétroactivement d'autres dossiers/factures/devis du client.
+        repair_count = int(con.execute(
+            "SELECT COUNT(*) FROM repairs WHERE client_id=?",
+            (old_client_id,)
+        ).fetchone()[0] or 0)
+        quote_count = int(con.execute(
+            "SELECT COUNT(*) FROM quotes WHERE client_id=?",
+            (old_client_id,)
+        ).fetchone()[0] or 0)
+
+        stamp = now().isoformat(timespec="seconds")
+
+        if repair_count == 1 and quote_count == 0:
+            con.execute("""
+                UPDATE clients
+                SET name=?, first_name=?, last_name=?, company=?, updated_at=?,
+                    google_sync_status='À synchroniser', google_sync_error=''
+                WHERE id=?
+            """, (
+                name, first_name, last_name, company, stamp, old_client_id
+            ))
+            new_client_id = old_client_id
+            mode = "client_corrigé"
+        else:
+            cur = con.execute("""
+                INSERT INTO clients(
+                    name,last_name,first_name,company,
+                    address,address_street,postal_code,city,
+                    phone,phone_secondary,email,email_secondary,notes,
+                    created_at,updated_at,google_sync_status,google_sync_error,archived
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+            """, (
+                name,
+                last_name,
+                first_name,
+                company,
+                row["address"] or "",
+                row["address_street"] or "",
+                row["postal_code"] or "",
+                row["city"] or "",
+                row["phone"] or "",
+                row["phone_secondary"] or "",
+                row["email"] or "",
+                row["email_secondary"] or "",
+                row["notes"] or "",
+                stamp,
+                stamp,
+                "À synchroniser",
+                "",
+            ))
+            new_client_id = int(cur.lastrowid)
+            con.execute(
+                "UPDATE repairs SET client_id=? WHERE id=?",
+                (new_client_id, rid)
+            )
+            mode = "client_dupliqué_pour_isoler_facture"
+
+        con.commit()
+        con.close()
+
+        archive_ok, archive_info = refresh_simple_invoice_archive(rid)
+
+        audit_event(
+            "SIMPLE_INVOICE_CLIENT_EDIT",
+            (
+                f"repair_id={rid}; invoice={row['invoice_no']}; "
+                f"old_client_id={old_client_id}; new_client_id={new_client_id}; "
+                f"mode={mode}; name={name}"
+            ),
+            request.remote_addr
+        )
+        if archive_ok:
+            flash(
+                f"Client de la facture {row['invoice_no']} corrigé : {name}. "
+                "PDF archivé actualisé."
+            )
+        else:
+            flash(
+                f"Client de la facture {row['invoice_no']} corrigé : {name}, "
+                f"mais archive PDF à vérifier : {archive_info}"
+            )
+        return redirect(url_for("invoices_page"))
+
+    client_rows = con.execute("""
+        SELECT id, name, first_name, last_name, company
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+    """).fetchall()
+
+    clients = []
+    for item in client_rows:
+        item = dict(item)
+        first_name = str(item.get("first_name") or "").strip()
+        last_name = str(item.get("last_name") or item.get("name") or "").strip()
+        company = str(item.get("company") or "").strip()
+        person = " ".join(x for x in (first_name, last_name) if x).strip()
+        if person and company and normalize_global_search(person) != normalize_global_search(company):
+            display_name = f"{person} — {company}"
+        else:
+            display_name = person or company or str(item.get("name") or "").strip()
+        item["display_name"] = display_name
+        clients.append(item)
+
+    clients.sort(
+        key=lambda item: (
+            normalize_global_search(item.get("display_name") or ""),
+            int(item.get("id") or 0),
+        )
+    )
+
+    con.close()
+    return render_template(
+        "simple_invoice_client_edit.html",
+        r=dict(row),
+        clients=clients,
+    )
+
+
+@app.route("/invoice/simple/<int:rid>/delete", methods=["GET", "POST"])
+def simple_invoice_delete(rid):
+    """Supprime une facture simple créée par erreur, avec sauvegarde préalable."""
+    con = db()
+    row = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=? AND COALESCE(r.simple_invoice,0)=1
+    """, (rid,)).fetchone()
+
+    if not row:
+        con.close()
+        return "Facture simple introuvable", 404
+
+    payment_count = int(con.execute(
+        "SELECT COUNT(*) FROM invoice_payments WHERE repair_id=?",
+        (rid,)
+    ).fetchone()[0] or 0)
+
+    payment_locked = bool(
+        int(row["paid"] or 0)
+        or payment_count
+        or str(row["sumup_transaction_id"] or "").strip()
+    )
+
+    if request.method == "POST":
+        if payment_locked:
+            con.close()
+            flash("Suppression refusée : cette facture possède déjà un règlement ou une transaction SumUp.")
+            return redirect(url_for("invoices_page"))
+
+        if request.form.get("confirm_delete", "").strip() != "SUPPRIMER":
+            con.close()
+            flash("Suppression annulée : tape SUPPRIMER pour confirmer.")
+            return redirect(url_for("simple_invoice_delete", rid=rid))
+
+        backup = backup_database(
+            force=True,
+            tag=f"avant_suppression_facture_simple_{rid}",
+            only_if_changed=False
+        )
+
+        invoice_no = str(row["invoice_no"] or "")
+        client_id = int(row["client_id"])
+
+        try:
+            con.execute("BEGIN")
+            con.execute("DELETE FROM invoice_payments WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM repair_status_history WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM repairs WHERE id=?", (rid,))
+            con.commit()
+        except Exception:
+            con.rollback()
+            con.close()
+            raise
+
+        con.close()
+
+        audit_event(
+            "SIMPLE_INVOICE_DELETE",
+            (
+                f"repair_id={rid}; invoice={invoice_no}; client_id={client_id}; "
+                f"backup={backup.name if backup else 'none'}"
+            ),
+            request.remote_addr
+        )
+        flash(f"Facture simple {invoice_no} supprimée. La fiche client a été conservée.")
+        return redirect(url_for("invoices_page"))
+
+    con.close()
+    return render_template(
+        "simple_invoice_delete.html",
+        r=dict(row),
+        payment_locked=payment_locked,
+        payment_count=payment_count,
     )
 
 
@@ -20762,15 +21276,24 @@ def invoice_pdf(rid):
     c.drawCentredString(xs[3] + col_total/2, ty_top-6.1*mm, pdf_t("total", lang))
 
     rows = []
+    followup_detail_note = translate_pdf_text("Détails sur feuille de suivi", lang)
     if invoice_lines:
         for line in invoice_lines:
             qty = float(line["quantity"] or 0)
             unit = float(line["unit_price"] or 0)
-            rows.append((qty, translate_pdf_text(line["description"], lang), qty * unit, unit))
+            description = translate_pdf_text(line["description"], lang)
+            if str(line["line_type"] or "").strip().lower() == "service":
+                description = f"{description}\n{followup_detail_note}"
+            rows.append((qty, description, qty * unit, unit))
     else:
         # Ancienne facture sans lignes détaillées.
         if r["service_amount"]:
-            rows.append((1, translate_pdf_text(r["service_description"] or r["tests_validation"] or r["problem"] or "Prestation de service", lang),
+            service_description = translate_pdf_text(
+                r["service_description"] or r["tests_validation"] or r["problem"] or "Prestation de service",
+                lang,
+            )
+            service_description = f"{service_description}\n{followup_detail_note}"
+            rows.append((1, service_description,
                          float(r["service_amount"]), float(r["service_amount"])))
         if r["goods_amount"]:
             rows.append((1, translate_pdf_text(r["goods_description"] or "Vente de marchandises / pièces", lang),
