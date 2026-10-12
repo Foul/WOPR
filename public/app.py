@@ -3861,6 +3861,9 @@ def init_db():
     ensure_column(con, "repairs", "legacy_source_year", "INTEGER")
     ensure_column(con, "repairs", "legacy_source_row", "INTEGER")
     ensure_column(con, "repairs", "legacy_imported", "INTEGER DEFAULT 0")
+    # PDF historiques/originaux importés : WOPR les sert tels quels, sans les recréer.
+    ensure_column(con, "repairs", "original_followup_pdf_path", "TEXT")
+    ensure_column(con, "repairs", "original_invoice_pdf_path", "TEXT")
     ensure_column(con, "repairs", "followup_year", "INTEGER")
     ensure_column(con, "repairs", "followup_month", "INTEGER")
     ensure_column(con, "repairs", "accounting_year", "INTEGER")
@@ -3967,6 +3970,9 @@ def init_db():
     # seule sa référence relative est conservée en base.
     ensure_column(con, "ledger_entries", "document_path", "TEXT")
     ensure_column(con, "ledger_entries", "document_original_name", "TEXT")
+    # V2.6.2 : une facture fournisseur peut conserver le PDF officiel ET son XML structuré.
+    ensure_column(con, "ledger_entries", "document_xml_path", "TEXT")
+    ensure_column(con, "ledger_entries", "document_xml_original_name", "TEXT")
 
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entry_date ON ledger_entries(entry_date)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_operation ON ledger_entries(operation)")
@@ -5998,6 +6004,24 @@ def safe_document_name(name):
     return value or "Document.pdf"
 
 
+def repair_original_pdf(row, column_name):
+    """Retourne un PDF original importé, uniquement s'il reste sous DOCUMENTS_ROOT."""
+    if not row:
+        return None
+    try:
+        rel = str(row[column_name] or "").strip()
+    except Exception:
+        rel = ""
+    if not rel:
+        return None
+    try:
+        path = (DOCUMENTS_ROOT / rel).resolve()
+        path.relative_to(DOCUMENTS_ROOT.resolve())
+    except Exception:
+        return None
+    return path if path.is_file() and path.suffix.lower() == ".pdf" else None
+
+
 def _match_key(value):
     """Normalise un texte pour comparer noms de fournisseurs / numéros de facture."""
     value = unicodedata.normalize("NFKD", str(value or ""))
@@ -6058,14 +6082,19 @@ def supplier_document_filename(entry_date, party, invoice_no, original_name):
     return safe_document_name(f"{supplier}_{stem}{suffix}")
 
 
-def save_ledger_document(entry_id, storage):
+def save_ledger_document(
+    entry_id,
+    storage,
+    replace_existing=False,
+    generate_xml_fallback=True,
+):
     """
-    Lie une facture fournisseur à une ligne Achats/Ventes et la range proprement.
+    Classe les pièces fournisseur d'une ligne Achats/Ventes.
 
-    Point d'entrée unique :
-    - PDF/JPG/PNG : classement normal ;
-    - XML de facture électronique : détection automatique, conservation du XML
-      + génération d'une copie PDF lisible, sans passer par le menu Abby.
+    - document_path = document principal lisible (PDF officiel en priorité) ;
+    - document_xml_path = XML structuré associé ;
+    - un XML seul garde la génération PDF de secours historique ;
+    - si Abby fournit XML + vrai PDF, le PDF officiel remplace le PDF de secours.
     """
     filename = str(getattr(storage, "filename", "") or "").strip()
     if not filename:
@@ -6086,73 +6115,115 @@ def save_ledger_document(entry_id, storage):
     if not row:
         con.close()
         raise ValueError("Ligne Achats/Ventes introuvable.")
-    if str(row["document_path"] or "").strip():
-        con.close()
-        raise ValueError("Une pièce justificative est déjà liée à cette ligne.")
+
+    def _row_value(name):
+        try:
+            return row[name]
+        except Exception:
+            return None
+
+    current_rel = str(_row_value("document_path") or "").strip()
+    current_xml_rel = str(_row_value("document_xml_path") or "").strip()
+
+    def _safe_existing(rel):
+        if not rel:
+            return None
+        try:
+            candidate = (DOCUMENTS_ROOT / rel).resolve()
+            root = DOCUMENTS_ROOT.resolve()
+            candidate.relative_to(root)
+            return candidate if candidate.is_file() else None
+        except Exception:
+            return None
+
+    current_file = _safe_existing(current_rel)
+    current_xml_file = _safe_existing(current_xml_rel)
+
+    # Anciennes versions : l'XML n'avait pas sa propre colonne.
+    # Si le PDF lié possède un XML frère, on le récupère automatiquement.
+    if current_xml_file is None and current_file:
+        sibling_xml = current_file.with_suffix(".xml")
+        if sibling_xml.is_file():
+            current_xml_file = sibling_xml
 
     # ------------------------------------------------------------
-    # XML : traitement automatique de facture électronique
+    # XML : pièce structurée secondaire
     # ------------------------------------------------------------
     if suffix == ".xml":
+        if current_xml_file and not replace_existing:
+            con.close()
+            raise ValueError("Un XML est déjà associé à cette facture.")
+
         try:
             info = parse_supplier_invoice_xml(raw, filename)
         except Exception:
-            # Si ce n'est pas une facture électronique reconnue, on conserve
-            # le comportement XML générique historique.
             info = None
 
-        if info:
-            invoice_date = str(info.get("entry_date") or row["entry_date"] or "")[:10]
-            folder = year_month_folder(
-                FOURNISSEURS_ROOT,
+        invoice_date = str(
+            (info or {}).get("entry_date") or row["entry_date"] or ""
+        )[:10]
+        folder = year_month_folder(
+            FOURNISSEURS_ROOT,
+            invoice_date,
+            supplier=False,
+            create=True,
+        )
+
+        invoice_for_name = str(
+            (info or {}).get("invoice_no") or row["invoice_no"] or ""
+        ).strip()
+        party_for_name = str(row["party"] or (info or {}).get("party") or "Fournisseur").strip()
+
+        if current_xml_file and replace_existing:
+            xml_dest = current_xml_file
+            xml_dest.write_bytes(raw)
+        else:
+            xml_name = supplier_document_filename(
                 invoice_date,
-                supplier=False,
-                create=True,
+                party_for_name,
+                invoice_for_name,
+                filename,
             )
+            xml_name = str(Path(xml_name).with_suffix(".xml").name)
+            xml_dest = folder / xml_name
 
-            safe_stem = Path(
-                safe_document_name(
-                    f"{row['party'] or info['party']}_{info['invoice_no']}.xml"
-                )
-            ).stem
-
-            # Réutilise le XML identique s'il est déjà classé.
-            xml_dest = None
-            for existing in folder.iterdir():
-                if not existing.is_file() or existing.suffix.lower() != ".xml":
-                    continue
+            if xml_dest.exists():
+                # Réutilise seulement un XML strictement identique.
                 try:
-                    if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
-                        xml_dest = existing
-                        break
+                    if xml_dest.stat().st_size == len(raw) and xml_dest.read_bytes() == raw:
+                        pass
+                    else:
+                        xml_dest = _unique_document_path(folder, Path(xml_name).stem, ".xml")
+                        xml_dest.write_bytes(raw)
                 except Exception:
-                    continue
-
-            if xml_dest is None:
-                xml_dest = _unique_document_path(folder, safe_stem, ".xml")
+                    xml_dest = _unique_document_path(folder, Path(xml_name).stem, ".xml")
+                    xml_dest.write_bytes(raw)
+            else:
                 xml_dest.write_bytes(raw)
 
-            # Le PDF est systématiquement présent à côté du XML.
-            pdf_dest = xml_dest.with_suffix(".pdf")
-            if not pdf_dest.exists():
-                generate_supplier_xml_readable_pdf(
-                    raw,
-                    info,
-                    pdf_dest,
-                    filename,
-                )
+        primary_rel = current_rel
+        primary_file = current_file
 
-            # Le bouton Ouvrir pointe vers le PDF lisible.
-            # On garde les infos saisies à la main (fournisseur, description,
-            # paiement, remarques) et on complète uniquement ce qui est utile.
-            current_invoice = str(row["invoice_no"] or "").strip()
-            invoice_no = str(info.get("invoice_no") or current_invoice).strip() or current_invoice
+        # XML seul : on conserve le comportement historique avec PDF de secours.
+        # XML + vrai PDF dans le même formulaire : aucun PDF synthétique n'est généré.
+        if generate_xml_fallback and not (primary_file and primary_file.is_file()):
+            if info:
+                pdf_dest = xml_dest.with_suffix(".pdf")
+                if not pdf_dest.exists():
+                    generate_supplier_xml_readable_pdf(raw, info, pdf_dest, filename)
+                primary_file = pdf_dest
+                primary_rel = str(pdf_dest.relative_to(DOCUMENTS_ROOT))
+            else:
+                # XML générique historique : il reste ouvrable comme justificatif principal.
+                primary_file = xml_dest
+                primary_rel = str(xml_dest.relative_to(DOCUMENTS_ROOT))
 
-            remarks = str(row["remarks"] or "").strip()
+        invoice_no = str((info or {}).get("invoice_no") or row["invoice_no"] or "").strip()
+        remarks = str(row["remarks"] or "").strip()
+        if info:
             remarks = remarks.replace(
                 "Import Abby — facture électronique XML + copie PDF lisible", ""
             ).strip(" —")
-            # Supprime une ancienne date Abby pour éviter les doublons de format.
             remarks = re.sub(
                 r"(?:\s*—\s*)?Facture Abby du \d{4}-\d{2}-\d{2}",
                 "",
@@ -6163,33 +6234,39 @@ def save_ledger_document(entry_id, storage):
                 "",
                 remarks,
             ).strip(" —")
-            date_note = f"Facture Abby du {_abby_display_date(info.get('entry_date'))}"
             if info.get("entry_date"):
+                date_note = f"Facture Abby du {_abby_display_date(info.get('entry_date'))}"
                 remarks = " — ".join(x for x in [remarks, date_note] if x)
 
-            con.execute("""
-                UPDATE ledger_entries
-                SET invoice_no=?,
-                    document_path=?,
-                    document_original_name=?,
-                    remarks=?,
-                    updated_at=?
-                WHERE id=?
-            """, (
-                invoice_no,
-                str(pdf_dest.relative_to(DOCUMENTS_ROOT)),
-                filename,
-                remarks,
-                now().isoformat(timespec="seconds"),
-                entry_id,
-            ))
-            con.commit()
-            con.close()
-            return pdf_dest
+        con.execute("""
+            UPDATE ledger_entries
+            SET invoice_no=?,
+                document_path=?,
+                document_xml_path=?,
+                document_xml_original_name=?,
+                remarks=?,
+                updated_at=?
+            WHERE id=?
+        """, (
+            invoice_no,
+            primary_rel or None,
+            str(xml_dest.relative_to(DOCUMENTS_ROOT)),
+            filename,
+            remarks,
+            now().isoformat(timespec="seconds"),
+            entry_id,
+        ))
+        con.commit()
+        con.close()
+        return xml_dest
 
     # ------------------------------------------------------------
-    # PDF / image / XML non reconnu : comportement historique
+    # PDF / image : document principal lisible
     # ------------------------------------------------------------
+    if current_file and not replace_existing:
+        con.close()
+        raise ValueError("Un justificatif principal est déjà lié à cette ligne.")
+
     folder = year_month_folder(
         FOURNISSEURS_ROOT,
         row["entry_date"],
@@ -6197,88 +6274,75 @@ def save_ledger_document(entry_id, storage):
         create=True,
     )
 
-    # Anti-doublon strict : cherche d'abord le même contenu déjà classé.
     dest = None
-    for existing in folder.iterdir():
-        if not existing.is_file() or existing.suffix.lower() not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
-            continue
-        try:
-            if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
-                dest = existing
-                break
-        except Exception:
-            continue
 
-    # Priorité au classement existant si la correspondance est sûre.
-    if dest is None:
-        existing_docs = [
-            p for p in folder.iterdir()
-            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
-        ]
-        invoice_key = _match_key(row["invoice_no"]) if is_supplier_invoice_reference(
-            row["invoice_no"], party=row["party"], remarks=row["remarks"]
-        ) else ""
-        supplier_key = _match_key(row["party"])
+    if replace_existing:
+        # Pour les anciens XML Abby, le PDF généré est généralement le frère de l'XML :
+        # on l'écrase directement avec le vrai PDF officiel.
+        if suffix == ".pdf" and current_file and current_file.suffix.lower() == ".pdf":
+            dest = current_file
+        elif suffix == ".pdf" and current_xml_file:
+            dest = current_xml_file.with_suffix(".pdf")
 
-        original_stem = Path(filename).stem.strip()
-        original_stem = re.sub(
-            r"^(facture|invoice)[ _-]*",
-            "",
-            original_stem,
-            flags=re.IGNORECASE,
-        ).strip(" _-")
-        original_key = _match_key(original_stem)
-        if len(original_key) < 5:
-            original_key = ""
+        if dest is not None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(raw)
 
-        strong_matches = []
-        for existing in existing_docs:
-            stem_key = _match_key(existing.stem)
-            by_invoice = bool(
-                invoice_key and len(invoice_key) >= 4 and invoice_key in stem_key
-            )
-            by_original = bool(
-                original_key
-                and (original_key in stem_key or stem_key.endswith(original_key))
-            )
-            supplier_ok = not supplier_key or supplier_key in stem_key or by_invoice
-            if by_invoice or (by_original and supplier_ok):
-                strong_matches.append(existing)
-
-        if len(strong_matches) == 1:
-            dest = strong_matches[0]
-        elif len(strong_matches) > 1:
-            con.close()
-            raise ValueError(
-                "Plusieurs justificatifs déjà classés semblent correspondre à cette facture. "
-                "Aucun nouveau fichier n'a été créé : vérifie les fichiers du mois puis rattache le bon."
-            )
+    if dest is None and not replace_existing:
+        # Anti-doublon strict : même contenu déjà classé.
+        for existing in folder.iterdir():
+            if not existing.is_file() or existing.suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
+                continue
+            try:
+                if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
+                    dest = existing
+                    break
+            except Exception:
+                continue
 
     if dest is None:
-        clean_name = supplier_document_filename(
-            row["entry_date"],
-            row["party"],
-            row["invoice_no"],
-            filename,
-        )
-        dest = folder / clean_name
-
-        if dest.exists():
-            con.close()
-            raise ValueError(
-                f"Un justificatif nommé {dest.name} existe déjà dans Fournisseurs. "
-                "Aucun doublon n'a été créé."
+        # Si un XML compagnon existe, le PDF officiel prend exactement le même stem.
+        if suffix == ".pdf" and current_xml_file:
+            dest = current_xml_file.with_suffix(".pdf")
+            if dest.exists() and not replace_existing:
+                con.close()
+                raise ValueError(
+                    f"Un PDF nommé {dest.name} existe déjà. Utilise « Remplacer PDF »."
+                )
+        else:
+            clean_name = supplier_document_filename(
+                row["entry_date"],
+                row["party"],
+                row["invoice_no"],
+                filename,
             )
+            dest = folder / clean_name
+            if dest.exists() and not replace_existing:
+                con.close()
+                raise ValueError(
+                    f"Un justificatif nommé {dest.name} existe déjà dans Fournisseurs. "
+                    "Aucun doublon n'a été créé."
+                )
+
         dest.write_bytes(raw)
 
-    rel = str(dest.relative_to(DOCUMENTS_ROOT))
+    # Backfill XML pour les anciennes factures Abby si un frère existe.
+    if current_xml_file is None and dest.suffix.lower() == ".pdf":
+        sibling_xml = dest.with_suffix(".xml")
+        if sibling_xml.is_file():
+            current_xml_file = sibling_xml
+
     con.execute("""
         UPDATE ledger_entries
-        SET document_path=?, document_original_name=?, updated_at=?
+        SET document_path=?,
+            document_original_name=?,
+            document_xml_path=COALESCE(?, document_xml_path),
+            updated_at=?
         WHERE id=?
     """, (
-        rel,
+        str(dest.relative_to(DOCUMENTS_ROOT)),
         filename,
+        str(current_xml_file.relative_to(DOCUMENTS_ROOT)) if current_xml_file else None,
         now().isoformat(timespec="seconds"),
         entry_id,
     ))
@@ -6703,6 +6767,50 @@ def ledger_document_file(row):
 
     return None
 
+
+
+def ledger_xml_document_file(row):
+    """Résout l'XML structuré associé, y compris pour les anciens couples PDF/XML."""
+    if not row:
+        return None
+
+    try:
+        rel = str(row["document_xml_path"] or "").strip()
+    except Exception:
+        rel = ""
+
+    if rel:
+        try:
+            path = (DOCUMENTS_ROOT / rel).resolve()
+            path.relative_to(DOCUMENTS_ROOT.resolve())
+            if path.is_file() and path.suffix.lower() == ".xml":
+                return path
+        except Exception:
+            pass
+
+    # Compatibilité anciens imports : XML frère du PDF actuellement lié/résolu.
+    primary = ledger_document_file(row)
+    if primary:
+        try:
+            sibling = Path(primary).with_suffix(".xml")
+            if sibling.is_file():
+                return sibling
+        except Exception:
+            pass
+
+    # Dernier recours prudent : même numéro de facture, XML unique.
+    invoice_key = _match_key(row["invoice_no"] or "")
+    if invoice_key and len(invoice_key) >= 4:
+        try:
+            hits = [
+                p for p in FOURNISSEURS_ROOT.rglob("*.xml")
+                if invoice_key in _match_key(p.stem)
+            ]
+            if len(hits) == 1:
+                return hits[0]
+        except Exception:
+            pass
+    return None
 
 
 def repair_dead_supplier_document_links():
@@ -10960,6 +11068,22 @@ def index():
         search_active=bool(client_search_folded),
     )
 
+    # Vue Suivi normale : le mois courant reste le filtre principal, mais les
+    # dossiers "Terminé" des mois précédents restent visibles tant qu'ils ne
+    # sont pas passés à "Restitué". Cela évite d'oublier un appareil terminé
+    # simplement parce qu'il a été reçu le mois précédent.
+    explicit_month = request.args.get("month") not in (None, "")
+    carry_finished_previous_months = (
+        not explicit_month
+        and not client_search_folded
+        and not to_return_only
+        and not en_cours_only
+        and not attente_piece_only
+        and not overdue_only
+        and requested_year == now().year
+        and selected_month == now().month
+    )
+
     con = db()
 
     # V2.3.138 — les dossiers "Laissé pour pièces" doivent avoir une date de clôture
@@ -11230,8 +11354,14 @@ def index():
     yellow_count = 0
 
     for month in range(12,0,-1):
-        if selected_month and month != selected_month:
+        carry_month = bool(
+            carry_finished_previous_months
+            and selected_month
+            and month < selected_month
+        )
+        if selected_month and month != selected_month and not carry_month:
             continue
+
         month_rows = []
         for row in rows:
             row_month = row["followup_month"]
@@ -11244,6 +11374,13 @@ def index():
                 continue
 
             item = dict(row)
+
+            # Dans les mois reportés sous le mois courant, on ne conserve que
+            # les appareils encore "Terminé". Les Restitué et tous les autres
+            # statuts restent dans leur mois lorsqu'on le sélectionne explicitement.
+            if carry_month and item.get("status") != "Terminé":
+                continue
+
             if item.get("tracking_completion_notification_sent") or item.get("tracking_completion_sms_sent"):
                 item["_notification_status"] = "client"
             elif item.get("status") in {"Terminé", "Restitué"} and item.get("tracking_completion_notification_error"):
@@ -11257,15 +11394,6 @@ def index():
             if to_return_only and item.get("status") != "Terminé":
                 continue
 
-            item["_days_waiting_return"] = None
-            if item.get("status") == "Terminé" and item.get("finished_at"):
-                try:
-                    finished_dt = datetime.fromisoformat(str(item.get("finished_at")))
-                    if finished_dt.tzinfo is None and now().tzinfo is not None:
-                        finished_dt = finished_dt.replace(tzinfo=now().tzinfo)
-                    item["_days_waiting_return"] = max(0, (now().date() - finished_dt.date()).days)
-                except Exception:
-                    pass
 
             invoice_no = str(item.get("invoice_no") or "").strip()
             group = history_invoice_groups.get((item.get("client_id"), invoice_no)) if invoice_no else None
@@ -11305,13 +11433,17 @@ def index():
             month_rows.append(item)
 
         # Lignes purement visuelles pour les encaissements inter-mois.
-        month_rows.extend(cross_month_payments.get(month, []))
+        # Elles restent utiles dans le mois réellement consulté, mais ne doivent
+        # JAMAIS être reportées dans la vue du mois courant : le report sert
+        # uniquement aux vrais dossiers encore au statut "Terminé".
+        if not carry_month:
+            month_rows.extend(cross_month_payments.get(month, []))
 
         t = totals_map.get(month, {"service":0.0,"goods":0.0})
 
         # Vue filtrée depuis le tableau de bord Atelier :
         # ne pas afficher les mois sans aucun dossier correspondant.
-        if (to_return_only or en_cours_only or attente_piece_only or overdue_only) and not month_rows:
+        if (to_return_only or en_cours_only or attente_piece_only or overdue_only or carry_month) and not month_rows:
             continue
 
         months.append({
@@ -11343,6 +11475,7 @@ def index():
         month_names=month_names,
         client_search=client_search,
         search_all_years=bool(client_search_folded),
+        carry_finished_previous_months=carry_finished_previous_months,
         edit_id=edit_id,
         current_period=now().strftime("%Y-%m"),
     )
@@ -14728,6 +14861,19 @@ def achats_ventes_page():
             return " ".join(str(v or "") for v in values).casefold()
         entries = [row for row in all_entries_all_years if needle in _ledger_search_text(row)]
 
+    # Prépare l'état réel des deux pièces jointes pour l'interface.
+    prepared_entries = []
+    for source_row in entries:
+        item = dict(source_row)
+        if str(item.get("operation") or "").casefold() == "achat":
+            item["document_pdf_available"] = bool(ledger_document_file(source_row))
+            item["document_xml_available"] = bool(ledger_xml_document_file(source_row))
+        else:
+            item["document_pdf_available"] = False
+            item["document_xml_available"] = False
+        prepared_entries.append(item)
+    entries = prepared_entries
+
     months = []
     # Les achats restent issus du registre Achats/Ventes ; ils ne constituent pas le CA.
     purchases_total = sum(
@@ -14857,18 +15003,42 @@ def achats_ventes_add():
     con.commit()
     con.close()
 
-    document = request.files.get("supplier_document")
+    pdf_document = request.files.get("supplier_pdf") or request.files.get("supplier_document")
+    xml_document = request.files.get("supplier_xml")
+    has_pdf = bool(pdf_document and str(pdf_document.filename or "").strip())
+    has_xml = bool(xml_document and str(xml_document.filename or "").strip())
+
     document_msg = ""
-    if document and str(document.filename or "").strip():
+    if has_pdf or has_xml:
         if operation != "Achat":
-            document_msg = " La pièce n'a pas été rangée : elle est réservée aux achats fournisseurs."
+            document_msg = " Les pièces n'ont pas été rangées : elles sont réservées aux achats fournisseurs."
         else:
-            try:
-                saved = save_ledger_document(entry_id, document)
-                if saved:
-                    document_msg = " Facture fournisseur rangée et liée à l’achat." + (" XML détecté : copie PDF lisible générée." if Path(str(document.filename or "")).suffix.lower() == ".xml" else "")
-            except ValueError as exc:
-                document_msg = f" Achat enregistré, mais pièce non jointe : {exc}"
+            messages = []
+            # XML d'abord : s'il y a aussi le PDF officiel, aucun PDF synthétique n'est créé.
+            if has_xml:
+                try:
+                    save_ledger_document(
+                        entry_id,
+                        xml_document,
+                        generate_xml_fallback=not has_pdf,
+                    )
+                    messages.append("XML conservé")
+                except ValueError as exc:
+                    messages.append(f"XML non joint : {exc}")
+
+            if has_pdf:
+                try:
+                    save_ledger_document(
+                        entry_id,
+                        pdf_document,
+                        replace_existing=has_xml,
+                    )
+                    messages.append("PDF officiel lié" if Path(str(pdf_document.filename or "")).suffix.lower() == ".pdf" else "justificatif lié")
+                except ValueError as exc:
+                    messages.append(f"PDF non joint : {exc}")
+
+            if messages:
+                document_msg = " " + " · ".join(messages) + "."
 
     audit_event("LEDGER_ADD", f"{operation} {entry_date} {amount:.2f}", request.remote_addr)
     flash("Ligne ajoutée." + document_msg)
@@ -14882,21 +15052,55 @@ def achats_ventes_document_add(entry_id):
     con.close()
     if not row:
         return "Ligne introuvable", 404
-    year = str(row["entry_date"] or now().strftime("%Y-%m-%d"))[:4]
+
     if str(row["operation"] or "").casefold() != "achat":
         flash("Les factures fournisseurs peuvent être liées uniquement à un achat.")
         return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-    storage = request.files.get("supplier_document")
+
+    kind = str(request.form.get("document_kind") or "").strip().lower()
+    replace_existing = request.form.get("replace_existing") == "1"
+    storage = (
+        request.files.get("supplier_xml")
+        if kind == "xml"
+        else request.files.get("supplier_pdf")
+        if kind == "pdf"
+        else request.files.get("supplier_document")
+    )
+
     if not storage or not str(storage.filename or "").strip():
-        flash("Choisis une facture à joindre.")
+        flash("Choisis un fichier à joindre.")
         return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
+
+    suffix = Path(str(storage.filename or "")).suffix.lower()
+    if kind == "xml" and suffix != ".xml":
+        flash("Le fichier XML attendu doit avoir l'extension .xml.")
+        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
+    if kind == "pdf" and suffix not in {".pdf", ".jpg", ".jpeg", ".png"}:
+        flash("Le justificatif principal doit être un PDF, JPG ou PNG.")
+        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
+
     try:
-        dest = save_ledger_document(entry_id, storage)
+        dest = save_ledger_document(
+            entry_id,
+            storage,
+            replace_existing=replace_existing,
+            generate_xml_fallback=True,
+        )
     except ValueError as exc:
         flash(str(exc))
         return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-    audit_event("LEDGER_DOCUMENT_ADD", f"id={entry_id} file={dest.name if dest else ''}", request.remote_addr)
-    flash("Facture fournisseur liée et rangée automatiquement." + (" XML détecté : copie PDF lisible générée." if Path(str(storage.filename or "")).suffix.lower() == ".xml" else ""))
+
+    if kind == "xml":
+        label = "XML remplacé" if replace_existing else "XML joint"
+    else:
+        label = "PDF officiel remplacé" if replace_existing and suffix == ".pdf" else "Justificatif remplacé" if replace_existing else "Justificatif joint"
+
+    audit_event(
+        "LEDGER_DOCUMENT_ADD",
+        f"id={entry_id} kind={kind or suffix} replace={int(replace_existing)} file={dest.name if dest else ''}",
+        request.remote_addr,
+    )
+    flash(f"{label} et rangé automatiquement.")
     return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
 
 
@@ -14926,6 +15130,8 @@ def achats_ventes_document_unlink(entry_id):
         UPDATE ledger_entries
         SET document_path=NULL,
             document_original_name=NULL,
+            document_xml_path=NULL,
+            document_xml_original_name=NULL,
             updated_at=?
         WHERE id=?
         """,
@@ -14967,6 +15173,40 @@ def achats_ventes_document_view(entry_id):
     except Exception:
         pass
     return send_file(path, as_attachment=False, download_name=path.name)
+
+
+@app.route("/achats-ventes/<int:entry_id>/document/xml/view")
+def achats_ventes_document_xml_view(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+
+    path = ledger_xml_document_file(row)
+    if not path:
+        return "XML fournisseur introuvable", 404
+
+    # Backfill la nouvelle colonne pour les anciens couples PDF/XML.
+    try:
+        rel = str(path.relative_to(DOCUMENTS_ROOT))
+        if rel != str(row["document_xml_path"] or ""):
+            con_fix = db()
+            con_fix.execute(
+                "UPDATE ledger_entries SET document_xml_path=?, updated_at=? WHERE id=?",
+                (rel, now().isoformat(timespec="seconds"), entry_id),
+            )
+            con_fix.commit()
+            con_fix.close()
+    except Exception:
+        pass
+
+    return send_file(
+        path,
+        as_attachment=False,
+        download_name=path.name,
+        mimetype="application/xml",
+    )
 
 
 @app.route("/achats-ventes/<int:entry_id>/edit", methods=["POST"])
@@ -17588,6 +17828,19 @@ def intake_pdf(rid):
     con.close()
     if not r:
         return "introuvable", 404
+
+    # PDF de suivi historique/original : ne jamais le régénérer par-dessus.
+    if lang == "fr" and request.args.get("rebuild") != "1":
+        original_followup = repair_original_pdf(r, "original_followup_pdf_path")
+        if original_followup:
+            force_download = request.args.get("download") == "1"
+            return send_pdf_with_title(
+                original_followup,
+                f"Suivi de réparation - {r['client_name']}",
+                download_name=original_followup.name,
+                as_attachment=force_download,
+            )
+
 
     bio = io.BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
@@ -21129,6 +21382,18 @@ def invoice_pdf(rid):
         return "introuvable", 404
     if not r["invoice_no"]:
         return "La réparation n'est pas clôturée.", 400
+
+    # Facture historique/originale importée : elle reste la référence.
+    # Le paramètre ?rebuild=1 permet volontairement de demander une reconstruction WOPR.
+    if lang == "fr" and request.args.get("rebuild") != "1":
+        original_invoice = repair_original_pdf(r, "original_invoice_pdf_path")
+        if original_invoice:
+            return send_pdf_with_title(
+                original_invoice,
+                f"Facture {r['invoice_no']} - {r['client_name']}",
+                download_name=original_invoice.name,
+                as_attachment=force_download,
+            )
 
     # V2.3.20 : une ancienne facture ODS peut avoir beaucoup plus de détails
     # dans son PDF d'origine que dans le Suivi importé. Tant que l'utilisateur
