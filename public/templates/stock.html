@@ -193,12 +193,14 @@
             <div class="stock-qty-wrap">
               <form method="post" action="{{ url_for('stock_quantity_adjust', item_id=item['id']) }}">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" class="stock-return-query" name="return_q" value="{{ q }}">
                 <input type="hidden" name="delta" value="-1">
                 <button class="stock-qty-btn wopr-action-delete" type="submit" title="Retirer 1">−</button>
               </form>
               <span class="stock-qty-value">{{ item['quantity'] or '' }}</span>
               <form method="post" action="{{ url_for('stock_quantity_adjust', item_id=item['id']) }}">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" class="stock-return-query" name="return_q" value="{{ q }}">
                 <input type="hidden" name="delta" value="1">
                 <button class="stock-qty-btn wopr-action-save" type="submit" title="Ajouter 1">+</button>
               </form>
@@ -268,6 +270,12 @@
   }
 
   if(search){
+    const syncReturnQuery = function(){
+      document.querySelectorAll('.stock-return-query').forEach(function(input){
+        input.value = search.value;
+      });
+    };
+
     search.addEventListener('input', function(){
       const raw = search.value.trim().toLocaleLowerCase('fr');
       const compact = normalize(search.value);
@@ -276,7 +284,10 @@
         const hayCompact=normalize(row.dataset.search||'');
         row.style.display=(!raw || hayRaw.includes(raw) || (compact && hayCompact.includes(compact)))?'':'none';
       });
+      syncReturnQuery();
     });
+
+    syncReturnQuery();
   }
 
   function openModal(el){ el.classList.add('open'); el.setAttribute('aria-hidden','false'); }

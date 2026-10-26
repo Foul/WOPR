@@ -406,52 +406,27 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-abby-entry.active{
 
 
 
-/* ===== V11 — Services : logos plus lisibles ===== */
-.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry{
-  background:#f4f6f7!important;
-  border:2px solid #5d7f96!important;
-  color:#111!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.95)!important;
+/* ===== Statistiques dans Services ===== */
+.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry{
+  background:#eef8ff!important;
+  border:2px solid #315f80!important;
+  color:#103d66!important;
+  font-weight:900!important;
 }
-
-.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry:hover,
-.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry.active,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry:hover,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-sumup-entry.active{
-  background:#ffffff!important;
-  border-color:#77b7dc!important;
-  filter:none!important;
+.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry:hover,
+.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry.active,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry:hover,
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry.active{
+  background:#d9efff!important;
+  border-color:#3399ff!important;
 }
-
-.topbar .topnav.topnav-grouped .wopr-services-dropdown .sumup-mark i{
-  background:#111!important;
+body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-stats-entry{
+  border-radius:0!important;
+  box-shadow:2px 2px 0 #07131d!important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;
+  text-transform:uppercase!important;
 }
-
-.topbar .topnav.topnav-grouped .wopr-services-dropdown .sumup-wordmark{
-  color:#111!important;
-  text-shadow:none!important;
-}
-
-.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry{
-  background:#f8f7ff!important;
-  border:2px solid #7764b6!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.95)!important;
-}
-
-.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry:hover,
-.topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry.active,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry:hover,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-services-dropdown > .wopr-abby-entry.active{
-  background:#ffffff!important;
-  border-color:#9c7cff!important;
-}
-
-.topbar .topnav.topnav-grouped .wopr-services-dropdown .wopr-abby-logo{
-  filter:brightness(1.08) saturate(1.05)!important;
-}
-
 
 /* ===== V10 — Suivi direct / Stock dans Gestion ===== */
 .topbar .topnav.topnav-grouped .wopr-suivi-direct,
@@ -476,7 +451,7 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
 }
 
 
-/* ===== FIX TOPBAR DESKTOP — WOPR 2.6.1 ===== */
+/* ===== RESTAURATION MODE CLIENT — référence GitHub v2.6.2 ===== */
 .topbar{
   display:flex!important;
   align-items:center!important;
@@ -485,264 +460,50 @@ body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
   box-sizing:border-box!important;
   gap:10px!important;
 }
-
 .topbar .brand-zone{
   flex:0 0 auto!important;
   width:auto!important;
   min-width:0!important;
 }
-
 .topbar .normal-mode-topbar-logo,
 .topbar .client-mode-topbar-logo{
   flex:0 0 auto!important;
   position:static!important;
+  left:auto!important;
+  right:auto!important;
+  top:auto!important;
   transform:none!important;
   margin:0 8px!important;
 }
 
-.topbar .topnav.topnav-grouped,
-body.theme-8bit .topbar .topnav.topnav-grouped{
-  display:flex!important;
-  flex:1 1 auto!important;
-  width:auto!important;
-  min-width:0!important;
-  max-width:none!important;
-  align-items:center!important;
-  justify-content:flex-start!important;
-  grid-template-columns:none!important;
-  overflow:visible!important;
-  margin:0!important;
-  padding:0!important;
-}
-
-.topbar .topnav.topnav-grouped .wopr-nav-cluster,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-cluster{
-  display:flex!important;
-  flex:1 1 auto!important;
-  width:auto!important;
-  min-width:0!important;
-  max-width:none!important;
-  flex-wrap:nowrap!important;
-  align-items:center!important;
-}
-
-.topbar .topnav.topnav-grouped .topbar-search,
-body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
-  flex:1 1 220px!important;
-  width:auto!important;
-  min-width:170px!important;
-  max-width:280px!important;
-}
-
-.topbar .topnav.topnav-grouped .wopr-lock-form,
-body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-form{
-  flex:0 0 64px!important;
-  width:64px!important;
-  min-width:64px!important;
-  max-width:64px!important;
-  margin-left:4px!important;
-}
-
-@media (max-width:1600px){
-  body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-repairs > summary{
-    width:110px!important;
-  }
-
-  body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-docs > summary{
-    width:100px!important;
-  }
-
-  body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-management > summary{
-    width:94px!important;
-  }
-
-  body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-services > summary{
-    width:100px!important;
-  }
-
-  .topbar .topnav.topnav-grouped .topbar-search,
-  body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
-    min-width:150px!important;
-    max-width:230px!important;
-  }
-}
-
-
-
-
-/* ===== WOPR 2.6.1 — FIX DÉFINITIF TOPBAR 8-BIT WINDOWS / DPI =====
-   Sur Windows, la largeur CSS effective peut tomber sous 1900 px à cause du DPI.
-   app.css donne alors 100% de largeur à .brand-zone, tandis qu'une règle plus
-   tardive remet .topbar en nowrap : la navigation entière est repoussée hors écran.
-   On impose ici une vraie topbar 2 lignes uniquement dans cette plage :
-   identité en haut, navigation complète en dessous. */
-@media (max-width:1900px) and (min-width:901px){
-  html body.theme-8bit:has(.normal-mode-topbar-logo) .topbar{
-    display:flex!important;
-    flex-wrap:wrap!important;
-    align-items:center!important;
-    justify-content:flex-start!important;
-    gap:8px 12px!important;
-    min-height:auto!important;
-    overflow:visible!important;
-  }
-
-  html body.theme-8bit .topbar .brand-zone{
-    display:flex!important;
-    width:auto!important;
-    max-width:none!important;
-    flex:0 0 auto!important;
-    min-width:0!important;
-    margin:0!important;
-  }
-
-  html body.theme-8bit:has(.normal-mode-topbar-logo) .normal-mode-topbar-logo{
-    position:static!important;
-    left:auto!important;
-    right:auto!important;
-    top:auto!important;
-    transform:none!important;
-    flex:1 1 140px!important;
-    width:auto!important;
-    min-width:120px!important;
-    max-width:none!important;
-    height:62px!important;
-    margin:0 8px!important;
-  }
-
-  html body.theme-8bit:has(.normal-mode-topbar-logo) .normal-mode-topbar-logo img{
-    max-width:220px!important;
-    max-height:58px!important;
-    margin:auto!important;
-  }
-
-  /* La navigation occupe toute la deuxième ligne. */
-  html body.theme-8bit .topbar .topnav.topnav-grouped{
-    display:flex!important;
-    flex:0 0 100%!important;
-    width:100%!important;
-    min-width:0!important;
-    max-width:100%!important;
-    margin:0!important;
-    padding:3px 0 5px!important;
-    align-items:center!important;
-    justify-content:flex-start!important;
-    flex-wrap:nowrap!important;
-    overflow:visible!important;
-    gap:0!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-cluster{
-    display:flex!important;
-    flex:1 1 auto!important;
-    width:auto!important;
-    min-width:0!important;
-    max-width:none!important;
-    align-items:center!important;
-    justify-content:flex-start!important;
-    flex-wrap:nowrap!important;
-    overflow:visible!important;
-    gap:4px!important;
-  }
-
-  /* La recherche absorbe les différences de DPI au lieu de pousser les menus. */
-  html body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
-    flex:1 1 190px!important;
-    width:auto!important;
-    min-width:120px!important;
-    max-width:250px!important;
-    margin:0!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-suivi-direct{
-    flex:0 0 100px!important;
-    width:100px!important;
-    min-width:100px!important;
-    max-width:100px!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-docs > summary{
-    width:104px!important;
-    min-width:104px!important;
-    max-width:104px!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-management > summary{
-    width:96px!important;
-    min-width:96px!important;
-    max-width:96px!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-services > summary{
-    width:100px!important;
-    min-width:100px!important;
-    max-width:100px!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-security-direct{
-    flex:0 0 104px!important;
-    width:104px!important;
-    min-width:104px!important;
-    max-width:104px!important;
-  }
-
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-lock-form{
-    flex:0 0 58px!important;
-    width:58px!important;
-    min-width:58px!important;
-    max-width:58px!important;
-    margin-left:4px!important;
-  }
-}
-
-/* En dessous, on autorise le retour à la ligne du cluster plutôt que de
-   faire disparaître des boutons hors écran. */
-@media (max-width:1250px) and (min-width:901px){
-  html body.theme-8bit .topbar .topnav.topnav-grouped{
-    align-items:flex-start!important;
-  }
-  html body.theme-8bit .topbar .topnav.topnav-grouped .wopr-nav-cluster{
-    flex-wrap:wrap!important;
-  }
-  html body.theme-8bit .topbar .topnav.topnav-grouped .topbar-search{
-    flex:1 1 210px!important;
-    max-width:none!important;
-  }
-}
-
-
-/* Mode Client — badge centré */
 .client-mode-nav{
-  flex:1 1 100% !important;
-  width:100% !important;
-  display:flex !important;
-  justify-content:center !important;
-  align-items:center !important;
+  flex:1 1 100%!important;
+  width:100%!important;
+  display:flex!important;
+  justify-content:center!important;
+  align-items:center!important;
+  position:relative!important;
+  margin:0!important;
 }
 .client-mode-badge{
-  margin:0 auto !important;
-  width:fit-content !important;
-  max-width:calc(100vw - 32px) !important;
-  text-align:center !important;
+  margin:0 auto!important;
+  width:fit-content!important;
+  max-width:calc(100vw - 32px)!important;
+  text-align:center!important;
 }
 body.theme-8bit .client-mode-badge{
-  border:3px solid #07131d !important;
-  border-radius:0 !important;
-  background:#dcecff !important;
-  color:#103d66 !important;
-  padding:7px 12px !important;
+  border:3px solid #07131d!important;
+  border-radius:0!important;
+  background:#dcecff!important;
+  color:#103d66!important;
+  padding:7px 12px!important;
   box-shadow:
     inset 2px 2px 0 rgba(255,255,255,.72),
     inset -2px -2px 0 rgba(0,0,0,.14),
-    3px 3px 0 #07131d !important;
-  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
-  font-weight:900 !important;
-  text-transform:uppercase !important;
-}
-
-
-.client-mode-nav{
-  position:relative !important;
+    3px 3px 0 #07131d!important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;
+  font-weight:900!important;
+  text-transform:uppercase!important;
 }
 .client-mode-admin-form{
   position:absolute;
@@ -767,45 +528,42 @@ body.theme-8bit .client-mode-badge{
 .client-mode-admin-btn:hover{
   background:rgba(255,255,255,.12);
 }
-
 body.theme-8bit .client-mode-admin-btn{
-  border:3px solid #07131d !important;
-  border-radius:0 !important;
-  background:#ffedbd !important;
-  color:#6b4500 !important;
-  padding:7px 12px !important;
+  border:3px solid #07131d!important;
+  border-radius:0!important;
+  background:#ffedbd!important;
+  color:#6b4500!important;
+  padding:7px 12px!important;
   box-shadow:
     inset 2px 2px 0 rgba(255,255,255,.70),
     inset -2px -2px 0 rgba(0,0,0,.14),
-    3px 3px 0 #07131d !important;
-  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
-  font-weight:900 !important;
-  text-transform:uppercase !important;
+    3px 3px 0 #07131d!important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important;
+  font-weight:900!important;
+  text-transform:uppercase!important;
 }
 body.theme-8bit .client-mode-admin-btn:hover{
-  transform:translate(1px,1px) !important;
+  transform:translate(1px,1px)!important;
   box-shadow:
     inset 2px 2px 0 rgba(255,255,255,.60),
     inset -2px -2px 0 rgba(0,0,0,.10),
-    2px 2px 0 #07131d !important;
+    2px 2px 0 #07131d!important;
 }
 body.theme-8bit .client-mode-admin-btn:active{
-  transform:translate(3px,3px) !important;
-  box-shadow:none !important;
+  transform:translate(3px,3px)!important;
+  box-shadow:none!important;
 }
-
 @media (max-width:900px){
   .client-mode-nav{
-    flex-wrap:wrap !important;
-    gap:8px !important;
+    flex-wrap:wrap!important;
+    gap:8px!important;
   }
   .client-mode-admin-form{
-    position:static !important;
-    transform:none !important;
-    margin:0 auto !important;
+    position:static!important;
+    transform:none!important;
+    margin:0 auto!important;
   }
 }
-
 
 </style>
 </head>
@@ -908,6 +666,9 @@ body.theme-8bit .client-mode-admin-btn:active{
           </a>
           <a href="{{ url_for('abby_page') }}" class="wopr-service-entry wopr-abby-entry {% if request.endpoint and request.endpoint.startswith('abby_') %}active{% endif %}">
             <img src="{{ url_for('static', filename='abby_logo.svg') }}" alt="Abby" class="wopr-abby-logo">
+          </a>
+          <a href="{{ url_for('stats_page') }}" class="wopr-service-entry wopr-stats-entry {% if request.endpoint in ['stats_page','tracking_stats_page'] %}active{% endif %}">
+            <span class="nav-ico" aria-hidden="true">📊</span><span>Statistiques</span>
           </a>
         </div>
       </details>
@@ -1469,10 +1230,6 @@ document.addEventListener('click', async function (event) {
   }
 })();
 </script>
-
-
-
-
 
 </body>
 </html>

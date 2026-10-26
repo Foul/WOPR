@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Statistiques - WOPR{% endblock %}
+{% block body %}
+<div class="stats-head">
+  <div>
+    <h1>📊 Statistiques</h1>
+    <p>Statistiques externes de Foul-Fix : site web et portail de suivi client.</p>
+  </div>
+</div>
+
+<nav class="stats-tabs" aria-label="Sections statistiques">
+  <a href="{{ url_for('stats_page', tab='suivi') }}" class="stats-tab {% if tab == 'suivi' %}active{% endif %}">🛠️ Stats suivi</a>
+  <a href="{{ url_for('stats_page', tab='ga4') }}" class="stats-tab {% if tab == 'ga4' %}active{% endif %}">🌐 Google Analytics</a>
+</nav>
+
+{% if tab == 'ga4' %}
+<section class="stats-card">
+  <div class="stats-card-head">
+    <div><h2>🌐 foul-fix.fr — Google Analytics</h2>{% if ga4_stats %}<small>Mis à jour {{ ga4_stats.updated_at }}</small>{% endif %}</div>
+    {% if ga4_error %}<span class="stats-badge stats-badge-error">{{ ga4_error }}</span>{% else %}<span class="stats-badge">GA4</span>{% endif %}
+  </div>
+  {% if ga4_stats %}
+  <div class="stats-grid stats-grid-3">
+    <article class="stats-kpi"><span>Aujourd'hui</span><strong>{{ ga4_stats.today.users }}</strong><small>visiteur(s)<br>{{ ga4_stats.today.sessions }} session(s) · {{ ga4_stats.today.views }} page(s)</small></article>
+    <article class="stats-kpi"><span>Ce mois</span><strong>{{ ga4_stats.month.users }}</strong><small>visiteur(s)<br>{{ ga4_stats.month.sessions }} session(s) · {{ ga4_stats.month.views }} page(s)</small></article>
+    <article class="stats-kpi"><span>Cette année</span><strong>{{ ga4_stats.year.users }}</strong><small>visiteur(s)<br>{{ ga4_stats.year.sessions }} session(s) · {{ ga4_stats.year.views }} page(s)</small></article>
+  </div>
+  {% else %}
+  <div class="stats-empty">Statistiques Google Analytics indisponibles.</div>
+  {% endif %}
+</section>
+{% else %}
+<section class="stats-card">
+  <div class="stats-card-head">
+    <div><h2>🛠️ Consultations du suivi client</h2><small>Résumé des accès au portail de suivi Foul-Fix</small></div>
+    {% if tracking_error %}<span class="stats-badge stats-badge-error">{{ tracking_error }}</span>{% else %}<span class="stats-badge">SUIVI</span>{% endif %}
+  </div>
+  <div class="stats-grid stats-grid-4">
+    <article class="stats-kpi"><span>Aujourd'hui</span><strong>{{ tracking.today.views or 0 }}</strong><small>vue(s) · {{ tracking.today.unique_visitors or 0 }} visiteur(s)</small></article>
+    <article class="stats-kpi"><span>7 jours</span><strong>{{ tracking.week.views or 0 }}</strong><small>vue(s) · {{ tracking.week.unique_visitors or 0 }} visiteur(s)</small></article>
+    <article class="stats-kpi"><span>Ce mois</span><strong>{{ tracking.month.views or 0 }}</strong><small>vue(s) · {{ tracking.month.unique_visitors or 0 }} visiteur(s)</small></article>
+    <article class="stats-kpi"><span>Total</span><strong>{{ tracking.total_views or 0 }}</strong><small>consultation(s)</small></article>
+  </div>
+  <div class="tracking-detail-head">
+    <h3>📋 Détail des consultations</h3>
+    <a class="tracking-hidden-toggle" href="{{ url_for('stats_page', tab='suivi', hidden=0 if show_hidden else 1) }}">{{ '🙈 Masquer les entrées masquées' if show_hidden else '👁️ Afficher les entrées masquées' }}</a>
+  </div>
+  {% if tracking_rows %}
+  <div class="tracking-table-wrap"><table class="tracking-table">
+    <thead><tr><th>Code / dossier</th><th>Client</th><th>Matériel</th><th>Statut</th><th>Vues</th><th>Visiteurs</th><th>1re vue</th><th>Dernière vue</th><th>Actions</th></tr></thead>
+    <tbody>{% for row in tracking_rows %}
+      <tr class="{% if row.hidden %}tracking-row-hidden{% endif %}">
+        <td><strong>{{ row.code }}</strong>{% if row.dossier_no %}<small>Dossier {{ row.dossier_no }}</small>{% endif %}</td>
+        <td>{{ row.client_name or '—' }}</td><td>{{ row.device or '—' }}</td><td>{{ row.status or '—' }}</td>
+        <td class="tracking-num">{{ row.views }}</td><td class="tracking-num">{{ row.unique_visitors }}</td><td>{{ row.first_view_at or '—' }}</td><td>{{ row.last_view_at or '—' }}</td>
+        <td class="tracking-actions-cell">
+          {% if row.repair_id %}<a class="tracking-mini-btn" href="{{ url_for('repair_detail', rid=row.repair_id) }}" title="Ouvrir le dossier">🗂️</a>{% endif %}
+          {% if row.preview_url %}<a class="tracking-mini-btn" href="{{ row.preview_url }}" target="_blank" rel="noopener" title="Aperçu du suivi client">🌐</a>{% endif %}
+          <form method="post" action="{{ url_for('tracking_stats_hide', code=row.code) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="stats"><input type="hidden" name="hidden" value="{{ 0 if row.hidden else 1 }}"><button class="tracking-mini-btn" type="submit" title="{{ 'Réafficher' if row.hidden else 'Masquer' }}">{{ '👁️' if row.hidden else '🙈' }}</button></form>
+          <form method="post" action="{{ url_for('tracking_stats_delete', code=row.code) }}" onsubmit="return confirm('Supprimer les statistiques de consultation pour {{ row.code }} ?');"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="stats"><button class="tracking-mini-btn tracking-delete" type="submit" title="Supprimer les statistiques">🗑️</button></form>
+        </td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="stats-empty tracking-empty">Aucune consultation détaillée à afficher.</div>{% endif %}
+</section>
+{% endif %}
+
+<style>
+.stats-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}.stats-head h1{margin:0 0 4px}.stats-head p{margin:0;color:#667789}
+.stats-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}.stats-tab{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border:1px solid #b9c8d4;border-radius:9px;background:#fff;color:#173047;text-decoration:none;font-weight:800}.stats-tab:hover,.stats-tab.active{background:#3399ff;color:#fff;border-color:#2585df}
+.stats-card{background:#fff;border:1px solid #cbd7e0;border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(20,40,60,.08)}.stats-card-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px}.stats-card-head h2{margin:0 0 3px}.stats-card-head small{color:#667789}.stats-badge{padding:4px 8px;border:1px solid #176f4e;border-radius:7px;background:#e7f7f0;color:#176f4e;font-size:11px;font-weight:900}.stats-badge-error{border-color:#a52b22;background:#fff0ee;color:#a52b22;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stats-grid{display:grid;gap:10px}.stats-grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.stats-grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.stats-kpi{min-width:0;padding:13px;border:1px solid #c8d8e5;border-radius:9px;background:#f7fbff;display:grid;gap:4px}.stats-kpi>span{font-weight:800;color:#173047}.stats-kpi>strong{font-size:30px;line-height:1;color:#103d66}.stats-kpi>small{color:#53606b;line-height:1.45}.stats-empty{padding:14px;border:1px dashed #9aabba;border-radius:8px;background:#f7f9fb;color:#53606b}.stats-actions{display:flex;justify-content:flex-start;margin-top:14px}.tracking-detail-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 9px}.tracking-detail-head h3{margin:0}.tracking-hidden-toggle{font-size:12px;font-weight:800;text-decoration:none;color:#1765a3}.tracking-table-wrap{width:100%;overflow:auto;border:1px solid #ccd8e2;border-radius:9px}.tracking-table{width:100%;border-collapse:collapse;font-size:12px}.tracking-table th,.tracking-table td{padding:8px 9px;border-bottom:1px solid #e1e8ee;text-align:left;vertical-align:middle;white-space:nowrap}.tracking-table th{background:#edf5fb;color:#173047;font-size:11px;text-transform:uppercase}.tracking-table td:nth-child(2),.tracking-table td:nth-child(3){white-space:normal;min-width:125px}.tracking-table td:first-child strong,.tracking-table td:first-child small{display:block}.tracking-table td:first-child small{color:#6b7985;margin-top:2px}.tracking-num{text-align:center!important;font-weight:900}.tracking-actions-cell{display:flex;align-items:center;gap:4px}.tracking-actions-cell form{margin:0}.tracking-mini-btn{display:inline-flex;align-items:center;justify-content:center;width:29px;height:27px;padding:0;border:1px solid #9eb3c3;border-radius:5px;background:#fff;color:#173047;text-decoration:none;cursor:pointer;font-size:13px}.tracking-mini-btn:hover{background:#eaf5ff}.tracking-delete:hover{background:#fff0ee;border-color:#c7564c}.tracking-row-hidden{opacity:.58;background:#f2f2f2}.tracking-empty{margin-top:12px}body.theme-8bit .tracking-table-wrap,body.theme-8bit .tracking-mini-btn{border-radius:0!important}body.theme-8bit .tracking-table-wrap{border:2px solid #07131d!important;box-shadow:3px 3px 0 #07131d!important}body.theme-8bit .tracking-table{font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important}body.theme-8bit .tracking-table th{background:#bfe5f7!important;border-bottom:2px solid #07131d!important}body.theme-8bit .tracking-table td{border-bottom:1px solid #65839a!important}body.theme-8bit .tracking-mini-btn{border:2px solid #07131d!important;box-shadow:1px 1px 0 #07131d!important;background:#edf6fd!important}body.theme-8bit .tracking-hidden-toggle{font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important}
+body.theme-8bit .stats-tabs{gap:8px}body.theme-8bit .stats-tab,body.theme-8bit .stats-card,body.theme-8bit .stats-kpi,body.theme-8bit .stats-badge{border-radius:0!important;font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace!important}body.theme-8bit .stats-tab{border:2px solid #07131d!important;box-shadow:2px 2px 0 #07131d!important;background:#dcecff!important;color:#103d66!important}body.theme-8bit .stats-tab.active,body.theme-8bit .stats-tab:hover{background:#41b6eb!important;color:#07131d!important}body.theme-8bit .stats-card{border:2px solid #07131d!important;box-shadow:4px 4px 0 #07131d!important;background:#f7fbff!important}body.theme-8bit .stats-kpi{border:2px solid #2d5876!important;box-shadow:2px 2px 0 rgba(7,19,29,.25)!important;background:#edf6fd!important}body.theme-8bit .stats-badge{border:2px solid #07131d!important;box-shadow:2px 2px 0 #07131d!important}
+@media(max-width:950px){.stats-grid-4,.stats-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.stats-grid-4,.stats-grid-3{grid-template-columns:1fr}.stats-card-head{align-items:flex-start;flex-direction:column}.stats-badge-error{max-width:100%}}
+</style>
+{% endblock %}

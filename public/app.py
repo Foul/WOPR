@@ -35,23 +35,11 @@ import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet, InvalidToken
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-def europe_paris_tz():
-    """
-    Fuseau Europe/Paris robuste sous Linux et Windows.
-    Utilise tzdata/zoneinfo si disponible ; sinon retombe sur le fuseau local
-    de la machine, ce qui évite de casser SumUp si Windows n'a pas encore
-    installé la base IANA.
-    """
-    try:
-        return ZoneInfo("Europe/Paris")
-    except ZoneInfoNotFoundError:
-        return datetime.now().astimezone().tzinfo or timezone.utc
-
+from zoneinfo import ZoneInfo
 
 try:
     from google.oauth2.credentials import Credentials
+    from google.oauth2 import service_account
     from google.auth.transport.requests import Request as GoogleRequest
     from google_auth_oauthlib.flow import Flow
     from googleapiclient.discovery import build as google_build
@@ -101,21 +89,6 @@ MONTH_FOLDER_NAMES = {
     10: "10 - Octobre",
     11: "11 - Novembre",
     12: "12 - Décembre",
-}
-
-MONTH_NAMES = {
-    1: "Janvier",
-    2: "Février",
-    3: "Mars",
-    4: "Avril",
-    5: "Mai",
-    6: "Juin",
-    7: "Juillet",
-    8: "Août",
-    9: "Septembre",
-    10: "Octobre",
-    11: "Novembre",
-    12: "Décembre",
 }
 def _database_score(path):
     """Évalue une base WOPR par son contenu réel, jamais par son nom."""
@@ -304,7 +277,7 @@ PDF_LANGUAGES = {
 }
 
 PDF_FRENCH = {
-    "invoice": "FACTURE", "invoice_no": "Facture n°", "date": "Date", "client": "Client", "phone": "Tél.",
+    "invoice": "FACTURE", "invoice_no": "Facture n°", "quote_no": "Devis n°", "order_no": "Commande n°", "date": "Date", "client": "Client", "phone": "Tél.",
     "quantity": "Quantité", "description": "Désignation", "unit_price": "P.U.", "total": "Total",
     "vat_notice": "TVA non applicable, art. 293 B du CGI", "invoice_euros": "Facture en euros", "net_payable": "Net à payer",
     "abandon_1": "Tout matériel confié et non récupéré dans un délai de 3 mois après information de mise à disposition sera considéré comme abandonné.",
@@ -328,7 +301,7 @@ PDF_FRENCH = {
 
 PDF_TRANSLATIONS = {
     "en": {
-        "invoice":"INVOICE","invoice_no":"Invoice no.","date":"Date","client":"Customer","phone":"Phone","quantity":"Quantity","description":"Description","unit_price":"Unit price","total":"Total",
+        "invoice":"INVOICE","invoice_no":"Invoice no.","quote_no":"Quote no.","order_no":"Order no.","date":"Date","client":"Customer","phone":"Phone","quantity":"Quantity","description":"Description","unit_price":"Unit price","total":"Total",
         "vat_notice":"VAT not applicable - Art. 293 B of the French Tax Code","invoice_euros":"Invoice in euros","net_payable":"Amount due",
         "abandon_1":"Any equipment entrusted to us and not collected within 3 months after notification that it is available will be considered abandoned.",
         "abandon_2":"After this period, the equipment may be destroyed or recycled, with no possibility of claim or compensation.",
@@ -341,7 +314,7 @@ PDF_TRANSLATIONS = {
         "warranty_conditions":"Warranty conditions","warranty_only":"The warranty covers only the defects mentioned above.","remarks":"Notes","thanks":"Thank you for your trust.","siret_no":"SIRET No.","ape_code":"APE code","legal_registration_exemption":"Exempt from registration with the Trade and Companies Register, pursuant to Article L. 123-1-1 of the French Commercial Code",
     },
     "uk": {
-        "invoice":"РАХУНОК-ФАКТУРА","invoice_no":"Рахунок №","date":"Дата","client":"Клієнт","phone":"Тел.","quantity":"Кількість","description":"Найменування","unit_price":"Ціна за од.","total":"Сума",
+        "invoice":"РАХУНОК-ФАКТУРА","invoice_no":"Рахунок №","quote_no":"Кошторис №","order_no":"Замовлення №","date":"Дата","client":"Клієнт","phone":"Тел.","quantity":"Кількість","description":"Найменування","unit_price":"Ціна за од.","total":"Сума",
         "vat_notice":"ПДВ не застосовується - ст. 293 B Податкового кодексу Франції","invoice_euros":"Рахунок у євро","net_payable":"До сплати",
         "abandon_1":"Обладнання, передане нам і не забране протягом 3 місяців після повідомлення про готовність, вважатиметься залишеним.",
         "abandon_2":"Після цього строку обладнання може бути утилізоване або перероблене без можливості претензій чи компенсації.",
@@ -354,7 +327,7 @@ PDF_TRANSLATIONS = {
         "warranty_conditions":"Умови гарантії","warranty_only":"Гарантія поширюється лише на зазначені вище несправності.","remarks":"Примітки","thanks":"Дякуємо за довіру.","siret_no":"№ SIRET","ape_code":"Код APE","legal_registration_exemption":"Звільнено від реєстрації в Реєстрі торгівлі та компаній відповідно до статті L. 123-1-1 Торгового кодексу Франції",
     },
     "es": {
-        "invoice":"FACTURA","invoice_no":"Factura n.º","date":"Fecha","client":"Cliente","phone":"Tel.","quantity":"Cantidad","description":"Descripción","unit_price":"P. unit.","total":"Total",
+        "invoice":"FACTURA","invoice_no":"Factura n.º","quote_no":"Presupuesto n.º","order_no":"Pedido n.º","date":"Fecha","client":"Cliente","phone":"Tel.","quantity":"Cantidad","description":"Descripción","unit_price":"P. unit.","total":"Total",
         "vat_notice":"IVA no aplicable - art. 293 B del Código Fiscal francés","invoice_euros":"Factura en euros","net_payable":"Total a pagar",
         "abandon_1":"Todo material confiado y no recogido en un plazo de 3 meses tras avisar de su disponibilidad se considerará abandonado.","abandon_2":"Pasado este plazo, el material podrá destruirse o reciclarse sin posibilidad de reclamación ni indemnización.",
         "payment_1":"Condiciones de pago: pago a la recepción de la factura","payment_2":"No se concede descuento por pago anticipado","payment_3":"Todo retraso de pago puede generar intereses al tipo legal vigente.","payment_4":"Indemnización fija por gastos de cobro en caso de retraso: 40 EUR",
@@ -366,7 +339,7 @@ PDF_TRANSLATIONS = {
         "warranty_conditions":"Condiciones de garantía","warranty_only":"La garantía cubre únicamente los defectos indicados anteriormente.","remarks":"Observaciones","thanks":"Gracias por su confianza.","siret_no":"N.º SIRET","ape_code":"Código APE","legal_registration_exemption":"Exento de inscripción en el Registro Mercantil y de Sociedades, de conformidad con el artículo L. 123-1-1 del Código de Comercio francés",
     },
     "de": {
-        "invoice":"RECHNUNG","invoice_no":"Rechnung Nr.","date":"Datum","client":"Kunde","phone":"Tel.","quantity":"Menge","description":"Bezeichnung","unit_price":"Einzelpreis","total":"Gesamt",
+        "invoice":"RECHNUNG","invoice_no":"Rechnung Nr.","quote_no":"Angebot Nr.","order_no":"Bestellung Nr.","date":"Datum","client":"Kunde","phone":"Tel.","quantity":"Menge","description":"Bezeichnung","unit_price":"Einzelpreis","total":"Gesamt",
         "vat_notice":"MwSt. nicht anwendbar - Art. 293 B des französischen Steuergesetzbuchs","invoice_euros":"Rechnung in Euro","net_payable":"Zu zahlen",
         "abandon_1":"Überlassenes und trotz Bereitstellungsmitteilung innerhalb von 3 Monaten nicht abgeholtes Gerät gilt als aufgegeben.","abandon_2":"Nach Ablauf dieser Frist kann das Gerät ohne Anspruch auf Reklamation oder Entschädigung entsorgt oder recycelt werden.",
         "payment_1":"Zahlungsbedingungen: Zahlung bei Rechnungserhalt","payment_2":"Kein Skonto bei vorzeitiger Zahlung","payment_3":"Bei Zahlungsverzug können Verzugszinsen zum geltenden gesetzlichen Zinssatz berechnet werden.","payment_4":"Pauschale Beitreibungskosten bei Zahlungsverzug: 40 EUR",
@@ -378,7 +351,7 @@ PDF_TRANSLATIONS = {
         "warranty_conditions":"Garantiebedingungen","warranty_only":"Die Garantie deckt ausschließlich die oben genannten Mängel ab.","remarks":"Bemerkungen","thanks":"Vielen Dank für Ihr Vertrauen.","siret_no":"SIRET-Nr.","ape_code":"APE-Code","legal_registration_exemption":"Von der Eintragung in das französische Handels- und Gesellschaftsregister gemäß Artikel L. 123-1-1 des französischen Handelsgesetzbuchs befreit",
     },
     "it": {
-        "invoice":"FATTURA","invoice_no":"Fattura n.","date":"Data","client":"Cliente","phone":"Tel.","quantity":"Quantità","description":"Descrizione","unit_price":"Prezzo unit.","total":"Totale",
+        "invoice":"FATTURA","invoice_no":"Fattura n.","quote_no":"Preventivo n.","order_no":"Ordine n.","date":"Data","client":"Cliente","phone":"Tel.","quantity":"Quantità","description":"Descrizione","unit_price":"Prezzo unit.","total":"Totale",
         "vat_notice":"IVA non applicabile - art. 293 B del Codice tributario francese","invoice_euros":"Fattura in euro","net_payable":"Da pagare",
         "abandon_1":"Il materiale affidato e non ritirato entro 3 mesi dalla comunicazione di disponibilità sarà considerato abbandonato.","abandon_2":"Trascorso tale termine, il materiale potrà essere distrutto o riciclato senza possibilità di reclamo o indennizzo.",
         "payment_1":"Condizioni di pagamento: pagamento al ricevimento della fattura","payment_2":"Nessuno sconto per pagamento anticipato","payment_3":"In caso di ritardo possono essere applicati interessi al tasso legale vigente.","payment_4":"Indennità forfettaria per spese di recupero in caso di ritardo: 40 EUR",
@@ -650,7 +623,7 @@ for _lang, _entries in PDF_FREE_TEXT_EXTRA.items():
 PDF_FREE_TEXT_REPAIR_EXTRA = {
     "en": {
         "Diagnostic et tentative de Réparation": "Diagnosis and attempted repair",
-        "Détail sur feuille de suivi": "Details on the service report",
+        "Détails sur la feuille de suivi": "Details on the service report",
         "Composant HS": "Faulty component",
         "Condensateur coté affichage HS et remplacé": "Faulty display-side capacitor replaced",
         "Condensateur côté affichage HS et remplacé": "Faulty display-side capacitor replaced",
@@ -684,7 +657,7 @@ PDF_FREE_TEXT_REPAIR_EXTRA = {
     },
     "uk": {
         "Diagnostic et tentative de Réparation": "Діагностика та спроба ремонту",
-        "Détail sur feuille de suivi": "Деталі у звіті про ремонт",
+        "Détails sur la feuille de suivi": "Деталі у звіті про ремонт",
         "Composant HS": "Несправний компонент",
         "Condensateur coté affichage HS et remplacé": "Несправний конденсатор з боку дисплея замінено",
         "Condensateur côté affichage HS et remplacé": "Несправний конденсатор з боку дисплея замінено",
@@ -718,7 +691,7 @@ PDF_FREE_TEXT_REPAIR_EXTRA = {
     },
     "es": {
         "Diagnostic et tentative de Réparation": "Diagnóstico e intento de reparación",
-        "Détail sur feuille de suivi": "Detalles en la hoja de seguimiento",
+        "Détails sur la feuille de suivi": "Detalles en la hoja de seguimiento",
         "Composant HS": "Componente defectuoso",
         "Condensateur coté affichage HS et remplacé": "Condensador del lado de la pantalla defectuoso y sustituido",
         "Condensateur côté affichage HS et remplacé": "Condensador del lado de la pantalla defectuoso y sustituido",
@@ -752,7 +725,7 @@ PDF_FREE_TEXT_REPAIR_EXTRA = {
     },
     "de": {
         "Diagnostic et tentative de Réparation": "Diagnose und Reparaturversuch",
-        "Détail sur feuille de suivi": "Details im Servicebericht",
+        "Détails sur la feuille de suivi": "Details im Servicebericht",
         "Composant HS": "Defektes Bauteil",
         "Condensateur coté affichage HS et remplacé": "Defekter Kondensator auf der Displayseite ersetzt",
         "Condensateur côté affichage HS et remplacé": "Defekter Kondensator auf der Displayseite ersetzt",
@@ -786,7 +759,7 @@ PDF_FREE_TEXT_REPAIR_EXTRA = {
     },
     "it": {
         "Diagnostic et tentative de Réparation": "Diagnosi e tentativo di riparazione",
-        "Détail sur feuille de suivi": "Dettagli nel rapporto di assistenza",
+        "Détails sur la feuille de suivi": "Dettagli nel rapporto di assistenza",
         "Composant HS": "Componente guasto",
         "Condensateur coté affichage HS et remplacé": "Condensatore lato display guasto e sostituito",
         "Condensateur côté affichage HS et remplacé": "Condensatore lato display guasto e sostituito",
@@ -1673,7 +1646,7 @@ def _send_tracking_email(recipient, subject, message):
         return False, f"E-mail non envoyé : {exc}"
 
 
-def send_tracking_notification(rid, phase, force=False):
+def send_tracking_notification(rid, phase):
     """Envoie une notification unique sur un seul canal (SMS ou e-mail)."""
     if not bool(cfg().get("tracking_notifications_enabled", False)):
         return False, "Notifications de suivi désactivées", ""
@@ -1698,46 +1671,18 @@ def send_tracking_notification(rid, phase, force=False):
         if phase == "initial"
         else int(row["tracking_completion_notification_sent"] or 0) or int(row["tracking_completion_sms_sent"] or 0)
     )
-    if already_sent and not force:
+    if already_sent:
         con.close()
         return False, "Notification déjà envoyée", str(row["tracking_notification_channel"] or "")
 
     channel = str(row["tracking_notification_channel"] or "").strip().lower()
-
-    # Pour les notifications automatiques, un numéro français fixe (01 à 05, 09)
-    # ne doit pas bloquer un second numéro mobile disponible.
-    # On privilégie donc le premier 06/07 parmi téléphone principal et secondaire.
-    def _tracking_sms_phone(*values):
-        normalized_values = [
-            normalize_sms_phone(value)
-            for value in values
-            if str(value or "").strip()
-        ]
-        for candidate in normalized_values:
-            if re.fullmatch(r"\+33[67][0-9]{8}", candidate):
-                return candidate
-        # Les numéros internationaux restent acceptés s'ils sont déjà au format +...
-        # et ne correspondent pas à un numéro français fixe.
-        for candidate in normalized_values:
-            if (
-                re.fullmatch(r"\+[0-9]{6,15}", candidate)
-                and not re.fullmatch(r"\+33[1-59][0-9]{8}", candidate)
-            ):
-                return candidate
-        return ""
-
-    phone = _tracking_sms_phone(row["phone"], row["phone_secondary"])
+    phone = normalize_sms_phone(row["phone"] or "") or normalize_sms_phone(row["phone_secondary"] or "")
     email = str(row["email"] or row["email_secondary"] or "").strip()
     if channel not in {"sms", "email"}:
         channel = "sms" if phone else "email" if email and "@" in email else ""
-    if channel == "sms" and not phone:
-        channel = "email" if email and "@" in email else ""
-    elif channel == "email" and not (email and "@" in email):
-        channel = "sms" if phone else ""
-
     if not channel:
         con.close()
-        return False, "Aucun mobile SMS ou e-mail disponible", ""
+        return False, "Aucun téléphone ou e-mail disponible", ""
 
     ident = business_identity()
     message = _tracking_message(rid, phase, row, ident)
@@ -1904,7 +1849,7 @@ def _sumup_api_period(date_from, date_to):
     Convert inclusive local dates to SumUp UTC bounds.
     Foul-Fix operates in Europe/Paris; `newest_time` is exclusive here.
     """
-    tz = europe_paris_tz()
+    tz = ZoneInfo("Europe/Paris")
     start_local = datetime.combine(date_from, datetime.min.time(), tzinfo=tz)
     end_local = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=tz)
     return (
@@ -2021,7 +1966,7 @@ def _sumup_local_datetime(raw_timestamp):
         dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        local_dt = dt.astimezone(europe_paris_tz())
+        local_dt = dt.astimezone(ZoneInfo("Europe/Paris"))
         return local_dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
         return raw[:19].replace("T", " ")
@@ -3853,6 +3798,8 @@ def init_db():
     ensure_column(con, "quotes", "edited_in_app", "INTEGER DEFAULT 0")
     ensure_column(con, "repairs", "service_description", "TEXT")
     ensure_column(con, "repairs", "goods_description", "TEXT")
+    ensure_column(con, "repairs", "quote_no", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "order_no", "TEXT DEFAULT ''")
     ensure_column(con, "repairs", "payment_mode", "TEXT")
     ensure_column(con, "repairs", "payment_detail", "TEXT")
     ensure_column(con, "repairs", "system_name", "TEXT")
@@ -3861,9 +3808,6 @@ def init_db():
     ensure_column(con, "repairs", "legacy_source_year", "INTEGER")
     ensure_column(con, "repairs", "legacy_source_row", "INTEGER")
     ensure_column(con, "repairs", "legacy_imported", "INTEGER DEFAULT 0")
-    # PDF historiques/originaux importés : WOPR les sert tels quels, sans les recréer.
-    ensure_column(con, "repairs", "original_followup_pdf_path", "TEXT")
-    ensure_column(con, "repairs", "original_invoice_pdf_path", "TEXT")
     ensure_column(con, "repairs", "followup_year", "INTEGER")
     ensure_column(con, "repairs", "followup_month", "INTEGER")
     ensure_column(con, "repairs", "accounting_year", "INTEGER")
@@ -3970,9 +3914,6 @@ def init_db():
     # seule sa référence relative est conservée en base.
     ensure_column(con, "ledger_entries", "document_path", "TEXT")
     ensure_column(con, "ledger_entries", "document_original_name", "TEXT")
-    # V2.6.2 : une facture fournisseur peut conserver le PDF officiel ET son XML structuré.
-    ensure_column(con, "ledger_entries", "document_xml_path", "TEXT")
-    ensure_column(con, "ledger_entries", "document_xml_original_name", "TEXT")
 
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entry_date ON ledger_entries(entry_date)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_operation ON ledger_entries(operation)")
@@ -5858,74 +5799,6 @@ def seed_legacy_quotes37(con):
 def now():
     return datetime.now()
 
-
-def resolve_period_selection(
-    *,
-    requested_year=None,
-    available_years=None,
-    default_all_year=False,
-    search_active=False,
-):
-    """
-    Source unique pour les filtres année/mois de WOPR.
-
-    Règles :
-    - année courante + vue normale : mois courant par défaut ;
-    - année d'archive : toute l'année par défaut ;
-    - vue métier globale : toute l'année par défaut ;
-    - month=0 : « Toute l'année » explicite ;
-    - un mois choisi explicitement est conservé ;
-    - search_active neutralise le mois automatique.
-    """
-    current = now()
-    current_year = current.year
-
-    try:
-        year = int(requested_year if requested_year not in (None, "") else current_year)
-    except (TypeError, ValueError):
-        year = current_year
-
-    if available_years is not None:
-        valid_years = {int(y) for y in available_years}
-        if year not in valid_years:
-            year = current_year if current_year in valid_years else (
-                max(valid_years) if valid_years else current_year
-            )
-
-    raw_month = request.args.get("month")
-    explicit_month = raw_month not in (None, "")
-
-    if search_active:
-        selected_month = 0
-    elif explicit_month:
-        try:
-            selected_month = int(raw_month)
-        except (TypeError, ValueError):
-            selected_month = 0
-        if selected_month not in range(1, 13):
-            selected_month = 0
-    elif default_all_year:
-        selected_month = 0
-    elif year == current_year:
-        selected_month = current.month
-    else:
-        selected_month = 0
-
-    return year, selected_month
-
-
-def period_prefix(year, month=0):
-    """Retourne YYYY- ou YYYY-MM- pour les dates ISO de WOPR."""
-    if month:
-        return f"{int(year):04d}-{int(month):02d}-"
-    return f"{int(year):04d}-"
-
-
-def date_is_in_period(value, year, month=0):
-    """Teste l'appartenance d'une date texte ISO à une période."""
-    return str(value or "").startswith(period_prefix(year, month))
-
-
 def make_dossier_no():
     """
     Numéro de dossier lisible : JJMMAAAAHHMM (sans secondes).
@@ -6004,24 +5877,6 @@ def safe_document_name(name):
     return value or "Document.pdf"
 
 
-def repair_original_pdf(row, column_name):
-    """Retourne un PDF original importé, uniquement s'il reste sous DOCUMENTS_ROOT."""
-    if not row:
-        return None
-    try:
-        rel = str(row[column_name] or "").strip()
-    except Exception:
-        rel = ""
-    if not rel:
-        return None
-    try:
-        path = (DOCUMENTS_ROOT / rel).resolve()
-        path.relative_to(DOCUMENTS_ROOT.resolve())
-    except Exception:
-        return None
-    return path if path.is_file() and path.suffix.lower() == ".pdf" else None
-
-
 def _match_key(value):
     """Normalise un texte pour comparer noms de fournisseurs / numéros de facture."""
     value = unicodedata.normalize("NFKD", str(value or ""))
@@ -6082,28 +5937,18 @@ def supplier_document_filename(entry_date, party, invoice_no, original_name):
     return safe_document_name(f"{supplier}_{stem}{suffix}")
 
 
-def save_ledger_document(
-    entry_id,
-    storage,
-    replace_existing=False,
-    generate_xml_fallback=True,
-):
+def save_ledger_document(entry_id, storage):
     """
-    Classe les pièces fournisseur d'une ligne Achats/Ventes.
-
-    - document_path = document principal lisible (PDF officiel en priorité) ;
-    - document_xml_path = XML structuré associé ;
-    - un XML seul garde la génération PDF de secours historique ;
-    - si Abby fournit XML + vrai PDF, le PDF officiel remplace le PDF de secours.
+    Lie une facture fournisseur à une ligne Achats/Ventes et la range proprement.
+    Pas de sous-dossier par fournisseur : un seul dossier Fournisseurs par mois.
+    Les nouvelles pièces suivent le nom maison FOURNISSEUR_NumeroFacture.ext.
     """
     filename = str(getattr(storage, "filename", "") or "").strip()
     if not filename:
         return None
-
     suffix = Path(filename).suffix.lower()
     if suffix not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
         raise ValueError("Format non accepté : PDF, XML, JPG ou PNG uniquement.")
-
     raw = storage.read()
     if not raw:
         raise ValueError("Fichier vide.")
@@ -6115,237 +5960,89 @@ def save_ledger_document(
     if not row:
         con.close()
         raise ValueError("Ligne Achats/Ventes introuvable.")
-
-    def _row_value(name):
-        try:
-            return row[name]
-        except Exception:
-            return None
-
-    current_rel = str(_row_value("document_path") or "").strip()
-    current_xml_rel = str(_row_value("document_xml_path") or "").strip()
-
-    def _safe_existing(rel):
-        if not rel:
-            return None
-        try:
-            candidate = (DOCUMENTS_ROOT / rel).resolve()
-            root = DOCUMENTS_ROOT.resolve()
-            candidate.relative_to(root)
-            return candidate if candidate.is_file() else None
-        except Exception:
-            return None
-
-    current_file = _safe_existing(current_rel)
-    current_xml_file = _safe_existing(current_xml_rel)
-
-    # Anciennes versions : l'XML n'avait pas sa propre colonne.
-    # Si le PDF lié possède un XML frère, on le récupère automatiquement.
-    if current_xml_file is None and current_file:
-        sibling_xml = current_file.with_suffix(".xml")
-        if sibling_xml.is_file():
-            current_xml_file = sibling_xml
-
-    # ------------------------------------------------------------
-    # XML : pièce structurée secondaire
-    # ------------------------------------------------------------
-    if suffix == ".xml":
-        if current_xml_file and not replace_existing:
-            con.close()
-            raise ValueError("Un XML est déjà associé à cette facture.")
-
-        try:
-            info = parse_supplier_invoice_xml(raw, filename)
-        except Exception:
-            info = None
-
-        invoice_date = str(
-            (info or {}).get("entry_date") or row["entry_date"] or ""
-        )[:10]
-        folder = year_month_folder(
-            FOURNISSEURS_ROOT,
-            invoice_date,
-            supplier=False,
-            create=True,
-        )
-
-        invoice_for_name = str(
-            (info or {}).get("invoice_no") or row["invoice_no"] or ""
-        ).strip()
-        party_for_name = str(row["party"] or (info or {}).get("party") or "Fournisseur").strip()
-
-        if current_xml_file and replace_existing:
-            xml_dest = current_xml_file
-            xml_dest.write_bytes(raw)
-        else:
-            xml_name = supplier_document_filename(
-                invoice_date,
-                party_for_name,
-                invoice_for_name,
-                filename,
-            )
-            xml_name = str(Path(xml_name).with_suffix(".xml").name)
-            xml_dest = folder / xml_name
-
-            if xml_dest.exists():
-                # Réutilise seulement un XML strictement identique.
-                try:
-                    if xml_dest.stat().st_size == len(raw) and xml_dest.read_bytes() == raw:
-                        pass
-                    else:
-                        xml_dest = _unique_document_path(folder, Path(xml_name).stem, ".xml")
-                        xml_dest.write_bytes(raw)
-                except Exception:
-                    xml_dest = _unique_document_path(folder, Path(xml_name).stem, ".xml")
-                    xml_dest.write_bytes(raw)
-            else:
-                xml_dest.write_bytes(raw)
-
-        primary_rel = current_rel
-        primary_file = current_file
-
-        # XML seul : on conserve le comportement historique avec PDF de secours.
-        # XML + vrai PDF dans le même formulaire : aucun PDF synthétique n'est généré.
-        if generate_xml_fallback and not (primary_file and primary_file.is_file()):
-            if info:
-                pdf_dest = xml_dest.with_suffix(".pdf")
-                if not pdf_dest.exists():
-                    generate_supplier_xml_readable_pdf(raw, info, pdf_dest, filename)
-                primary_file = pdf_dest
-                primary_rel = str(pdf_dest.relative_to(DOCUMENTS_ROOT))
-            else:
-                # XML générique historique : il reste ouvrable comme justificatif principal.
-                primary_file = xml_dest
-                primary_rel = str(xml_dest.relative_to(DOCUMENTS_ROOT))
-
-        invoice_no = str((info or {}).get("invoice_no") or row["invoice_no"] or "").strip()
-        remarks = str(row["remarks"] or "").strip()
-        if info:
-            remarks = remarks.replace(
-                "Import Abby — facture électronique XML + copie PDF lisible", ""
-            ).strip(" —")
-            remarks = re.sub(
-                r"(?:\s*—\s*)?Facture Abby du \d{4}-\d{2}-\d{2}",
-                "",
-                remarks,
-            ).strip(" —")
-            remarks = re.sub(
-                r"(?:\s*—\s*)?Facture Abby du \d{2}[-/]\d{2}[-/]\d{4}",
-                "",
-                remarks,
-            ).strip(" —")
-            if info.get("entry_date"):
-                date_note = f"Facture Abby du {_abby_display_date(info.get('entry_date'))}"
-                remarks = " — ".join(x for x in [remarks, date_note] if x)
-
-        con.execute("""
-            UPDATE ledger_entries
-            SET invoice_no=?,
-                document_path=?,
-                document_xml_path=?,
-                document_xml_original_name=?,
-                remarks=?,
-                updated_at=?
-            WHERE id=?
-        """, (
-            invoice_no,
-            primary_rel or None,
-            str(xml_dest.relative_to(DOCUMENTS_ROOT)),
-            filename,
-            remarks,
-            now().isoformat(timespec="seconds"),
-            entry_id,
-        ))
-        con.commit()
+    if str(row["document_path"] or "").strip():
         con.close()
-        return xml_dest
+        raise ValueError("Une pièce justificative est déjà liée à cette ligne.")
 
-    # ------------------------------------------------------------
-    # PDF / image : document principal lisible
-    # ------------------------------------------------------------
-    if current_file and not replace_existing:
-        con.close()
-        raise ValueError("Un justificatif principal est déjà lié à cette ligne.")
+    folder = year_month_folder(FOURNISSEURS_ROOT, row["entry_date"], supplier=False, create=True)
 
-    folder = year_month_folder(
-        FOURNISSEURS_ROOT,
-        row["entry_date"],
-        supplier=False,
-        create=True,
-    )
-
+    # V2.3.95 — anti-doublon strict : avant même de fabriquer un nouveau nom,
+    # on cherche si CE fichier existe déjà dans Fournisseurs, quel que soit son nom.
+    # Exemple : une facture VistaPrint déjà classée manuellement doit être simplement
+    # liée à l'achat, jamais recopiée à côté sous un autre nom.
     dest = None
+    for existing in folder.iterdir():
+        if not existing.is_file() or existing.suffix.lower() not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
+            continue
+        try:
+            if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
+                dest = existing
+                break
+        except Exception:
+            continue
 
-    if replace_existing:
-        # Pour les anciens XML Abby, le PDF généré est généralement le frère de l'XML :
-        # on l'écrase directement avec le vrai PDF officiel.
-        if suffix == ".pdf" and current_file and current_file.suffix.lower() == ".pdf":
-            dest = current_file
-        elif suffix == ".pdf" and current_xml_file:
-            dest = current_xml_file.with_suffix(".pdf")
+    # V2.3.97 — priorité absolue au classement existant de Foul.
+    # Même si le PDF reçu à nouveau n'est pas strictement identique (métadonnées,
+    # régénération du fournisseur, etc.), on ne doit pas créer une seconde facture
+    # à côté si une pièce déjà classée correspond sans ambiguïté à la même facture.
+    if dest is None:
+        existing_docs = [
+            p for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+        ]
+        invoice_key = _match_key(row["invoice_no"]) if is_supplier_invoice_reference(
+            row["invoice_no"], party=row["party"], remarks=row["remarks"]
+        ) else ""
+        supplier_key = _match_key(row["party"])
 
-        if dest is not None:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(raw)
+        original_stem = Path(filename).stem.strip()
+        original_stem = re.sub(r"^(facture|invoice)[ _-]*", "", original_stem, flags=re.IGNORECASE).strip(" _-")
+        original_key = _match_key(original_stem)
+        # Un identifiant trop court/générique ne doit jamais servir à rapprocher.
+        if len(original_key) < 5:
+            original_key = ""
 
-    if dest is None and not replace_existing:
-        # Anti-doublon strict : même contenu déjà classé.
-        for existing in folder.iterdir():
-            if not existing.is_file() or existing.suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
-                continue
-            try:
-                if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
-                    dest = existing
-                    break
-            except Exception:
-                continue
+        strong_matches = []
+        for existing in existing_docs:
+            stem_key = _match_key(existing.stem)
+            by_invoice = bool(invoice_key and len(invoice_key) >= 4 and invoice_key in stem_key)
+            by_original = bool(original_key and (original_key in stem_key or stem_key.endswith(original_key)))
+            # Quand on matche par nom reçu, on exige aussi le fournisseur si celui-ci
+            # est présent dans le nom classé, afin d'éviter les collisions.
+            supplier_ok = not supplier_key or supplier_key in stem_key or by_invoice
+            if by_invoice or (by_original and supplier_ok):
+                strong_matches.append(existing)
+
+        if len(strong_matches) == 1:
+            dest = strong_matches[0]
+        elif len(strong_matches) > 1:
+            con.close()
+            raise ValueError(
+                "Plusieurs justificatifs déjà classés semblent correspondre à cette facture. "
+                "Aucun nouveau fichier n'a été créé : vérifie les fichiers du mois puis rattache le bon."
+            )
 
     if dest is None:
-        # Si un XML compagnon existe, le PDF officiel prend exactement le même stem.
-        if suffix == ".pdf" and current_xml_file:
-            dest = current_xml_file.with_suffix(".pdf")
-            if dest.exists() and not replace_existing:
-                con.close()
-                raise ValueError(
-                    f"Un PDF nommé {dest.name} existe déjà. Utilise « Remplacer PDF »."
-                )
-        else:
-            clean_name = supplier_document_filename(
-                row["entry_date"],
-                row["party"],
-                row["invoice_no"],
-                filename,
-            )
-            dest = folder / clean_name
-            if dest.exists() and not replace_existing:
-                con.close()
-                raise ValueError(
-                    f"Un justificatif nommé {dest.name} existe déjà dans Fournisseurs. "
-                    "Aucun doublon n'a été créé."
-                )
+        clean_name = supplier_document_filename(row["entry_date"], row["party"], row["invoice_no"], filename)
+        dest = folder / clean_name
 
+        # Le même nom existe déjà mais le contenu diffère : surtout ne pas fabriquer
+        # automatiquement un ' - 2'. Cela crée exactement le bazar que l'on veut éviter.
+        # On arrête et on laisse l'utilisateur vérifier le document existant.
+        if dest.exists():
+            con.close()
+            raise ValueError(
+                f"Un justificatif nommé {dest.name} existe déjà dans Fournisseurs. "
+                "Aucun doublon n'a été créé."
+            )
         dest.write_bytes(raw)
 
-    # Backfill XML pour les anciennes factures Abby si un frère existe.
-    if current_xml_file is None and dest.suffix.lower() == ".pdf":
-        sibling_xml = dest.with_suffix(".xml")
-        if sibling_xml.is_file():
-            current_xml_file = sibling_xml
-
+    rel = str(dest.relative_to(DOCUMENTS_ROOT))
     con.execute("""
         UPDATE ledger_entries
-        SET document_path=?,
-            document_original_name=?,
-            document_xml_path=COALESCE(?, document_xml_path),
-            updated_at=?
+        SET document_path=?, document_original_name=?, updated_at=?
         WHERE id=?
-    """, (
-        str(dest.relative_to(DOCUMENTS_ROOT)),
-        filename,
-        str(current_xml_file.relative_to(DOCUMENTS_ROOT)) if current_xml_file else None,
-        now().isoformat(timespec="seconds"),
-        entry_id,
-    ))
+    """, (rel, filename, now().isoformat(timespec="seconds"), entry_id))
     con.commit()
     con.close()
     return dest
@@ -6465,155 +6162,17 @@ def auto_link_supplier_documents(years=None):
     return linked, ambiguous, missing
 
 
-
-
-def _supplier_filename_invoice_keys(path):
-    """Références exactes possibles extraites d'un nom de justificatif."""
-    stem = str(Path(path).stem or "").strip()
-    if not stem:
-        return set()
-
-    candidates = {stem}
-    known_prefixes = (
-        "Amazon_", "Amazon-",
-        "SLE-FRANCE_", "SLE-FRANCE-",
-        "Ebay_", "Ebay-", "eBay_", "eBay-",
-        "AliExpress_", "AliExpress-",
-        "BitDefender_", "BitDefender-",
-        "Proton_", "Proton-",
-        "1001Piles_", "1001Piles-",
-    )
-
-    folded = stem.casefold()
-    for prefix in known_prefixes:
-        if folded.startswith(prefix.casefold()):
-            remainder = stem[len(prefix):].strip(" _-")
-            if remainder:
-                candidates.add(remainder)
-
-    return {
-        key for key in (_match_key(value) for value in candidates)
-        if len(key) >= 4
-    }
-
-
-def _supplier_logical_document_groups(entry_date=None):
-    """Groupes de justificatifs logiques.
-
-    Si entry_date est fourni, limite la recherche au mois correspondant.
-    Sinon, parcourt tout Fournisseurs. PDF/XML frères = un seul document logique.
-    """
-    allowed = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
-
-    if entry_date:
-        files = _supplier_document_candidates(entry_date)
-    else:
-        try:
-            files = sorted(
-                (
-                    p for p in FOURNISSEURS_ROOT.rglob("*")
-                    if p.is_file() and p.suffix.lower() in allowed
-                ),
-                key=lambda p: str(p).casefold(),
-            )
-        except Exception:
-            files = []
-
-    groups = {}
-    for path in files:
-        try:
-            group_key = str(path.with_suffix("").resolve())
-        except Exception:
-            group_key = str(path.with_suffix(""))
-        groups.setdefault(group_key, []).append(path)
-    return groups
-
-
-def _supplier_choose_logical_document(paths):
-    """Choisit une représentation uniquement si le groupe est non ambigu."""
-    if not paths:
-        return None
-
-    pdfs = [p for p in paths if p.suffix.lower() == ".pdf"]
-    xmls = [p for p in paths if p.suffix.lower() == ".xml"]
-    images = [p for p in paths if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
-
-    if len(pdfs) > 1 or len(xmls) > 1 or len(images) > 1:
-        return None
-    if len(pdfs) == 1:
-        return pdfs[0]
-    if len(xmls) == 1 and not images:
-        return xmls[0]
-    if len(images) == 1 and not xmls:
-        return images[0]
-    return None
-
-
-def _supplier_exact_invoice_document(row):
-    """Résout une facture fournisseur uniquement par correspondance certaine.
-
-    - vrai numéro de facture ;
-    - numéro exact en fin de nom ou après un préfixe fournisseur connu ;
-    - recherche globale dans Fournisseurs ;
-    - le mois n'est utilisé qu'en cas de doublon exact ;
-    - un seul justificatif logique candidat.
-    """
-    if not row:
-        return None
-
-    invoice_no = str(row["invoice_no"] or "").strip()
-    party = str(row["party"] or "").strip()
-    remarks = str(row["remarks"] or "").strip()
-    entry_date = str(row["entry_date"] or "")[:10]
-
-    if not is_supplier_invoice_reference(invoice_no, party, remarks):
-        return None
-
-    invoice_key = _match_key(invoice_no)
-    if len(invoice_key) < 4:
-        return None
-
-    def _exact_matches(groups):
-        matches = []
-        for group_paths in groups.values():
-            representative = group_paths[0]
-            stem_key = _match_key(representative.stem)
-            exact_keys = _supplier_filename_invoice_keys(representative)
-
-            # Correspondance stricte uniquement :
-            # - le nom se termine par le numéro exact, ou
-            # - le numéro exact est obtenu après retrait d'un préfixe connu.
-            if stem_key.endswith(invoice_key) or invoice_key in exact_keys:
-                chosen = _supplier_choose_logical_document(group_paths)
-                if chosen:
-                    matches.append(chosen)
-        return matches
-
-    # 1) Le numéro de facture exact est le critère maître :
-    # cherche d'abord dans TOUT Fournisseurs.
-    global_matches = _exact_matches(_supplier_logical_document_groups())
-
-    # Un seul résultat exact dans toute l'archive => rattachement certain,
-    # même si l'ancienne ligne Achats/Ventes possède une date/mois erroné.
-    if len(global_matches) == 1:
-        return global_matches[0]
-
-    # 2) Si la même référence existe plusieurs fois dans l'archive,
-    # on n'essaie de départager qu'avec le mois de la ligne.
-    if len(global_matches) > 1 and entry_date:
-        month_matches = _exact_matches(_supplier_logical_document_groups(entry_date))
-        if len(month_matches) == 1:
-            return month_matches[0]
-
-    # Zéro résultat ou ambiguïté persistante : aucune action automatique.
-    return None
-
-
 def ledger_document_file(row):
-    """Résout de façon robuste le justificatif fournisseur d'une ligne Achats/Ventes.
+    """Résout une pièce fournisseur déplacée dans documents/Fournisseurs.
 
-    Accepte les anciens chemins Windows/Linux, les chemins enregistrés avant migration,
-    et préfère le PDF lisible lorsqu'un XML possède un PDF frère.
+    Ordre volontairement déterministe :
+      1. vraie référence de facture si connue ;
+      2. nom original enregistré ;
+      3. nom du fichier de l'ancien document_path ;
+      4. fournisseur + date si résultat unique ;
+      5. même logique dans toute l'arborescence Fournisseurs.
+
+    Un ancien chemin faux ne doit jamais empêcher la recherche.
     """
     if not row:
         return None
@@ -6624,192 +6183,113 @@ def ledger_document_file(row):
     party = str(row["party"] or "").strip()
     entry_date = str(row["entry_date"] or "").strip()
 
-    allowed_ext = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
-
-    # Si un document portant exactement le numéro de facture existe de façon unique,
-    # il gagne sur un ancien rattachement approximatif. C'est ce qui évite qu'une
-    # facture FR...OF... ouvre par erreur le PDF FR...OG....
-    exact_invoice_path = _supplier_exact_invoice_document(row)
-    if exact_invoice_path and exact_invoice_path.is_file():
-        return exact_invoice_path
-
-    def _existing_file(path):
-        try:
-            p = Path(path).resolve()
-            if not p.is_file() or p.suffix.lower() not in allowed_ext:
-                return None
-            # Si le chemin enregistré pointe encore vers l'XML mais que le PDF
-            # lisible existe à côté, le bouton Ouvrir doit afficher le PDF.
-            if p.suffix.lower() == ".xml":
-                pdf = p.with_suffix(".pdf")
-                if pdf.is_file():
-                    return pdf
-            return p
-        except Exception:
-            return None
-
     def _basename(value):
         return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
 
-    def _all_supplier_files():
+    def _files(folder):
         try:
             return [
-                p for p in FOURNISSEURS_ROOT.rglob("*")
-                if p.is_file() and p.suffix.lower() in allowed_ext
+                p for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
             ]
         except Exception:
             return []
 
-    # 1) document_path exact, avec toutes les variantes historiques possibles.
-    if rel:
-        rel_norm = rel.replace("\\", "/").strip()
-        candidates = []
+    def _pick(candidates):
+        if not candidates:
+            return None
 
-        # Chemin absolu éventuellement enregistré par une ancienne version.
+        # 1) La référence de facture est prioritaire sur les anciens noms.
+        invoice_key = _match_key(invoice_no)
+        if invoice_key and len(invoice_key) >= 4:
+            hits = [p for p in candidates if invoice_key in _match_key(p.stem)]
+            if len(hits) == 1:
+                return hits[0]
+            if len(hits) > 1:
+                party_key = _match_key(party)
+                if party_key and len(party_key) >= 3:
+                    narrowed = [p for p in hits if party_key in _match_key(p.stem)]
+                    if len(narrowed) == 1:
+                        return narrowed[0]
+
+        # 2) Nom original puis ancien basename document_path.
+        for wanted in (_basename(original_name), _basename(rel)):
+            if not wanted:
+                continue
+            hits = [p for p in candidates if p.name.casefold() == wanted.casefold()]
+            if len(hits) == 1:
+                return hits[0]
+
+        # 3) Fournisseur + date, seulement si sans ambiguïté.
+        party_key = _match_key(party)
+        date_keys = set()
         try:
-            rp = Path(rel)
-            if rp.is_absolute():
-                candidates.append(rp)
+            d = datetime.strptime(entry_date, "%Y-%m-%d")
+            date_keys.update({
+                _match_key(d.strftime("%Y%m%d")),
+                _match_key(d.strftime("%d%m%Y")),
+            })
         except Exception:
             pass
+        date_keys.discard("")
 
-        # Référence normalement relative à DOCUMENTS_ROOT.
-        candidates.append(DOCUMENTS_ROOT / rel_norm)
-
-        # Anciennes valeurs ayant enregistré "documents/..." ou
-        # "private/documents/..." au lieu du chemin relatif.
-        lower_rel = rel_norm.casefold()
-        for prefix in ("private/documents/", "documents/"):
-            if lower_rel.startswith(prefix):
-                stripped = rel_norm[len(prefix):]
-                candidates.append(DOCUMENTS_ROOT / stripped)
-
-        # Une ancienne valeur peut aussi commencer directement par "Fournisseurs/".
-        basename = _basename(rel_norm)
-        if basename:
-            candidates.append(FOURNISSEURS_ROOT / basename)
-
-        for candidate in candidates:
-            hit = _existing_file(candidate)
-            if hit:
-                return hit
-
-    files = _all_supplier_files()
-
-    # 2) Même nom de fichier que document_path ou document_original_name.
-    wanted_names = []
-    for value in (rel, original_name):
-        name = _basename(value)
-        if name:
-            wanted_names.append(name.casefold())
-            # Si l'ancien nom est XML, cherche aussi son PDF frère.
-            if name.lower().endswith(".xml"):
-                wanted_names.append((Path(name).stem + ".pdf").casefold())
-
-    for wanted in wanted_names:
-        hits = [p for p in files if p.name.casefold() == wanted]
-        if len(hits) == 1:
-            return _existing_file(hits[0]) or hits[0]
-
-    # 3) Référence facture : cherche d'abord un PDF unique contenant le numéro.
-    invoice_key = _match_key(invoice_no)
-    if invoice_key and len(invoice_key) >= 4:
-        hits = [
-            p for p in files
-            if invoice_key in _match_key(p.stem)
-        ]
-        pdf_hits = [p for p in hits if p.suffix.lower() == ".pdf"]
-        if len(pdf_hits) == 1:
-            return pdf_hits[0]
-        if len(hits) == 1:
-            return _existing_file(hits[0]) or hits[0]
-
-        # Si plusieurs résultats, affine avec le fournisseur.
-        party_key = _match_key(party)
         if party_key and len(party_key) >= 3:
-            narrowed = [p for p in hits if party_key in _match_key(p.stem)]
-            pdf_narrowed = [p for p in narrowed if p.suffix.lower() == ".pdf"]
-            if len(pdf_narrowed) == 1:
-                return pdf_narrowed[0]
-            if len(narrowed) == 1:
-                return _existing_file(narrowed[0]) or narrowed[0]
+            hits = []
+            for p in candidates:
+                key = _match_key(p.stem)
+                if party_key in key and (not date_keys or any(dk in key for dk in date_keys)):
+                    hits.append(p)
+            if len(hits) == 1:
+                return hits[0]
 
-    # 4) Avec un vrai numéro de facture fournisseur, on refuse désormais tout
-    # rapprochement flou fournisseur+mois : mieux vaut "introuvable" qu'un mauvais PDF.
-    strict_invoice_key = (
-        _match_key(invoice_no)
-        if is_supplier_invoice_reference(invoice_no, party, str(row["remarks"] or ""))
-        else ""
-    )
-    if strict_invoice_key:
         return None
 
-    # 5) Dernier recours uniquement pour les anciennes lignes sans vraie référence facture :
-    # fournisseur + mois, et seulement si le résultat est non ambigu.
-    try:
-        d = datetime.strptime(entry_date[:10], "%Y-%m-%d")
-        month_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
-        month_files = [
-            p for p in month_folder.iterdir()
-            if p.is_file() and p.suffix.lower() in allowed_ext
-        ] if month_folder.is_dir() else []
+    # Ancien chemin encore valide ? On l'accepte uniquement si le fichier existe.
+    # Mais si invoice_no est renseigné et que le basename ne correspond pas à cette
+    # référence, on ne fait PAS confiance à ce vieux lien (cas FR6201Q9ABEI qui
+    # pointait encore vers FR61SZP5ABEI).
+    if rel:
+        try:
+            candidate = (DOCUMENTS_ROOT / rel).resolve()
+            allowed = False
+            for root in (FOURNISSEURS_ROOT.resolve(), FACTURES_ROOT.resolve()):
+                try:
+                    candidate.relative_to(root)
+                    allowed = True
+                    break
+                except Exception:
+                    continue
+        except Exception:
+            allowed = False
 
-        party_key = _match_key(party)
-        if party_key:
-            hits = [p for p in month_files if party_key in _match_key(p.stem)]
-            pdf_hits = [p for p in hits if p.suffix.lower() == ".pdf"]
-            if len(pdf_hits) == 1:
-                return pdf_hits[0]
-            if len(hits) == 1:
-                return _existing_file(hits[0]) or hits[0]
+        if allowed and candidate.is_file():
+            invoice_key = _match_key(invoice_no)
+            if not invoice_key or invoice_key in _match_key(candidate.stem):
+                return candidate
+
+    # D'abord le mois réel de la ligne.
+    try:
+        d = datetime.strptime(entry_date, "%Y-%m-%d")
+        month_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
+        hit = _pick(_files(month_folder))
+        if hit:
+            return hit
     except Exception:
         pass
 
-    return None
-
-
-
-def ledger_xml_document_file(row):
-    """Résout l'XML structuré associé, y compris pour les anciens couples PDF/XML."""
-    if not row:
-        return None
-
+    # Puis toute l'arborescence : utile après déplacement manuel ou date historique
+    # légèrement différente du mois où le justificatif a été classé.
     try:
-        rel = str(row["document_xml_path"] or "").strip()
+        all_files = [
+            p for p in FOURNISSEURS_ROOT.rglob("*")
+            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+        ]
+        hit = _pick(all_files)
+        if hit:
+            return hit
     except Exception:
-        rel = ""
+        pass
 
-    if rel:
-        try:
-            path = (DOCUMENTS_ROOT / rel).resolve()
-            path.relative_to(DOCUMENTS_ROOT.resolve())
-            if path.is_file() and path.suffix.lower() == ".xml":
-                return path
-        except Exception:
-            pass
-
-    # Compatibilité anciens imports : XML frère du PDF actuellement lié/résolu.
-    primary = ledger_document_file(row)
-    if primary:
-        try:
-            sibling = Path(primary).with_suffix(".xml")
-            if sibling.is_file():
-                return sibling
-        except Exception:
-            pass
-
-    # Dernier recours prudent : même numéro de facture, XML unique.
-    invoice_key = _match_key(row["invoice_no"] or "")
-    if invoice_key and len(invoice_key) >= 4:
-        try:
-            hits = [
-                p for p in FOURNISSEURS_ROOT.rglob("*.xml")
-                if invoice_key in _match_key(p.stem)
-            ]
-            if len(hits) == 1:
-                return hits[0]
-        except Exception:
-            pass
     return None
 
 
@@ -7020,6 +6500,15 @@ def make_invoice_no():
         suffix += 1
     return f"{base}-{suffix}"
 
+def local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 def safe_filename(text):
     text = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii")
@@ -9328,516 +8817,6 @@ def parse_supplier_invoice_xml(file_bytes, filename="facture.xml"):
     }
 
 
-def _xml_readable_invoice_lines(root):
-    """Extrait quelques lignes de facture CII/Factur-X ou UBL pour la copie lisible."""
-    lines = []
-    line_tags = {"IncludedSupplyChainTradeLineItem", "InvoiceLine"}
-    for elem in root.iter():
-        if _xml_local_name(elem.tag) not in line_tags:
-            continue
-        description = _xml_first_text(elem, [
-            "Name", "Description", "ItemName", "SellerAssignedID", "ID"
-        ])
-        quantity = _xml_first_text(elem, [
-            "BilledQuantity", "InvoicedQuantity", "Quantity"
-        ])
-        unit_price = _xml_first_text(elem, [
-            "ChargeAmount", "PriceAmount", "NetPriceProductTradePrice"
-        ])
-        line_total = _xml_first_text(elem, [
-            "LineTotalAmount", "LineExtensionAmount", "NetLineTotalAmount"
-        ])
-        vat_rate = _xml_first_text(elem, [
-            "RateApplicablePercent", "Percent", "TaxPercent"
-        ])
-        if any((description, quantity, unit_price, line_total, vat_rate)):
-            lines.append({
-                "description": description or "Article / prestation",
-                "quantity": quantity,
-                "unit_price": unit_price,
-                "line_total": line_total,
-                "vat_rate": vat_rate,
-            })
-        if len(lines) >= 80:
-            break
-    return lines
-
-
-def _pdf_wrap_text(c, text, x, y, max_width, *, font="Helvetica", size=9, leading=12):
-    """Écrit un texte avec retour à la ligne et retourne la nouvelle ordonnée Y."""
-    value = " ".join(str(text or "").split())
-    if not value:
-        return y
-    words = value.split(" ")
-    current = ""
-    rows = []
-    for word in words:
-        candidate = word if not current else f"{current} {word}"
-        if pdfmetrics.stringWidth(candidate, font, size) <= max_width:
-            current = candidate
-        else:
-            if current:
-                rows.append(current)
-            current = word
-    if current:
-        rows.append(current)
-    c.setFont(font, size)
-    for row in rows:
-        c.drawString(x, y, row)
-        y -= leading
-    return y
-
-
-def generate_supplier_xml_readable_pdf(raw, info, pdf_path, original_filename="facture.xml"):
-    """Génère une copie PDF lisible d'une facture électronique XML Abby.
-
-    Le XML original reste conservé à côté du PDF. Le PDF est une représentation
-    lisible générée par WOPR, pas un remplacement du document électronique source.
-    """
-    try:
-        root = ET.fromstring(raw)
-    except ET.ParseError as exc:
-        raise ValueError(f"XML invalide pour génération PDF : {exc}") from exc
-
-    pdf_path = Path(pdf_path)
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    c = canvas.Canvas(str(pdf_path), pagesize=A4)
-    width, height = A4
-    margin_x = 18 * mm
-    y = height - 18 * mm
-
-    def new_page():
-        nonlocal y
-        c.showPage()
-        y = height - 18 * mm
-
-    def ensure_space(required=18 * mm):
-        if y < 18 * mm + required:
-            new_page()
-
-    c.setTitle(f"Facture fournisseur {info.get('invoice_no') or ''}")
-    c.setAuthor("WOPR")
-
-    c.setFont("Helvetica-Bold", 16)
-    supplier_title = str(info.get("party") or "").strip()
-    title = f"FACTURE FOURNISSEUR — {supplier_title}" if supplier_title else "FACTURE FOURNISSEUR"
-    y = _pdf_wrap_text(
-        c,
-        title,
-        margin_x, y, width - 2 * margin_x,
-        size=16, leading=18,
-    )
-    y -= 8 * mm
-
-    c.setFont("Helvetica", 8)
-    c.setFillColor(colors.HexColor("#555555"))
-    y = _pdf_wrap_text(
-        c,
-        "Générée par WOPR à partir de la facture électronique XML originale. "
-        "Le XML reste conservé à côté de ce PDF et demeure le document source structuré.",
-        margin_x, y, width - 2 * margin_x, size=8, leading=10,
-    )
-    c.setFillColor(colors.black)
-    y -= 4 * mm
-
-    fields = [
-        ("Fournisseur", info.get("party")),
-        ("N° facture", info.get("invoice_no")),
-        ("Date", info.get("entry_date")),
-        ("Montant TTC", f"{float(info.get('amount_ttc') or 0):.2f} {info.get('currency') or 'EUR'}"),
-        ("Fichier source", original_filename),
-    ]
-    for label, value in fields:
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(margin_x, y, f"{label} :")
-        c.setFont("Helvetica", 10)
-        y = _pdf_wrap_text(c, value, margin_x + 35 * mm, y, width - margin_x - (margin_x + 35 * mm), size=10, leading=12)
-        y -= 2
-
-    # Totaux complémentaires lorsque présents dans le XML.
-    totals = []
-    total_candidates = [
-        ("Total HT", ["TaxBasisTotalAmount", "TaxExclusiveAmount", "LineTotalAmount"]),
-        ("TVA", ["TaxTotalAmount", "TaxAmount"]),
-        ("Net à payer", ["DuePayableAmount", "PayableAmount", "GrandTotalAmount"]),
-    ]
-    for label, keys in total_candidates:
-        val = ""
-        for key in keys:
-            val = _xml_first_text(root, [key])
-            if val:
-                break
-        if val:
-            totals.append((label, val))
-
-    if totals:
-        y -= 4 * mm
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(margin_x, y, "Totaux")
-        y -= 5 * mm
-        for label, value in totals:
-            c.setFont("Helvetica", 9)
-            c.drawString(margin_x + 4 * mm, y, f"{label} : {value} {info.get('currency') or 'EUR'}")
-            y -= 4.5 * mm
-
-    lines = _xml_readable_invoice_lines(root)
-    if lines:
-        y -= 4 * mm
-        ensure_space(30 * mm)
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(margin_x, y, "Détail")
-        y -= 6 * mm
-        for idx, line in enumerate(lines, 1):
-            ensure_space(24 * mm)
-            c.setFont("Helvetica-Bold", 9)
-            c.drawString(margin_x, y, f"{idx}. ")
-            y = _pdf_wrap_text(
-                c, line.get("description"), margin_x + 7 * mm, y,
-                width - 2 * margin_x - 7 * mm, font="Helvetica-Bold", size=9, leading=11,
-            )
-            details = []
-            if line.get("quantity"):
-                details.append(f"Qté {line['quantity']}")
-            if line.get("unit_price"):
-                details.append(f"PU {line['unit_price']} {info.get('currency') or 'EUR'}")
-            if line.get("line_total"):
-                details.append(f"Total {line['line_total']} {info.get('currency') or 'EUR'}")
-            if line.get("vat_rate"):
-                details.append(f"TVA {line['vat_rate']} %")
-            if details:
-                c.setFont("Helvetica", 8)
-                c.drawString(margin_x + 7 * mm, y, " · ".join(details))
-                y -= 10
-            y -= 3
-
-    # Informations complémentaires utiles et peu ambiguës.
-    references = []
-    for label, tags in [
-        ("Référence commande", ["BuyerOrderReferencedDocument", "OrderReference"]),
-        ("Échéance", ["DueDateDateTime", "DueDate"]),
-        ("IBAN", ["IBANID", "IBAN"]),
-    ]:
-        value = _xml_first_text(root, tags)
-        if value:
-            references.append((label, value))
-    if references:
-        ensure_space(28 * mm)
-        y -= 3 * mm
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(margin_x, y, "Informations complémentaires")
-        y -= 5 * mm
-        for label, value in references:
-            c.setFont("Helvetica", 8.5)
-            y = _pdf_wrap_text(c, f"{label} : {value}", margin_x + 4 * mm, y, width - 2 * margin_x - 4 * mm, size=8.5, leading=10)
-            y -= 1
-
-    c.setFont("Helvetica", 7)
-    c.setFillColor(colors.HexColor("#666666"))
-    c.drawString(margin_x, 10 * mm, "Copie lisible WOPR — XML original conservé dans le même dossier fournisseur.")
-    c.save()
-    return pdf_path
-
-
-def _unique_document_path(folder, base_stem, suffix):
-    candidate = folder / f"{base_stem}{suffix}"
-    if not candidate.exists():
-        return candidate
-    n = 2
-    while (folder / f"{base_stem}_{n}{suffix}").exists():
-        n += 1
-    return folder / f"{base_stem}_{n}{suffix}"
-
-
-def _abby_supplier_match_key(value):
-    """Clé souple pour rapprocher un fournisseur Abby d'un achat déjà saisi."""
-    text = normalize_history_name(value)
-    if not text:
-        return set()
-
-    stopwords = {
-        "business", "france", "francais", "francaise", "eu", "europe",
-        "societe", "company", "compagnie", "succursale", "branch",
-        "sas", "sasu", "sarl", "eurl", "sa", "ltd", "limited", "gmbh",
-        "bv", "inc", "llc",
-    }
-    return {
-        token for token in text.split()
-        if len(token) >= 3 and token not in stopwords
-    }
-
-
-def _abby_supplier_compatible(existing_party, abby_party):
-    a = normalize_history_name(existing_party)
-    b = normalize_history_name(abby_party)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    if len(a) >= 4 and (a in b or b in a):
-        return True
-
-    ta = _abby_supplier_match_key(existing_party)
-    tb = _abby_supplier_match_key(abby_party)
-    if not ta or not tb:
-        return False
-
-    common = ta & tb
-    # Un nom de marque suffisamment distinctif suffit :
-    # "Amazon" <-> "Amazon Business EU S.à r.l, Succursale Française".
-    return any(len(token) >= 4 for token in common)
-
-
-def _find_abby_purchase_candidate(con, info, exclude_ids=()):
-    """Trouve un achat manuel unique pouvant recevoir la facture Abby.
-
-    Critères prudents :
-    - achat ;
-    - même TTC au centime ;
-    - date à +/- 14 jours ;
-    - fournisseur compatible ;
-    - pas déjà identifié comme import Abby ;
-    - pas déjà porteur d'un vrai numéro de facture fournisseur.
-
-    Retourne (row, False) si candidat unique, (None, True) si plusieurs candidats
-    plausibles, sinon (None, False).
-    """
-    params = [float(info["amount_ttc"]), info["entry_date"]]
-    exclude_sql = ""
-    clean_ids = [int(x) for x in exclude_ids if x is not None]
-    if clean_ids:
-        exclude_sql = " AND id NOT IN (" + ",".join("?" for _ in clean_ids) + ")"
-        params.extend(clean_ids)
-
-    rows = con.execute(f"""
-        SELECT id, operation, party, entry_date, description, amount_ttc,
-               payment_type, invoice_no, remarks,
-               document_path, document_original_name
-        FROM ledger_entries
-        WHERE operation='Achat'
-          AND ABS(COALESCE(amount_ttc,0) - ?) < 0.005
-          AND ABS(julianday(entry_date) - julianday(?)) <= 14
-          {exclude_sql}
-        ORDER BY ABS(julianday(entry_date) - julianday(?)), id DESC
-    """, params + [info["entry_date"]]).fetchall()
-
-    matches = []
-    for row in rows:
-        remarks = str(row["remarks"] or "")
-        if "import abby" in normalize_history_name(remarks):
-            continue
-
-        invoice_no = str(row["invoice_no"] or "").strip()
-        if invoice_no and is_supplier_invoice_reference(
-            invoice_no, row["party"] or "", remarks
-        ):
-            continue
-
-        if not _abby_supplier_compatible(row["party"], info["party"]):
-            continue
-
-        matches.append(row)
-
-    if len(matches) == 1:
-        return matches[0], False
-    if len(matches) > 1:
-        return None, True
-    return None, False
-
-
-def _abby_display_date(value):
-    value = str(value or "").strip()
-    try:
-        return datetime.strptime(value[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
-    except Exception:
-        return value
-
-
-def _abby_append_remark(existing, info):
-    existing = str(existing or "").strip()
-    existing = existing.replace(
-        "Import Abby — facture électronique XML + copie PDF lisible", ""
-    ).strip(" —")
-    existing = re.sub(
-        r"(?:\s*—\s*)?Facture Abby du \d{4}-\d{2}-\d{2}",
-        "",
-        existing,
-    ).strip(" —")
-    existing = re.sub(
-        r"(?:\s*—\s*)?Facture Abby du \d{2}[-/]\d{2}[-/]\d{4}",
-        "",
-        existing,
-    ).strip(" —")
-    invoice_date_note = f"Facture Abby du {_abby_display_date(info['entry_date'])}"
-    parts = [existing] if existing else []
-    folded = normalize_history_name(existing)
-
-    if info["entry_date"]:
-        parts.append(invoice_date_note)
-    if info.get("currency") and info["currency"] != "EUR":
-        devise = f"devise {info['currency']}"
-        if normalize_history_name(devise) not in folded:
-            parts.append(devise)
-    return " — ".join(part for part in parts if part)
-
-
-def _abby_archive_xml_pdf(raw, info, filename, preferred_pdf=None):
-    folder = year_month_folder(
-        FOURNISSEURS_ROOT, info["entry_date"], supplier=False, create=True
-    )
-    safe_stem = Path(
-        safe_document_name(f"{info['party']}_{info['invoice_no']}.xml")
-    ).stem
-
-    pdf_dest = None
-    xml_dest = None
-
-    if preferred_pdf:
-        preferred_pdf = Path(preferred_pdf)
-        if preferred_pdf.exists() and preferred_pdf.suffix.lower() == ".pdf":
-            pdf_dest = preferred_pdf
-            sibling_xml = preferred_pdf.with_suffix(".xml")
-            if sibling_xml.exists():
-                xml_dest = sibling_xml
-
-    if xml_dest is None:
-        xml_dest = _unique_document_path(folder, safe_stem, ".xml")
-        xml_dest.write_bytes(raw)
-
-    if pdf_dest is None:
-        pdf_dest = xml_dest.with_suffix(".pdf")
-        if pdf_dest.exists():
-            pdf_dest = _unique_document_path(folder, xml_dest.stem, ".pdf")
-        generate_supplier_xml_readable_pdf(raw, info, pdf_dest, filename)
-
-    return xml_dest, pdf_dest
-
-
-
-def normalize_supplier_invoice_storage():
-    """Centralise toutes les factures fournisseurs dans DOCUMENTS_ROOT/Fournisseurs.
-
-    - déplace les anciens XML/PDF stockés sous Factures/.../Fournisseurs ;
-    - met à jour les chemins en base ;
-    - recrée le PDF lisible si un XML fournisseur n'a pas encore son PDF ;
-    - repointe le bouton Ouvrir vers le PDF lorsqu'il est généré.
-    """
-    moved = 0
-    generated = 0
-    repointed = 0
-    con = db()
-
-    # A) Migration de l'ancien rangement Factures/YYYY/MM - Mois/Fournisseurs/*
-    legacy_files = []
-    if FACTURES_ROOT.exists():
-        for legacy_dir in FACTURES_ROOT.rglob("Fournisseurs"):
-            if not legacy_dir.is_dir():
-                continue
-            try:
-                rel_dir = legacy_dir.relative_to(FACTURES_ROOT)
-            except Exception:
-                continue
-            # Attendu : YYYY / MM - Mois / Fournisseurs
-            parts = rel_dir.parts
-            if len(parts) < 3:
-                continue
-            year_part, month_part = parts[0], parts[1]
-            target_dir = FOURNISSEURS_ROOT / year_part / month_part
-            target_dir.mkdir(parents=True, exist_ok=True)
-
-            for old_path in list(legacy_dir.iterdir()):
-                if not old_path.is_file() or old_path.suffix.lower() not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
-                    continue
-                legacy_files.append((old_path, target_dir))
-
-    for old_path, target_dir in legacy_files:
-        old_rel = str(old_path.relative_to(DOCUMENTS_ROOT))
-        target = target_dir / old_path.name
-
-        if target.exists():
-            try:
-                same = (
-                    target.stat().st_size == old_path.stat().st_size
-                    and target.read_bytes() == old_path.read_bytes()
-                )
-            except Exception:
-                same = False
-
-            if same:
-                try:
-                    old_path.unlink()
-                except Exception:
-                    pass
-            else:
-                target = _unique_document_path(target_dir, old_path.stem, old_path.suffix)
-                shutil.move(str(old_path), str(target))
-                moved += 1
-        else:
-            shutil.move(str(old_path), str(target))
-            moved += 1
-
-        new_rel = str(target.relative_to(DOCUMENTS_ROOT))
-        cur = con.execute(
-            "UPDATE ledger_entries SET document_path=?, updated_at=? WHERE document_path=?",
-            (new_rel, now().isoformat(timespec="seconds"), old_rel),
-        )
-        repointed += int(cur.rowcount or 0)
-
-    # B) Tout XML fournisseur doit avoir son PDF lisible à côté.
-    if FOURNISSEURS_ROOT.exists():
-        for xml_path in FOURNISSEURS_ROOT.rglob("*.xml"):
-            if not xml_path.is_file():
-                continue
-
-            pdf_path = xml_path.with_suffix(".pdf")
-            if not pdf_path.exists():
-                try:
-                    raw = xml_path.read_bytes()
-                    info = parse_supplier_invoice_xml(raw, xml_path.name)
-                    generate_supplier_xml_readable_pdf(raw, info, pdf_path, xml_path.name)
-                    generated += 1
-                except Exception:
-                    continue
-
-            if pdf_path.exists():
-                xml_rel = str(xml_path.relative_to(DOCUMENTS_ROOT))
-                pdf_rel = str(pdf_path.relative_to(DOCUMENTS_ROOT))
-                cur = con.execute("""
-                    UPDATE ledger_entries
-                    SET document_path=?, updated_at=?
-                    WHERE document_path=?
-                """, (
-                    pdf_rel,
-                    now().isoformat(timespec="seconds"),
-                    xml_rel,
-                ))
-                repointed += int(cur.rowcount or 0)
-
-    con.commit()
-    con.close()
-    return moved, generated, repointed
-
-
-def _abby_enrich_existing_purchase(con, row, info, filename, pdf_dest):
-    """Complète l'achat déjà présent sans écraser ses infos utiles."""
-    remarks = _abby_append_remark(row["remarks"], info)
-    con.execute("""
-        UPDATE ledger_entries
-        SET invoice_no=?,
-            document_path=?,
-            document_original_name=?,
-            remarks=?,
-            updated_at=?
-        WHERE id=?
-    """, (
-        info["invoice_no"],
-        str(pdf_dest.relative_to(DOCUMENTS_ROOT)),
-        filename,
-        remarks,
-        now().isoformat(timespec="seconds"),
-        int(row["id"]),
-    ))
-
-
 def import_supplier_xml_to_ledger(storage):
     filename = str(storage.filename or "").strip()
     if not filename.lower().endswith(".xml"):
@@ -9848,14 +8827,10 @@ def import_supplier_xml_to_ledger(storage):
         raise ValueError("Fichier vide.")
 
     info = parse_supplier_invoice_xml(raw, filename)
-    con = db()
 
-    # 1) Facture Abby déjà importée exactement.
+    con = db()
     duplicate = con.execute("""
-        SELECT id, operation, party, entry_date, description, amount_ttc,
-               payment_type, invoice_no, remarks,
-               document_path, document_original_name
-        FROM ledger_entries
+        SELECT id FROM ledger_entries
         WHERE operation='Achat'
           AND lower(trim(COALESCE(party,'')))=lower(trim(?))
           AND lower(trim(COALESCE(invoice_no,'')))=lower(trim(?))
@@ -9863,85 +8838,12 @@ def import_supplier_xml_to_ledger(storage):
         LIMIT 1
     """, (info["party"], info["invoice_no"], info["entry_date"])).fetchone()
 
-    # 2) Cherche aussi l'achat manuel correspondant. C'est ce qui permet de
-    #    réparer automatiquement le cas "commande Amazon + facture Abby".
-    candidate, ambiguous = _find_abby_purchase_candidate(
-        con, info, exclude_ids=[duplicate["id"]] if duplicate else []
-    )
-
-    if ambiguous:
-        con.close()
-        return {"status": "ambiguous", **info}
-
-    if duplicate and candidate:
-        # Cas déjà arrivé : Abby a créé une deuxième ligne. On rattache le PDF/XML
-        # à la ligne manuelle, puis on supprime uniquement la ligne Abby en trop.
-        existing_rel = str(duplicate["document_path"] or "").strip()
-        preferred_pdf = DOCUMENTS_ROOT / existing_rel if existing_rel else None
-        xml_dest, pdf_dest = _abby_archive_xml_pdf(
-            raw, info, filename, preferred_pdf=preferred_pdf
-        )
-        _abby_enrich_existing_purchase(con, candidate, info, filename, pdf_dest)
-        duplicate_id = int(duplicate["id"])
-        candidate_id = int(candidate["id"])
-        con.execute("DELETE FROM ledger_entries WHERE id=?", (duplicate_id,))
-        con.commit()
-        con.close()
-        return {
-            "status": "merged_duplicate",
-            "entry_id": candidate_id,
-            "removed_entry_id": duplicate_id,
-            "saved_path": str(pdf_dest),
-            "xml_path": str(xml_dest),
-            **info,
-        }
-
     if duplicate:
-        entry_id = int(duplicate["id"])
-        existing_rel = str(duplicate["document_path"] or "").strip()
-        preferred_pdf = DOCUMENTS_ROOT / existing_rel if existing_rel else None
-        xml_dest, pdf_dest = _abby_archive_xml_pdf(
-            raw, info, filename, preferred_pdf=preferred_pdf
-        )
-        con.execute("""
-            UPDATE ledger_entries
-            SET document_path=?, document_original_name=?, updated_at=?
-            WHERE id=?
-        """, (
-            str(pdf_dest.relative_to(DOCUMENTS_ROOT)),
-            filename,
-            now().isoformat(timespec="seconds"),
-            entry_id,
-        ))
-        con.commit()
         con.close()
-        return {
-            "status": "duplicate_pdf_created",
-            "entry_id": entry_id,
-            "saved_path": str(pdf_dest),
-            "xml_path": str(xml_dest),
-            **info,
-        }
+        return {"status": "duplicate", **info}
 
-    if candidate:
-        # Import Abby d'une facture dont l'achat avait déjà été saisi à la main :
-        # on enrichit la ligne existante au lieu d'en créer une seconde.
-        xml_dest, pdf_dest = _abby_archive_xml_pdf(raw, info, filename)
-        _abby_enrich_existing_purchase(con, candidate, info, filename, pdf_dest)
-        entry_id = int(candidate["id"])
-        con.commit()
-        con.close()
-        return {
-            "status": "matched_existing",
-            "entry_id": entry_id,
-            "saved_path": str(pdf_dest),
-            "xml_path": str(xml_dest),
-            **info,
-        }
-
-    # Aucun rapprochement sûr : création normale.
     created = now().isoformat(timespec="seconds")
-    remarks = f"Facture Abby du {_abby_display_date(info['entry_date'])}"
+    remarks = "Import Abby — facture électronique XML"
     if info["currency"] and info["currency"] != "EUR":
         remarks += f" — devise {info['currency']}"
 
@@ -9966,29 +8868,31 @@ def import_supplier_xml_to_ledger(storage):
     con.commit()
     con.close()
 
-    xml_dest, pdf_dest = _abby_archive_xml_pdf(raw, info, filename)
+    folder = year_month_folder(
+        FACTURES_ROOT, info["entry_date"], supplier=True, create=True
+    )
+    base_name = safe_document_name(f"{info['party']}_{info['invoice_no']}.xml")
+    dest = folder / base_name
+    if dest.exists():
+        stem, suffix = dest.stem, dest.suffix
+        n = 2
+        while (folder / f"{stem}_{n}{suffix}").exists():
+            n += 1
+        dest = folder / f"{stem}_{n}{suffix}"
+    dest.write_bytes(raw)
+    try:
+        con = db()
+        con.execute("""
+            UPDATE ledger_entries
+            SET document_path=?, document_original_name=?, updated_at=?
+            WHERE id=?
+        """, (str(dest.relative_to(DOCUMENTS_ROOT)), filename, now().isoformat(timespec="seconds"), entry_id))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
 
-    con = db()
-    con.execute("""
-        UPDATE ledger_entries
-        SET document_path=?, document_original_name=?, updated_at=?
-        WHERE id=?
-    """, (
-        str(pdf_dest.relative_to(DOCUMENTS_ROOT)),
-        filename,
-        now().isoformat(timespec="seconds"),
-        entry_id,
-    ))
-    con.commit()
-    con.close()
-
-    return {
-        "status": "created",
-        "entry_id": entry_id,
-        "saved_path": str(pdf_dest),
-        "xml_path": str(xml_dest),
-        **info,
-    }
+    return {"status": "created", "entry_id": entry_id, "saved_path": str(dest), **info}
 
 
 
@@ -10058,14 +8962,6 @@ def abby_page():
         ORDER BY COALESCE(abby_synced_at,'') DESC, id DESC
         LIMIT 10
     """).fetchall()
-    recent_supplier_imports = con.execute("""
-        SELECT id, party, entry_date, invoice_no, amount_ttc, document_path, remarks
-        FROM ledger_entries
-        WHERE operation='Achat'
-          AND COALESCE(invoice_no,'')<>'' AND COALESCE(document_original_name,'') LIKE '%.xml'
-        ORDER BY entry_date DESC, id DESC
-        LIMIT 20
-    """).fetchall()
     con.close()
 
     safe_settings = dict(settings)
@@ -10076,7 +8972,6 @@ def abby_page():
         api_key_configured=bool(settings.get("api_key")),
         stats=stats,
         recent_errors=recent_errors,
-        recent_supplier_imports=recent_supplier_imports,
         business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
     )
 
@@ -10084,16 +8979,46 @@ def abby_page():
 
 @app.route("/abby/import-fournisseurs", methods=["POST"])
 def abby_import_supplier_invoices():
-    """Ancienne route conservée uniquement pour compatibilité.
+    files = request.files.getlist("supplier_xml")
+    files = [f for f in files if f and str(f.filename or "").strip()]
+    if not files:
+        flash("Sélectionne au moins une facture XML Abby.")
+        return redirect(url_for("abby_page"))
 
-    L'import des factures fournisseurs se fait désormais exclusivement depuis
-    Achats / Ventes. Cela évite deux chemins concurrents pour la même facture.
-    """
-    flash(
-        "L'import des factures fournisseurs se fait maintenant depuis Achats / Ventes. "
-        "Les XML Abby y sont détectés automatiquement et un PDF lisible est généré."
-    )
-    return redirect(url_for("achats_ventes_page"))
+    if len(files) > 100:
+        flash("Maximum 100 fichiers par import.")
+        return redirect(url_for("abby_page"))
+
+    backup_database(force=True, tag="avant_import_abby_fournisseurs")
+
+    created = 0
+    duplicates = 0
+    errors = []
+    last_year = now().year
+
+    for storage in files:
+        try:
+            result = import_supplier_xml_to_ledger(storage)
+            last_year = int(result["entry_date"][:4])
+            if result["status"] == "duplicate":
+                duplicates += 1
+            else:
+                created += 1
+        except Exception as exc:
+            errors.append(f"{storage.filename}: {exc}")
+
+    details = f"{created} importée(s), {duplicates} doublon(s), {len(errors)} erreur(s)"
+    audit_event("ABBY_SUPPLIER_XML_IMPORT", details, request.remote_addr)
+
+    if errors:
+        preview = " | ".join(errors[:3])
+        if len(errors) > 3:
+            preview += f" | +{len(errors)-3} autre(s)"
+        flash(f"Import Abby : {details}. {preview}")
+    else:
+        flash(f"Import Abby : {details}.")
+
+    return redirect(url_for("achats_ventes_page", year=last_year))
 
 
 @app.route("/abby/api-key/reveal", methods=["POST"])
@@ -10176,6 +9101,305 @@ def abby_sync_clients():
         audit_event("ABBY_SYNC_CLIENTS_ERROR", type(exc).__name__, request.remote_addr)
         flash(f"Synchronisation Abby impossible : {exc}")
     return redirect(url_for("abby_page"))
+
+
+
+# ============================================================
+# GA4 — statistiques foul-fix.fr dans le tableau de bord WOPR
+# Configuration privée : ../private/ga4.json
+# Clé de service :       ../private/ga4-service-account.json
+# ============================================================
+GA4_SETTINGS_FILE = PRIVATE_ROOT / "ga4.json"
+GA4_DEFAULT_CREDENTIALS_FILE = PRIVATE_ROOT / "ga4-service-account.json"
+_GA4_CACHE = {"at": 0.0, "data": None, "error": None}
+
+
+def read_ga4_settings():
+    defaults = {
+        "enabled": False,
+        "property_id": "",
+        "credentials_file": str(GA4_DEFAULT_CREDENTIALS_FILE),
+        "cache_seconds": 300,
+    }
+    try:
+        if GA4_SETTINGS_FILE.is_file():
+            raw = json.loads(GA4_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                defaults.update(raw)
+    except Exception:
+        pass
+
+    # Variables d'environnement facultatives, pratiques pour tester sans modifier de fichier.
+    env_property = str(os.environ.get("WOPR_GA4_PROPERTY_ID") or "").strip()
+    env_credentials = str(os.environ.get("WOPR_GA4_CREDENTIALS") or "").strip()
+    if env_property:
+        defaults["property_id"] = env_property
+        defaults["enabled"] = True
+    if env_credentials:
+        defaults["credentials_file"] = env_credentials
+
+    return defaults
+
+
+def _ga4_credentials_path(raw_path):
+    value = str(raw_path or "").strip()
+    if not value:
+        return GA4_DEFAULT_CREDENTIALS_FILE
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        # Un chemin relatif est interprété depuis la racine WOPR.
+        path = (WOPR_ROOT / path).resolve()
+    return path
+
+
+def _ga4_metric_value(report, metric_index):
+    try:
+        rows = report.get("rows") or []
+        if not rows:
+            return 0
+        values = rows[0].get("metricValues") or []
+        return int(float(values[metric_index].get("value") or 0))
+    except Exception:
+        return 0
+
+
+def _ga4_run_period(service, property_id, start_date, end_date):
+    body = {
+        "dateRanges": [{"startDate": start_date, "endDate": end_date}],
+        "metrics": [
+            {"name": "activeUsers"},
+            {"name": "sessions"},
+            {"name": "screenPageViews"},
+        ],
+        "limit": "1",
+    }
+    report = service.properties().runReport(
+        property=f"properties/{property_id}", body=body
+    ).execute()
+    return {
+        "users": _ga4_metric_value(report, 0),
+        "sessions": _ga4_metric_value(report, 1),
+        "views": _ga4_metric_value(report, 2),
+    }
+
+
+def fetch_ga4_dashboard_stats(force=False):
+    """Retourne les stats GA4 utiles au dashboard, avec cache pour ne pas solliciter l'API à chaque clic."""
+    settings = read_ga4_settings()
+    if not bool(settings.get("enabled", False)):
+        return None, "GA4 non configuré"
+
+    property_id = re.sub(r"\D", "", str(settings.get("property_id") or ""))
+    if not property_id:
+        return None, "Property ID GA4 absent"
+
+    credentials_path = _ga4_credentials_path(settings.get("credentials_file"))
+    if not credentials_path.is_file():
+        return None, f"Clé GA4 absente : {credentials_path.name}"
+
+    try:
+        cache_seconds = max(30, int(settings.get("cache_seconds") or 300))
+    except Exception:
+        cache_seconds = 300
+
+    now_ts = time.time()
+    if (not force and _GA4_CACHE.get("data") is not None and
+            now_ts - float(_GA4_CACHE.get("at") or 0) < cache_seconds):
+        return _GA4_CACHE["data"], _GA4_CACHE.get("error")
+
+    if not GOOGLE_LIBS_OK:
+        return None, "Bibliothèques Google indisponibles"
+
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            str(credentials_path),
+            scopes=["https://www.googleapis.com/auth/analytics.readonly"],
+        )
+        service = google_build(
+            "analyticsdata", "v1beta", credentials=creds, cache_discovery=False
+        )
+
+        local_today = now().date()
+        first_month = local_today.replace(day=1).isoformat()
+        first_year = local_today.replace(month=1, day=1).isoformat()
+        today_iso = local_today.isoformat()
+
+        data = {
+            "today": _ga4_run_period(service, property_id, "today", "today"),
+            "month": _ga4_run_period(service, property_id, first_month, today_iso),
+            "year": _ga4_run_period(service, property_id, first_year, today_iso),
+            "property_id": property_id,
+            "updated_at": now().strftime("%d/%m/%Y %H:%M"),
+        }
+        _GA4_CACHE.update({"at": now_ts, "data": data, "error": None})
+        return data, None
+    except HttpError as exc:
+        try:
+            message = str(exc.error_details[0].get("message") or exc) if exc.error_details else str(exc)
+        except Exception:
+            message = str(exc)
+        error = f"GA4 : {message}"
+    except Exception as exc:
+        error = f"GA4 : {exc}"
+
+    # Ne bloque jamais WOPR si Google est indisponible.
+    _GA4_CACHE.update({"at": now_ts, "data": None, "error": error})
+    return None, error
+
+
+@app.route("/stats")
+def stats_page():
+    """Statistiques externes : Google Analytics + consultations du portail de suivi."""
+    tab = str(request.args.get("tab") or "suivi").strip().lower()
+    if tab not in {"ga4", "suivi"}:
+        tab = "suivi"
+
+    ga4_stats = None
+    ga4_error = ""
+    if tab == "ga4":
+        ga4_stats, ga4_error = fetch_ga4_dashboard_stats()
+
+    tracking = {
+        "today": {"views": 0, "unique_visitors": 0},
+        "week": {"views": 0, "unique_visitors": 0},
+        "month": {"views": 0, "unique_visitors": 0},
+        "total_views": 0,
+        "codes": [],
+    }
+    tracking_rows = []
+    tracking_error = ""
+    tracking_enabled = bool(read_tracking_settings().get("enabled", False))
+    show_hidden = request.args.get("hidden") == "1"
+
+    if tab == "suivi":
+        if tracking_enabled:
+            try:
+                remote = fetch_tracking_stats()
+                if isinstance(remote, dict):
+                    tracking.update(remote)
+            except Exception as exc:
+                tracking_error = str(exc)
+        else:
+            tracking_error = "Le suivi en ligne n'est pas activé dans WOPR."
+
+        hidden_codes = _tracking_stats_hidden_codes()
+        con = db()
+        rows = con.execute("""
+            SELECT r.id, r.public_tracking_code, r.dossier_no, r.device_type,
+                   r.brand_model, r.status,
+                   c.first_name, c.last_name, c.name, c.company
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE COALESCE(trim(r.public_tracking_code),'') <> ''
+        """).fetchall()
+        con.close()
+
+        local_by_code = {}
+        for row in rows:
+            code = str(row["public_tracking_code"] or "").strip().upper()
+            if not code:
+                continue
+            first_name = str(row["first_name"] or "").strip()
+            last_name = str(row["last_name"] or "").strip()
+            legacy_name = str(row["name"] or "").strip()
+            company = str(row["company"] or "").strip()
+            person = " ".join(x for x in [first_name, last_name] if x).strip()
+            client_name = company or person or legacy_name or "Client"
+            device = " — ".join(x for x in [str(row["device_type"] or "").strip(), str(row["brand_model"] or "").strip()] if x)
+            local_by_code[code] = {
+                "repair_id": int(row["id"]),
+                "dossier_no": str(row["dossier_no"] or ""),
+                "client_name": client_name,
+                "device": device,
+                "status": str(row["status"] or ""),
+            }
+
+        tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+        for item in tracking.get("codes") or []:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip().upper()
+            local = local_by_code.get(code, {})
+            raw_first_view_at = str(item.get("first_view_at") or "").strip()
+            raw_last_view_at = str(item.get("last_view_at") or "").strip()
+            try:
+                last_view_sort = datetime.fromisoformat(raw_last_view_at.replace("Z", "+00:00")).timestamp() if raw_last_view_at else 0.0
+            except Exception:
+                last_view_sort = 0.0
+
+            row = {
+                "code": code,
+                "views": int(item.get("views") or 0),
+                "unique_visitors": int(item.get("unique_visitors") or 0),
+                "first_view_at": _tracking_stats_datetime(raw_first_view_at),
+                "last_view_at": _tracking_stats_datetime(raw_last_view_at),
+                "_last_view_sort": last_view_sort,
+                "preview_url": (f"{tracking_site}/suivi.html?code={urllib.parse.quote(code)}&preview=1" if tracking_site else ""),
+                "hidden": code in hidden_codes,
+                **local,
+            }
+            if show_hidden or not row["hidden"]:
+                tracking_rows.append(row)
+
+        # Vue Suivi : consultation la plus récente en premier.
+        # On trie sur la vraie date ISO reçue de l'API, jamais sur le texte affiché
+        # au format JJ/MM/AAAA, qui produirait un ordre chronologique incorrect.
+        tracking_rows.sort(
+            key=lambda x: (float(x.get("_last_view_sort") or 0.0), int(x.get("views") or 0)),
+            reverse=True,
+        )
+
+    return render_template(
+        "stats.html",
+        tab=tab,
+        ga4_stats=ga4_stats,
+        ga4_error=ga4_error,
+        tracking=tracking,
+        tracking_rows=tracking_rows,
+        tracking_error=tracking_error,
+        tracking_enabled=tracking_enabled,
+        show_hidden=show_hidden,
+    )
+
+@app.route("/atelier/mois")
+def atelier_month_details():
+    """Détail exact du KPI Réparations / ventes atelier."""
+    today = now().date()
+    try:
+        year = int(request.args.get("year", today.year))
+    except (TypeError, ValueError):
+        year = today.year
+    try:
+        month = int(request.args.get("month", today.month))
+    except (TypeError, ValueError):
+        month = today.month
+    if not 2000 <= year <= 2100:
+        year = today.year
+    if not 1 <= month <= 12:
+        month = today.month
+
+    prefix = f"{year:04d}-{month:02d}"
+    con = db()
+    rows = con.execute("""
+        SELECT r.id, r.dossier_no, r.received_date, r.device_type, r.brand_model,
+               r.problem, r.status, r.simple_invoice, r.invoice_no,
+               c.first_name AS client_first_name, c.last_name AS client_last_name,
+               c.name AS client_name, c.company AS client_company
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE substr(COALESCE(r.received_date,''),1,7)=?
+          AND lower(trim(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+        ORDER BY r.received_date DESC, r.id DESC
+    """, (prefix,)).fetchall()
+    con.close()
+
+    return render_template(
+        "atelier_month.html",
+        rows=rows,
+        selected_year=year,
+        selected_month=month,
+        month_name=ledger_month_name(month),
+    )
 
 
 @app.route("/atelier")
@@ -10369,362 +9593,6 @@ def atelier_dashboard():
         client_logo_configured=bool(invoice_logo_path()),
     )
 
-
-
-@app.route("/etat-sante")
-def health_page():
-    """Contrôles de cohérence métier et technique, sans modifier les données."""
-    con = db()
-    checks = []
-
-    def add_check(key, title, count, level="ok", detail="", rows=None, href=None):
-        checks.append({
-            "key": key,
-            "title": title,
-            "count": int(count or 0),
-            "level": level,
-            "detail": detail,
-            "rows": list(rows or []),
-            "href": href,
-        })
-
-    # Base SQLite / SQLCipher : vérification légère et non destructive.
-    try:
-        quick = con.execute("PRAGMA quick_check").fetchone()
-        db_ok = bool(quick and str(quick[0]).strip().casefold() == "ok")
-    except Exception:
-        db_ok = False
-    add_check(
-        "database",
-        "Intégrité de la base",
-        0 if db_ok else 1,
-        "ok" if db_ok else "error",
-        "PRAGMA quick_check : OK" if db_ok else "La vérification rapide de la base a signalé un problème.",
-    )
-
-    # Dossiers terminés mais pas encore facturés.
-    rows = con.execute("""
-        SELECT r.id, r.dossier_no, r.received_date, r.problem, r.status,
-               c.name AS client_name
-        FROM repairs r
-        JOIN clients c ON c.id=r.client_id
-        WHERE COALESCE(r.simple_invoice,0)=0
-          AND r.status='Terminé'
-          AND COALESCE(TRIM(r.invoice_no),'')=''
-          AND LOWER(TRIM(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
-        ORDER BY r.received_date ASC, r.id ASC
-        LIMIT 20
-    """).fetchall()
-    count = con.execute("""
-        SELECT COUNT(*)
-        FROM repairs r
-        WHERE COALESCE(r.simple_invoice,0)=0
-          AND r.status='Terminé'
-          AND COALESCE(TRIM(r.invoice_no),'')=''
-          AND LOWER(TRIM(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
-    """).fetchone()[0]
-    add_check(
-        "finished_no_invoice",
-        "Dossiers terminés sans facture",
-        count,
-        "warn" if count else "ok",
-        "À vérifier si le matériel doit encore être facturé.",
-        rows,
-        url_for("index", a_restituer=1) if count else None,
-    )
-
-    # Factures marquées payées sans mode de règlement.
-    rows = con.execute("""
-        SELECT r.id, r.invoice_no, r.accounting_date, r.received_date,
-               c.name AS client_name
-        FROM repairs r
-        JOIN clients c ON c.id=r.client_id
-        WHERE COALESCE(TRIM(r.invoice_no),'')<>''
-          AND COALESCE(r.paid,0)=1
-          AND COALESCE(TRIM(r.payment_mode),'')=''
-          AND COALESCE(TRIM(r.payment_method),'')=''
-        ORDER BY COALESCE(r.accounting_date,r.received_date) DESC, r.id DESC
-        LIMIT 20
-    """).fetchall()
-    count = con.execute("""
-        SELECT COUNT(*)
-        FROM repairs
-        WHERE COALESCE(TRIM(invoice_no),'')<>''
-          AND COALESCE(paid,0)=1
-          AND COALESCE(TRIM(payment_mode),'')=''
-          AND COALESCE(TRIM(payment_method),'')=''
-    """).fetchone()[0]
-    add_check(
-        "paid_no_mode",
-        "Factures payées sans mode de règlement",
-        count,
-        "warn" if count else "ok",
-        "Le paiement est indiqué comme reçu, mais aucun mode n'est renseigné.",
-        rows,
-        url_for("invoices_page", month=0) if count else None,
-    )
-
-    # Factures payées sans date d'encaissement.
-    rows = con.execute("""
-        SELECT r.id, r.invoice_no, r.received_date, c.name AS client_name
-        FROM repairs r
-        JOIN clients c ON c.id=r.client_id
-        WHERE COALESCE(TRIM(r.invoice_no),'')<>''
-          AND COALESCE(r.paid,0)=1
-          AND COALESCE(TRIM(r.accounting_date),'')=''
-        ORDER BY r.received_date DESC, r.id DESC
-        LIMIT 20
-    """).fetchall()
-    count = con.execute("""
-        SELECT COUNT(*)
-        FROM repairs
-        WHERE COALESCE(TRIM(invoice_no),'')<>''
-          AND COALESCE(paid,0)=1
-          AND COALESCE(TRIM(accounting_date),'')=''
-    """).fetchone()[0]
-    add_check(
-        "paid_no_date",
-        "Factures payées sans date d'encaissement",
-        count,
-        "warn" if count else "ok",
-        "Utile à corriger pour garder une comptabilité mensuelle cohérente.",
-        rows,
-        url_for("invoices_page", month=0) if count else None,
-    )
-
-
-    # État Google Contacts.
-    pending_rows = con.execute("""
-        SELECT id, name, phone, email, google_sync_status
-        FROM clients
-        WHERE COALESCE(archived,0)=0
-          AND COALESCE(google_sync_status,'À synchroniser') NOT IN ('Synchronisé','Erreur')
-        ORDER BY name COLLATE NOCASE
-        LIMIT 20
-    """).fetchall()
-    pending_count = con.execute("""
-        SELECT COUNT(*)
-        FROM clients
-        WHERE COALESCE(archived,0)=0
-          AND COALESCE(google_sync_status,'À synchroniser') NOT IN ('Synchronisé','Erreur')
-    """).fetchone()[0]
-    add_check(
-        "google_pending",
-        "Clients Google à synchroniser",
-        pending_count,
-        "info" if pending_count else "ok",
-        "Fiches locales pas encore synchronisées vers Google Contacts.",
-        pending_rows,
-        url_for("contacts_page", google_status="pending") if pending_count else None,
-    )
-
-    error_rows = con.execute("""
-        SELECT id, name, phone, email, google_sync_status, google_sync_error
-        FROM clients
-        WHERE COALESCE(archived,0)=0
-          AND google_sync_status='Erreur'
-        ORDER BY name COLLATE NOCASE
-        LIMIT 20
-    """).fetchall()
-    error_count = con.execute("""
-        SELECT COUNT(*)
-        FROM clients
-        WHERE COALESCE(archived,0)=0
-          AND google_sync_status='Erreur'
-    """).fetchone()[0]
-    add_check(
-        "google_errors",
-        "Erreurs Google Contacts",
-        error_count,
-        "error" if error_count else "ok",
-        "Synchronisations Google ayant échoué et nécessitant une vérification.",
-        error_rows,
-        url_for("contacts_page", google_status="error") if error_count else None,
-    )
-
-    # Sauvegardes WOPR.
-    latest_backup = None
-    try:
-        candidates = [p for p in BACKUP_DIR.iterdir() if p.is_file()]
-        if candidates:
-            latest_backup = max(candidates, key=lambda p: p.stat().st_mtime)
-    except Exception:
-        latest_backup = None
-
-    if latest_backup:
-        age_hours = max(0.0, (time.time() - latest_backup.stat().st_mtime) / 3600.0)
-        backup_level = "ok" if age_hours <= 48 else "warn"
-        add_check(
-            "backup",
-            "Dernière sauvegarde WOPR",
-            0 if backup_level == "ok" else 1,
-            backup_level,
-            f"{latest_backup.name} · il y a {age_hours:.1f} h",
-        )
-    else:
-        add_check(
-            "backup",
-            "Dernière sauvegarde WOPR",
-            1,
-            "error",
-            "Aucune sauvegarde WOPR détectée dans le dossier interne.",
-        )
-
-    con.close()
-
-    problem_count = sum(c["count"] for c in checks if c["level"] in {"warn", "error"})
-    error_checks = sum(1 for c in checks if c["level"] == "error")
-    warning_checks = sum(1 for c in checks if c["level"] == "warn")
-
-    return render_template(
-        "health.html",
-        checks=checks,
-        problem_count=problem_count,
-        error_checks=error_checks,
-        warning_checks=warning_checks,
-    )
-
-
-@app.route("/activite")
-def activity_page():
-    """Timeline lisible des dernières activités métier et techniques."""
-    try:
-        limit = int(request.args.get("limit") or 80)
-    except (TypeError, ValueError):
-        limit = 80
-    limit = max(20, min(limit, 200))
-    category = str(request.args.get("category") or "").strip().lower()
-
-    con = db()
-    events = []
-
-    def push(ts, category_name, icon, title, detail="", href=None):
-        ts = str(ts or "").strip()
-        if not ts:
-            return
-        events.append({
-            "ts": ts,
-            "category": category_name,
-            "icon": icon,
-            "title": title,
-            "detail": str(detail or ""),
-            "href": href,
-        })
-
-    # Réparations créées.
-    for row in con.execute("""
-        SELECT r.id, r.dossier_no, r.created_at, r.problem, r.status, c.name AS client_name
-        FROM repairs r JOIN clients c ON c.id=r.client_id
-        WHERE COALESCE(r.simple_invoice,0)=0
-        ORDER BY r.created_at DESC LIMIT 80
-    """).fetchall():
-        push(
-            row["created_at"], "atelier", "🔧",
-            f"Nouveau dossier · {row['client_name']}",
-            f"{row['dossier_no']} · {row['problem'] or 'Sans description'}",
-            url_for("repair_detail", rid=row["id"]),
-        )
-
-    # Dossiers terminés.
-    for row in con.execute("""
-        SELECT r.id, r.dossier_no, r.finished_at, r.invoice_no, c.name AS client_name
-        FROM repairs r JOIN clients c ON c.id=r.client_id
-        WHERE COALESCE(r.simple_invoice,0)=0
-          AND COALESCE(TRIM(r.finished_at),'')<>''
-        ORDER BY r.finished_at DESC LIMIT 60
-    """).fetchall():
-        detail = row["dossier_no"]
-        if row["invoice_no"]:
-            detail += f" · facture {row['invoice_no']}"
-        push(
-            row["finished_at"], "atelier", "✅",
-            f"Dossier terminé · {row['client_name']}",
-            detail,
-            url_for("repair_detail", rid=row["id"]),
-        )
-
-    # Devis.
-    for row in con.execute("""
-        SELECT id, quote_no, client_name, status, created_at, updated_at
-        FROM quotes
-        ORDER BY COALESCE(updated_at,created_at) DESC LIMIT 60
-    """).fetchall():
-        push(
-            row["updated_at"] or row["created_at"], "documents", "📝",
-            f"Devis {row['quote_no']} · {row['client_name']}",
-            row["status"] or "",
-            url_for("quote_edit", quote_id=row["id"]),
-        )
-
-    # Achats / ventes.
-    for row in con.execute("""
-        SELECT id, operation, party, entry_date, description, amount_ttc, created_at
-        FROM ledger_entries
-        ORDER BY created_at DESC LIMIT 80
-    """).fetchall():
-        push(
-            row["created_at"], "gestion", "🛍️" if str(row["operation"]).casefold() == "achat" else "💶",
-            f"{row['operation']} · {row['party'] or 'Sans tiers'}",
-            f"{float(row['amount_ttc'] or 0):.2f} € · {row['description'] or ''}",
-            url_for("achats_ventes_page", year=str(row["entry_date"] or "")[:4] or None),
-        )
-
-    # Journal technique/sécurité : on garde les plus parlants.
-    audit_labels = {
-        "BACKUP": ("système", "💾", "Sauvegarde créée"),
-        "BACKUP_RESTORE_ERROR": ("système", "⚠️", "Erreur de restauration"),
-        "EXTERNAL_BACKUP_TEST": ("système", "💾", "Test sauvegarde externe"),
-        "EXTERNAL_BACKUP_TEST_ERROR": ("système", "⚠️", "Erreur sauvegarde externe"),
-        "SUMUP_TEST_OK": ("services", "💳", "Test SumUp réussi"),
-        "SUMUP_TEST_ERROR": ("services", "⚠️", "Erreur SumUp"),
-        "KDECONNECT_SMS": ("services", "💬", "SMS envoyé"),
-        "KDECONNECT_TEST": ("services", "📱", "Test téléphone réussi"),
-        "KDECONNECT_TEST_ERROR": ("services", "⚠️", "Erreur téléphone"),
-        "INVOICE_EMAIL": ("documents", "📧", "Facture envoyée"),
-        "INVOICE_EMAIL_ERROR": ("documents", "⚠️", "Erreur envoi facture"),
-        "CLIENT_CREATE": ("clients", "👤", "Client créé"),
-        "CLIENT_ARCHIVE": ("clients", "🗄️", "Client archivé"),
-        "CLIENT_RESTORE": ("clients", "♻️", "Client restauré"),
-        "PROTON_IMPORT_START": ("clients", "📥", "Import Proton démarré"),
-        "ABBY_SYNC_CLIENTS": ("services", "🔄", "Synchronisation Abby"),
-        "ABBY_SYNC_CLIENTS_ERROR": ("services", "⚠️", "Erreur Abby"),
-        "SQLCIPHER_UNLOCK": ("système", "🔐", "Base déverrouillée"),
-        "PIN_CHANGED": ("système", "🔐", "PIN modifié"),
-    }
-    for row in con.execute("""
-        SELECT created_at, action, details
-        FROM audit_log
-        ORDER BY id DESC LIMIT 150
-    """).fetchall():
-        meta = audit_labels.get(str(row["action"] or ""))
-        if not meta:
-            continue
-        cat, icon, title = meta
-        push(row["created_at"], cat, icon, title, row["details"] or "")
-
-    con.close()
-
-    if category:
-        events = [e for e in events if e["category"] == category]
-    events.sort(key=lambda e: e["ts"], reverse=True)
-    events = events[:limit]
-
-    categories = [
-        ("", "Tout"),
-        ("atelier", "Atelier"),
-        ("documents", "Documents"),
-        ("gestion", "Gestion"),
-        ("clients", "Clients"),
-        ("services", "Services"),
-        ("système", "Système"),
-    ]
-    return render_template(
-        "activity.html",
-        events=events,
-        categories=categories,
-        selected_category=category,
-        limit=limit,
-    )
 
 
 @app.get("/_w/7f3a9c")
@@ -10925,37 +9793,7 @@ def tracking_stats_page():
             **local,
         })
 
-    # Stats : afficher les dossiers réellement consultés le plus récemment en premier.
-    # Ne pas trier sur la date déjà formatée en JJ/MM/AAAA : ce serait un tri lexical.
-    def _tracking_stats_sort_datetime(value):
-        raw = str(value or "").strip()
-        if not raw:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-        except Exception:
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-    for row in enriched:
-        source = next(
-            (
-                item for item in (stats.get("codes") or [])
-                if isinstance(item, dict)
-                and str(item.get("code") or "").strip().upper() == row["code"]
-            ),
-            {},
-        )
-        row["_last_view_sort"] = _tracking_stats_sort_datetime(source.get("last_view_at"))
-
-    enriched.sort(
-        key=lambda x: (x["_last_view_sort"], int(x["views"]), x["code"]),
-        reverse=True,
-    )
-    for row in enriched:
-        row.pop("_last_view_sort", None)
+    enriched.sort(key=lambda x: (int(x["views"]), str(x["last_view_at"])), reverse=True)
 
     return render_template(
         "tracking_stats.html",
@@ -10982,6 +9820,8 @@ def tracking_stats_hide(code):
         hidden_codes.discard(code)
         flash(f"{code} réaffiché dans les statistiques WOPR.")
     _tracking_stats_save_hidden_codes(hidden_codes)
+    if request.form.get("return_to") == "stats":
+        return redirect(url_for("stats_page", tab="suivi", hidden=1 if not hide else None))
     return redirect(url_for("tracking_stats_page", hidden=1 if not hide else None))
 
 
@@ -10997,6 +9837,8 @@ def tracking_stats_delete(code):
     api_key = str(settings.get("api_key") or "").strip()
     if not endpoint or not api_key:
         flash("Suppression impossible : API de suivi non configurée.")
+        if request.form.get("return_to") == "stats":
+            return redirect(url_for("stats_page", tab="suivi"))
         return redirect(url_for("tracking_stats_page"))
 
     try:
@@ -11046,6 +9888,8 @@ def tracking_stats_delete(code):
     except Exception as exc:
         flash(f"Suppression impossible : {exc}")
 
+    if request.form.get("return_to") == "stats":
+        return redirect(url_for("stats_page", tab="suivi"))
     return redirect(url_for("tracking_stats_page"))
 
 
@@ -11057,32 +9901,17 @@ def index():
     overdue_only = request.args.get("overdue") == "1"
     client_search = str(request.args.get("q") or "").strip()
     client_search_folded = client_search.casefold()
-    requested_year, selected_month = resolve_period_selection(
-        requested_year=request.args.get("year"),
-        default_all_year=(
-            to_return_only
-            or en_cours_only
-            or attente_piece_only
-            or overdue_only
-        ),
-        search_active=bool(client_search_folded),
-    )
+    try:
+        requested_year = int(request.args.get("year") or now().year)
+    except Exception:
+        requested_year = now().year
 
-    # Vue Suivi normale : le mois courant reste le filtre principal, mais les
-    # dossiers "Terminé" des mois précédents restent visibles tant qu'ils ne
-    # sont pas passés à "Restitué". Cela évite d'oublier un appareil terminé
-    # simplement parce qu'il a été reçu le mois précédent.
-    explicit_month = request.args.get("month") not in (None, "")
-    carry_finished_previous_months = (
-        not explicit_month
-        and not client_search_folded
-        and not to_return_only
-        and not en_cours_only
-        and not attente_piece_only
-        and not overdue_only
-        and requested_year == now().year
-        and selected_month == now().month
-    )
+    try:
+        selected_month = int(request.args.get("month") or 0)
+    except (TypeError, ValueError):
+        selected_month = 0
+    if selected_month not in range(1, 13):
+        selected_month = 0
 
     con = db()
 
@@ -11354,14 +10183,8 @@ def index():
     yellow_count = 0
 
     for month in range(12,0,-1):
-        carry_month = bool(
-            carry_finished_previous_months
-            and selected_month
-            and month < selected_month
-        )
-        if selected_month and month != selected_month and not carry_month:
+        if selected_month and month != selected_month:
             continue
-
         month_rows = []
         for row in rows:
             row_month = row["followup_month"]
@@ -11374,13 +10197,6 @@ def index():
                 continue
 
             item = dict(row)
-
-            # Dans les mois reportés sous le mois courant, on ne conserve que
-            # les appareils encore "Terminé". Les Restitué et tous les autres
-            # statuts restent dans leur mois lorsqu'on le sélectionne explicitement.
-            if carry_month and item.get("status") != "Terminé":
-                continue
-
             if item.get("tracking_completion_notification_sent") or item.get("tracking_completion_sms_sent"):
                 item["_notification_status"] = "client"
             elif item.get("status") in {"Terminé", "Restitué"} and item.get("tracking_completion_notification_error"):
@@ -11394,6 +10210,15 @@ def index():
             if to_return_only and item.get("status") != "Terminé":
                 continue
 
+            item["_days_waiting_return"] = None
+            if item.get("status") == "Terminé" and item.get("finished_at"):
+                try:
+                    finished_dt = datetime.fromisoformat(str(item.get("finished_at")))
+                    if finished_dt.tzinfo is None and now().tzinfo is not None:
+                        finished_dt = finished_dt.replace(tzinfo=now().tzinfo)
+                    item["_days_waiting_return"] = max(0, (now().date() - finished_dt.date()).days)
+                except Exception:
+                    pass
 
             invoice_no = str(item.get("invoice_no") or "").strip()
             group = history_invoice_groups.get((item.get("client_id"), invoice_no)) if invoice_no else None
@@ -11433,17 +10258,13 @@ def index():
             month_rows.append(item)
 
         # Lignes purement visuelles pour les encaissements inter-mois.
-        # Elles restent utiles dans le mois réellement consulté, mais ne doivent
-        # JAMAIS être reportées dans la vue du mois courant : le report sert
-        # uniquement aux vrais dossiers encore au statut "Terminé".
-        if not carry_month:
-            month_rows.extend(cross_month_payments.get(month, []))
+        month_rows.extend(cross_month_payments.get(month, []))
 
         t = totals_map.get(month, {"service":0.0,"goods":0.0})
 
         # Vue filtrée depuis le tableau de bord Atelier :
         # ne pas afficher les mois sans aucun dossier correspondant.
-        if (to_return_only or en_cours_only or attente_piece_only or overdue_only or carry_month) and not month_rows:
+        if (to_return_only or en_cours_only or attente_piece_only or overdue_only) and not month_rows:
             continue
 
         months.append({
@@ -11475,7 +10296,6 @@ def index():
         month_names=month_names,
         client_search=client_search,
         search_all_years=bool(client_search_folded),
-        carry_finished_previous_months=carry_finished_previous_months,
         edit_id=edit_id,
         current_period=now().strftime("%Y-%m"),
     )
@@ -11754,12 +10574,20 @@ def quotes_page():
         },
         reverse=True,
     )
-    year, selected_month = resolve_period_selection(
-        requested_year=request.args.get("year"),
-        available_years=available_years,
-        search_active=bool(q_folded),
-    )
+    try:
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
     archive_years = [y for y in available_years if y != current_year]
+
+    try:
+        selected_month = int(request.args.get("month") or 0)
+    except (TypeError, ValueError):
+        selected_month = 0
+    if selected_month not in range(1, 13) or q_folded:
+        selected_month = 0
 
     if q_folded:
         quotes = []
@@ -11779,9 +10607,12 @@ def quotes_page():
             if q_folded in haystack:
                 quotes.append(quote)
     else:
+        period_prefix = f"{year:04d}-"
+        if selected_month:
+            period_prefix = f"{year:04d}-{selected_month:02d}-"
         quotes = [
             quote for quote in all_quotes
-            if date_is_in_period(quote.get("quote_date"), year, selected_month)
+            if str(quote.get("quote_date") or "").startswith(period_prefix)
         ]
 
     archived_quotes = [quote for quote in quotes if quote["document_count"] > 0]
@@ -11818,7 +10649,7 @@ def quotes_page():
         current_year=current_year,
         archive_years=archive_years,
         selected_month=selected_month,
-        month_names=MONTH_NAMES,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
         q=q,
         search_all_years=bool(q_folded),
     )
@@ -12693,7 +11524,6 @@ def quote_folder_open(quote_id):
         create=True
     )
     return _folder_open_response(folder)
-
 
 
 
@@ -14639,42 +13469,6 @@ def stock_image(item_id):
 
 @app.route("/achats-ventes")
 def achats_ventes_page():
-    # Maintient un rangement unique pour les factures fournisseurs et répare
-    # automatiquement les anciens imports Abby / PDF manquants.
-    try:
-        normalize_supplier_invoice_storage()
-    except Exception:
-        pass
-    # Nettoyage rétroactif des anciennes mentions techniques Abby dans les remarques.
-    # Conserve les remarques utiles saisies manuellement.
-    con_cleanup = db()
-    rows_cleanup = con_cleanup.execute("""
-        SELECT id, remarks FROM ledger_entries
-        WHERE COALESCE(remarks,'') <> ''
-          AND (
-              remarks LIKE '%Import Abby — facture électronique XML + copie PDF lisible%'
-              OR remarks LIKE '%Facture Abby du ____-__-__%'
-          )
-    """).fetchall()
-    for cleanup_row in rows_cleanup:
-        remarks = str(cleanup_row["remarks"] or "")
-        remarks = remarks.replace(
-            "Import Abby — facture électronique XML + copie PDF lisible", ""
-        )
-        # Convertit une éventuelle note historique ISO en JJ-MM-AAAA.
-        remarks = re.sub(
-            r"Facture Abby du (\d{4})-(\d{2})-(\d{2})",
-            lambda m: f"Facture Abby du {m.group(3)}/{m.group(2)}/{m.group(1)}",
-            remarks,
-        )
-        remarks = re.sub(r"\s*—\s*—\s*", " — ", remarks)
-        remarks = remarks.strip(" —")
-        con_cleanup.execute(
-            "UPDATE ledger_entries SET remarks=?, updated_at=? WHERE id=?",
-            (remarks, now().isoformat(timespec="seconds"), int(cleanup_row["id"])),
-        )
-    con_cleanup.commit()
-    con_cleanup.close()
     # Garde-fou : si l'application a été lancée d'une manière qui n'exécute pas init_db(),
     # on vérifie ici aussi que l'historique ODS a bien été injecté.
     con_seed = db()
@@ -14701,47 +13495,24 @@ def achats_ventes_page():
         reverse=True,
     )
 
-    # Normalise les anciennes valeurs Achat/Vente issues des imports historiques.
-    # Certaines lignes peuvent contenir espaces insécables / espaces parasites / casse
-    # différente : visuellement "Vente", mais les tests exacts du template échouent.
-    con_ops = db()
-    op_rows = con_ops.execute(
-        "SELECT id, operation FROM ledger_entries WHERE COALESCE(operation,'')<>''"
-    ).fetchall()
-    ops_fixed = 0
-    for op_row in op_rows:
-        raw_op = str(op_row["operation"] or "")
-        normalized_op = " ".join(raw_op.replace("\u00a0", " ").split()).casefold()
-        canonical_op = (
-            "Achat" if normalized_op == "achat"
-            else "Vente" if normalized_op == "vente"
-            else None
-        )
-        if canonical_op and raw_op != canonical_op:
-            con_ops.execute(
-                "UPDATE ledger_entries SET operation=?, updated_at=? WHERE id=?",
-                (canonical_op, now().isoformat(timespec="seconds"), int(op_row["id"])),
-            )
-            ops_fixed += 1
-    if ops_fixed:
-        con_ops.commit()
-    con_ops.close()
+    try:
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
+
+    archive_years = [y for y in available_years if y != current_year]
 
     # V2.3.98 — recherche manuelle uniquement : aucun rattachement automatique.
     search_q = str(request.args.get("q", "") or "").strip()
 
-    year, selected_month = resolve_period_selection(
-        requested_year=request.args.get("year"),
-        available_years=available_years,
-        search_active=bool(search_q),
-    )
-
-    # Mémorise la période réellement affichée. Les actions POST Achats/Ventes
-    # reviennent sur CETTE période, sans dépendre d'un champ caché ou d'un recalcul.
-    session["achats_ventes_year"] = int(year)
-    session["achats_ventes_month"] = int(selected_month or 0)
-
-    archive_years = [y for y in available_years if y != current_year]
+    try:
+        selected_month = int(request.args.get("month") or 0)
+    except (TypeError, ValueError):
+        selected_month = 0
+    if selected_month not in range(1, 13) or search_q:
+        selected_month = 0
 
     # V2.3.96 — auto-répare les liens morts créés pendant les premières versions
     # des justificatifs fournisseurs, sans toucher aux fichiers eux-mêmes.
@@ -14755,7 +13526,7 @@ def achats_ventes_page():
     """).fetchall()
     all_entries = [
         row for row in all_entries_all_years
-        if date_is_in_period(row["entry_date"], year)
+        if str(row["entry_date"] or "").startswith(f"{year:04d}-")
     ]
     supplier_docs_count = sum(
         1 for row in all_entries
@@ -14861,19 +13632,6 @@ def achats_ventes_page():
             return " ".join(str(v or "") for v in values).casefold()
         entries = [row for row in all_entries_all_years if needle in _ledger_search_text(row)]
 
-    # Prépare l'état réel des deux pièces jointes pour l'interface.
-    prepared_entries = []
-    for source_row in entries:
-        item = dict(source_row)
-        if str(item.get("operation") or "").casefold() == "achat":
-            item["document_pdf_available"] = bool(ledger_document_file(source_row))
-            item["document_xml_available"] = bool(ledger_xml_document_file(source_row))
-        else:
-            item["document_pdf_available"] = False
-            item["document_xml_available"] = False
-        prepared_entries.append(item)
-    entries = prepared_entries
-
     months = []
     # Les achats restent issus du registre Achats/Ventes ; ils ne constituent pas le CA.
     purchases_total = sum(
@@ -14920,7 +13678,7 @@ def achats_ventes_page():
         current_year=current_year,
         archive_years=archive_years,
         selected_month=selected_month,
-        month_names=MONTH_NAMES,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
         months=months,
         purchases_total=purchases_total,
         sales_total=sales_total,
@@ -14933,32 +13691,6 @@ def achats_ventes_page():
         search_count=len(entries),
         search_all_years=bool(search_q),
     )
-
-
-
-def _achats_ventes_redirect_to_current_period(fallback_date=None):
-    """Retourne vers la dernière période réellement affichée dans Achats/Ventes."""
-    fallback = str(fallback_date or now().strftime("%Y-%m-%d"))[:10]
-    try:
-        fallback_dt = datetime.strptime(fallback, "%Y-%m-%d")
-    except Exception:
-        fallback_dt = now()
-
-    try:
-        year = int(session.get("achats_ventes_year", fallback_dt.year))
-    except Exception:
-        year = fallback_dt.year
-
-    try:
-        month = int(session.get("achats_ventes_month", fallback_dt.month))
-    except Exception:
-        month = fallback_dt.month
-
-    if month not in range(0, 13):
-        month = fallback_dt.month
-
-    return redirect(url_for("achats_ventes_page", year=year, month=month))
-
 
 
 @app.route("/achats-ventes/add", methods=["POST"])
@@ -14977,7 +13709,7 @@ def achats_ventes_add():
         amount = parse_money_input(request.form.get("amount_ttc"))
     except Exception:
         flash("Montant TTC invalide.")
-        return _achats_ventes_redirect_to_current_period(entry_date)
+        return redirect(url_for("achats_ventes_page", year=entry_date[:4], month=int(entry_date[5:7]) if len(entry_date) >= 7 and entry_date[5:7].isdigit() else None))
 
     created = now().isoformat(timespec="seconds")
     con = db()
@@ -15003,46 +13735,22 @@ def achats_ventes_add():
     con.commit()
     con.close()
 
-    pdf_document = request.files.get("supplier_pdf") or request.files.get("supplier_document")
-    xml_document = request.files.get("supplier_xml")
-    has_pdf = bool(pdf_document and str(pdf_document.filename or "").strip())
-    has_xml = bool(xml_document and str(xml_document.filename or "").strip())
-
+    document = request.files.get("supplier_document")
     document_msg = ""
-    if has_pdf or has_xml:
+    if document and str(document.filename or "").strip():
         if operation != "Achat":
-            document_msg = " Les pièces n'ont pas été rangées : elles sont réservées aux achats fournisseurs."
+            document_msg = " La pièce n'a pas été rangée : elle est réservée aux achats fournisseurs."
         else:
-            messages = []
-            # XML d'abord : s'il y a aussi le PDF officiel, aucun PDF synthétique n'est créé.
-            if has_xml:
-                try:
-                    save_ledger_document(
-                        entry_id,
-                        xml_document,
-                        generate_xml_fallback=not has_pdf,
-                    )
-                    messages.append("XML conservé")
-                except ValueError as exc:
-                    messages.append(f"XML non joint : {exc}")
-
-            if has_pdf:
-                try:
-                    save_ledger_document(
-                        entry_id,
-                        pdf_document,
-                        replace_existing=has_xml,
-                    )
-                    messages.append("PDF officiel lié" if Path(str(pdf_document.filename or "")).suffix.lower() == ".pdf" else "justificatif lié")
-                except ValueError as exc:
-                    messages.append(f"PDF non joint : {exc}")
-
-            if messages:
-                document_msg = " " + " · ".join(messages) + "."
+            try:
+                saved = save_ledger_document(entry_id, document)
+                if saved:
+                    document_msg = " Facture fournisseur rangée et liée à l'achat."
+            except ValueError as exc:
+                document_msg = f" Achat enregistré, mais pièce non jointe : {exc}"
 
     audit_event("LEDGER_ADD", f"{operation} {entry_date} {amount:.2f}", request.remote_addr)
     flash("Ligne ajoutée." + document_msg)
-    return _achats_ventes_redirect_to_current_period(entry_date)
+    return redirect(url_for("achats_ventes_page", year=entry_date[:4], month=int(entry_date[5:7]) if len(entry_date) >= 7 and entry_date[5:7].isdigit() else None))
 
 
 @app.route("/achats-ventes/<int:entry_id>/document", methods=["POST"])
@@ -15052,101 +13760,22 @@ def achats_ventes_document_add(entry_id):
     con.close()
     if not row:
         return "Ligne introuvable", 404
-
-    if str(row["operation"] or "").casefold() != "achat":
-        flash("Les factures fournisseurs peuvent être liées uniquement à un achat.")
-        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-
-    kind = str(request.form.get("document_kind") or "").strip().lower()
-    replace_existing = request.form.get("replace_existing") == "1"
-    storage = (
-        request.files.get("supplier_xml")
-        if kind == "xml"
-        else request.files.get("supplier_pdf")
-        if kind == "pdf"
-        else request.files.get("supplier_document")
-    )
-
-    if not storage or not str(storage.filename or "").strip():
-        flash("Choisis un fichier à joindre.")
-        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-
-    suffix = Path(str(storage.filename or "")).suffix.lower()
-    if kind == "xml" and suffix != ".xml":
-        flash("Le fichier XML attendu doit avoir l'extension .xml.")
-        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-    if kind == "pdf" and suffix not in {".pdf", ".jpg", ".jpeg", ".png"}:
-        flash("Le justificatif principal doit être un PDF, JPG ou PNG.")
-        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-
-    try:
-        dest = save_ledger_document(
-            entry_id,
-            storage,
-            replace_existing=replace_existing,
-            generate_xml_fallback=True,
-        )
-    except ValueError as exc:
-        flash(str(exc))
-        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-
-    if kind == "xml":
-        label = "XML remplacé" if replace_existing else "XML joint"
-    else:
-        label = "PDF officiel remplacé" if replace_existing and suffix == ".pdf" else "Justificatif remplacé" if replace_existing else "Justificatif joint"
-
-    audit_event(
-        "LEDGER_DOCUMENT_ADD",
-        f"id={entry_id} kind={kind or suffix} replace={int(replace_existing)} file={dest.name if dest else ''}",
-        request.remote_addr,
-    )
-    flash(f"{label} et rangé automatiquement.")
-    return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-
-
-@app.route("/achats-ventes/<int:entry_id>/document/unlink", methods=["POST"])
-def achats_ventes_document_unlink(entry_id):
-    """Délie un justificatif d'un achat sans supprimer le fichier du disque."""
-    con = db()
-    row = con.execute(
-        "SELECT id, operation, entry_date, document_path FROM ledger_entries WHERE id=?",
-        (entry_id,),
-    ).fetchone()
-
-    if not row:
-        con.close()
-        return "Ligne introuvable", 404
-
     year = str(row["entry_date"] or now().strftime("%Y-%m-%d"))[:4]
     if str(row["operation"] or "").casefold() != "achat":
-        con.close()
-        flash("Seuls les achats peuvent avoir une facture fournisseur liée.")
-        return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
-
-    old_path = str(row["document_path"] or "").strip()
-
-    con.execute(
-        """
-        UPDATE ledger_entries
-        SET document_path=NULL,
-            document_original_name=NULL,
-            document_xml_path=NULL,
-            document_xml_original_name=NULL,
-            updated_at=?
-        WHERE id=?
-        """,
-        (now().isoformat(timespec="seconds"), entry_id),
-    )
-    con.commit()
-    con.close()
-
-    audit_event(
-        "LEDGER_DOCUMENT_UNLINK",
-        f"id={entry_id} file={old_path}",
-        request.remote_addr,
-    )
-    flash("Justificatif délié de cet achat. Le fichier a été conservé sur le disque.")
-    return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
+        flash("Les factures fournisseurs peuvent être liées uniquement à un achat.")
+        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    storage = request.files.get("supplier_document")
+    if not storage or not str(storage.filename or "").strip():
+        flash("Choisis une facture à joindre.")
+        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    try:
+        dest = save_ledger_document(entry_id, storage)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    audit_event("LEDGER_DOCUMENT_ADD", f"id={entry_id} file={dest.name if dest else ''}", request.remote_addr)
+    flash("Facture fournisseur liée et rangée automatiquement.")
+    return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
 
 
 @app.route("/achats-ventes/<int:entry_id>/document/view")
@@ -15175,40 +13804,6 @@ def achats_ventes_document_view(entry_id):
     return send_file(path, as_attachment=False, download_name=path.name)
 
 
-@app.route("/achats-ventes/<int:entry_id>/document/xml/view")
-def achats_ventes_document_xml_view(entry_id):
-    con = db()
-    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
-    con.close()
-    if not row:
-        return "Ligne introuvable", 404
-
-    path = ledger_xml_document_file(row)
-    if not path:
-        return "XML fournisseur introuvable", 404
-
-    # Backfill la nouvelle colonne pour les anciens couples PDF/XML.
-    try:
-        rel = str(path.relative_to(DOCUMENTS_ROOT))
-        if rel != str(row["document_xml_path"] or ""):
-            con_fix = db()
-            con_fix.execute(
-                "UPDATE ledger_entries SET document_xml_path=?, updated_at=? WHERE id=?",
-                (rel, now().isoformat(timespec="seconds"), entry_id),
-            )
-            con_fix.commit()
-            con_fix.close()
-    except Exception:
-        pass
-
-    return send_file(
-        path,
-        as_attachment=False,
-        download_name=path.name,
-        mimetype="application/xml",
-    )
-
-
 @app.route("/achats-ventes/<int:entry_id>/edit", methods=["POST"])
 def achats_ventes_edit(entry_id):
     con = db()
@@ -15217,30 +13812,24 @@ def achats_ventes_edit(entry_id):
         con.close()
         return "Ligne introuvable", 404
 
-    original_date = str(row["entry_date"] or now().strftime("%Y-%m-%d"))[:10]
-
-    def _return_to_period(_date_value=None):
-        return _achats_ventes_redirect_to_current_period(original_date)
-
-    operation_raw = request.form.get("operation", "")
-    operation = str(operation_raw or "").strip().capitalize()
+    operation = request.form.get("operation", "").strip().capitalize()
     if operation not in {"Achat", "Vente"}:
         con.close()
         flash("Opération invalide.")
-        return _return_to_period(original_date)
+        return redirect(url_for("achats_ventes_page", year=str(row["entry_date"])[:4], month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
 
     entry_date = request.form.get("entry_date", "").strip()
     if not ledger_valid_date(entry_date):
         con.close()
         flash("Date invalide.")
-        return _return_to_period(original_date)
+        return redirect(url_for("achats_ventes_page", year=str(row["entry_date"])[:4], month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
 
     try:
         amount = parse_money_input(request.form.get("amount_ttc"))
     except Exception:
         con.close()
         flash("Montant TTC invalide.")
-        return _return_to_period(original_date)
+        return redirect(url_for("achats_ventes_page", year=str(row["entry_date"])[:4], month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
 
     con.execute("""
         UPDATE ledger_entries SET
@@ -15260,34 +13849,11 @@ def achats_ventes_edit(entry_id):
         entry_id,
     ))
     con.commit()
-
-    saved_row = con.execute(
-        "SELECT operation, entry_date FROM ledger_entries WHERE id=?",
-        (entry_id,),
-    ).fetchone()
-    saved_operation = str(saved_row["operation"] or "").strip() if saved_row else ""
     con.close()
 
-    if saved_operation != operation:
-        audit_event(
-            "LEDGER_EDIT_ERROR",
-            f"id={entry_id} requested_operation={operation} saved_operation={saved_operation}",
-            request.remote_addr,
-        )
-        flash(
-            f"Erreur : le type d'opération n'a pas été enregistré "
-            f"({operation or 'VIDE'} reçu, {saved_operation or 'valeur vide'} relu en base)."
-        )
-        return _return_to_period(entry_date)
-
-    audit_event(
-        "LEDGER_EDIT",
-        f"id={entry_id} operation={operation}",
-        request.remote_addr,
-    )
-    flash(f"Ligne modifiée — type : {operation}.")
-    return _return_to_period(entry_date)
-
+    audit_event("LEDGER_EDIT", f"id={entry_id}", request.remote_addr)
+    flash("Ligne modifiée.")
+    return redirect(url_for("achats_ventes_page", year=entry_date[:4], month=int(entry_date[5:7]) if len(entry_date) >= 7 and entry_date[5:7].isdigit() else None))
 
 
 @app.route("/achats-ventes/<int:entry_id>/delete", methods=["POST"])
@@ -15299,6 +13865,7 @@ def achats_ventes_delete(entry_id):
         return "Ligne introuvable", 404
 
     year = str(row["entry_date"])[:4]
+    month = int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None
     backup_database(force=True, tag="avant_suppression_achat_vente")
     con.execute("DELETE FROM ledger_entries WHERE id=?", (entry_id,))
     con.commit()
@@ -15306,7 +13873,7 @@ def achats_ventes_delete(entry_id):
 
     audit_event("LEDGER_DELETE", f"id={entry_id}", request.remote_addr)
     flash("Ligne supprimée.")
-    return _achats_ventes_redirect_to_current_period(str(row["entry_date"] or "")[:10])
+    return redirect(url_for("achats_ventes_page", year=year, month=month))
 
 
 @app.route("/total")
@@ -15604,9 +14171,12 @@ def repair_client_search():
 
 @app.route("/repair/new", methods=["GET", "POST"])
 def repair_new():
-    # En Mode Client, la prise en charge reste volontairement confidentielle
-    # pendant toute la création du dossier. Le retour en Mode Admin se fait
-    # uniquement via le bouton dédié.
+    # Une nouvelle prise en charge reste un écran Atelier normal.
+    # Nettoie un éventuel ancien Mode Client resté en session.
+    if request.method == "GET":
+        session.pop("client_mode", None)
+        session.pop("client_mode_rid", None)
+
     if request.method == "POST":
         selected_client_id_raw = request.form.get("client_id", "").strip()
 
@@ -15768,13 +14338,8 @@ def repair_new():
         con.commit()
         con.close()
 
-        if session.get("client_mode"):
-            # Autorise uniquement ce nouveau dossier dans le Mode Client
-            # (détail, signature, QR et fiche d'entrée via security_gate()).
-            session["client_mode_rid"] = rid
-        else:
-            session.pop("client_mode_rid", None)
-
+        session.pop("client_mode", None)
+        session.pop("client_mode_rid", None)
         # Publie le dossier initial si la synchronisation portail est activée.
         publish_tracking_snapshot(rid)
         try:
@@ -15970,41 +14535,6 @@ def client_message_from_client(client_id):
     )
 
 
-@app.route("/repair/<int:rid>/tracking-resend", methods=["POST"])
-def repair_tracking_resend(rid):
-    """Renvoye volontairement le code de suivi initial depuis l'écran Message client."""
-    con = db()
-    row = con.execute("""
-        SELECT public_tracking_code
-        FROM repairs
-        WHERE id=?
-    """, (rid,)).fetchone()
-    con.close()
-
-    if not row:
-        return "Dossier introuvable", 404
-
-    code = str(row["public_tracking_code"] or "").strip()
-    if not code:
-        flash("Aucun code de suivi public n'est disponible pour ce dossier.")
-        return redirect(url_for("client_message", rid=rid))
-
-    sent, detail, channel = send_tracking_notification(rid, "initial", force=True)
-
-    if sent:
-        label = "SMS" if channel == "sms" else "e-mail"
-        flash(f"Code de suivi renvoyé par {label}.")
-        audit_event(
-            "TRACKING_INITIAL_RESEND",
-            f"Code de suivi renvoyé repair_id={rid}; channel={channel}",
-            request.remote_addr,
-        )
-    else:
-        flash(f"Échec du renvoi du code de suivi : {detail}")
-
-    return redirect(url_for("client_message", rid=rid))
-
-
 @app.route("/repair/<int:rid>/message-client")
 def client_message(rid):
     """Prépare un SMS/message client sans l'envoyer automatiquement."""
@@ -16014,10 +14544,7 @@ def client_message(rid):
                c.name client_name,
                c.first_name client_first_name,
                c.last_name client_last_name,
-               c.phone client_phone,
-               c.phone_secondary client_phone_secondary,
-               c.email client_email,
-               c.email_secondary client_email_secondary
+               c.phone client_phone
         FROM repairs r
         JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
@@ -16518,7 +15045,9 @@ def repair_edit(rid):
                c.postal_code client_postal_code,
                c.city client_city,
                c.phone client_phone,
-               c.email client_email
+               c.phone_secondary client_phone_secondary,
+               c.email client_email,
+               c.email_secondary client_email_secondary
         FROM repairs r JOIN clients c ON c.id=r.client_id
         WHERE r.id=?
     """, (rid,)).fetchone()
@@ -16551,22 +15080,52 @@ def repair_edit(rid):
             followup_year = r["followup_year"] or now().year
             followup_month = r["followup_month"] or now().month
 
-        con.execute("""
-            UPDATE clients SET
-                first_name=?, last_name=?, name=?, company=?, address=?, address_street=?,
-                postal_code=?, city=?, phone=?, phone_secondary=?, email=?, email_secondary=?,
-                google_sync_status=?, google_sync_error=?, updated_at=?
-            WHERE id=?
-        """, (
-            first_name, last_name, name, company, address, address_street,
-            postal_code, city,
-            request.form.get("phone", "").strip(),
-            phone_secondary,
-            request.form.get("email", "").strip(),
-            email_secondary,
-            "À synchroniser", "", now().isoformat(timespec="seconds"),
-            r["client_id"]
-        ))
+        # IMPORTANT : une modification du suivi ne doit PAS désynchroniser le client Google.
+        # On ne touche à la fiche client (et à google_sync_status) que si une vraie
+        # donnée de contact a effectivement changé dans le formulaire.
+        phone = request.form.get("phone", "").strip()
+        email = request.form.get("email", "").strip()
+        contact_values = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "company": company,
+            "address_street": address_street,
+            "postal_code": postal_code,
+            "city": city,
+            "phone": phone,
+            "phone_secondary": phone_secondary,
+            "email": email,
+            "email_secondary": email_secondary,
+        }
+        current_contact_values = {
+            "first_name": str(r["client_first_name"] or "").strip(),
+            "last_name": str(r["client_last_name"] or "").strip(),
+            "company": str(r["client_company"] or "").strip(),
+            "address_street": str(r["client_address_street"] or "").strip(),
+            "postal_code": str(r["client_postal_code"] or "").strip(),
+            "city": str(r["client_city"] or "").strip(),
+            "phone": str(r["client_phone"] or "").strip(),
+            "phone_secondary": str(r["client_phone_secondary"] or "").strip(),
+            "email": str(r["client_email"] or "").strip(),
+            "email_secondary": str(r["client_email_secondary"] or "").strip(),
+        }
+        contact_changed = any(
+            current_contact_values[field] != str(value or "").strip()
+            for field, value in contact_values.items()
+        )
+
+        if contact_changed:
+            con.execute("""
+                UPDATE clients SET
+                    first_name=?, last_name=?, name=?, company=?, address=?, address_street=?,
+                    postal_code=?, city=?, phone=?, phone_secondary=?, email=?, email_secondary=?,
+                    google_sync_status='À synchroniser', google_sync_error='', updated_at=?
+                WHERE id=?
+            """, (
+                first_name, last_name, name, company, address, address_street,
+                postal_code, city, phone, phone_secondary, email, email_secondary,
+                now().isoformat(timespec="seconds"), r["client_id"]
+            ))
 
         new_status = request.form.get("status", "Reçu")
         finished_at = r["finished_at"]
@@ -16945,9 +15504,7 @@ def repair_update(rid):
 def repair_close(rid):
     con = db()
     r = con.execute("""
-        SELECT r.*, c.name client_name, c.first_name client_first_name, c.last_name client_last_name,
-               c.company client_company,
-               c.email client_email, c.email_secondary client_email_secondary, c.phone client_phone,
+        SELECT r.*, c.name client_name, c.email client_email, c.email_secondary client_email_secondary, c.phone client_phone,
                c.phone_secondary client_phone_secondary,
                c.address_street client_address_street, c.postal_code client_postal_code,
                c.city client_city
@@ -16958,25 +15515,6 @@ def repair_close(rid):
         return "Dossier introuvable", 404
 
     if request.method == "POST":
-        selected_invoice_client_id = None
-        if int(r["simple_invoice"] or 0) == 1 and r["invoice_no"]:
-            selected_client_raw = str(request.form.get("selected_client_id") or "").strip()
-            if selected_client_raw:
-                if not selected_client_raw.isdigit():
-                    con.close()
-                    flash("Client sélectionné invalide.")
-                    return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
-                selected_client = con.execute("""
-                    SELECT id, name
-                    FROM clients
-                    WHERE id=? AND COALESCE(archived,0)=0
-                """, (int(selected_client_raw),)).fetchone()
-                if not selected_client:
-                    con.close()
-                    flash("Client sélectionné introuvable.")
-                    return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
-                selected_invoice_client_id = int(selected_client["id"])
-
         quantities = request.form.getlist("line_qty[]")
         descriptions = request.form.getlist("line_desc[]")
         prices = request.form.getlist("line_price[]")
@@ -17099,6 +15637,10 @@ def repair_close(rid):
             inv = requested_invoice_no
         else:
             inv = r["invoice_no"] or make_invoice_no()
+
+        # Références commerciales facultatives : purement informatives.
+        quote_no = str(request.form.get("quote_no") or "").strip()
+        order_no = str(request.form.get("order_no") or "").strip()
 
         # V2.3.287 — date de facture éditable depuis FACTURE / MODIFIER FACTURE.
         invoice_date_raw = request.form.get("invoice_date", "").strip()
@@ -17373,14 +15915,12 @@ def repair_close(rid):
             close_payment_method = deposit_method or close_payment_mode
             close_payment_detail = deposit_detail or ""
 
-        # V2.3.85 — facture réglée = matériel restitué.
-        # Une facture non réglée reste Terminé (sauf dossier déjà explicitement restitué).
-        if paid_flag:
-            close_status = "Restitué"
-            close_returned_at = r["returned_at"] or accounting_date or now().date().isoformat()
-        else:
-            close_status = "Restitué" if r["status"] == "Restitué" else "Terminé"
-            close_returned_at = r["returned_at"] if close_status == "Restitué" else None
+        # V2.6.2 — la facturation est indépendante de l'état Atelier.
+        # Créer/modifier/encaisser une facture ne signifie pas que la réparation
+        # est terminée ni que le matériel a été restitué.
+        # Le statut reste donc exactement celui du dossier avant facturation.
+        close_status = str(r["status"] or "").strip() or "Reçu"
+        close_returned_at = r["returned_at"]
 
         close_sent_via = (
             request.form.get("sent_via")
@@ -17397,6 +15937,7 @@ def repair_close(rid):
                 paid=?, sent_via=?, work_done=?, tests_validation=?,
                 remarks=?, finished_at=?, invoice_no=?, status=?, returned_at=?,
                 service_description=?, goods_description=?,
+                quote_no=?, order_no=?,
                 legacy_invoice_text=?,
                 accounting_year=?, accounting_month=?, accounting_date=?, accounting_status=?,
                 accounting_service_amount=?, accounting_goods_amount=?,
@@ -17414,6 +15955,7 @@ def repair_close(rid):
             request.form.get("tests_validation",""),
             (r["remarks"] or ""),
             finished, inv, close_status, close_returned_at, service_desc, goods_desc,
+            quote_no, order_no,
             inv,
             accounting_year, accounting_month, accounting_date, accounting_status,
             accounting_service_amount, accounting_goods_amount,
@@ -17451,14 +15993,6 @@ def repair_close(rid):
 
         record_repair_status_change(con, rid, r["status"], close_status, "Facturation")
 
-        client_changed = False
-        if selected_invoice_client_id is not None and selected_invoice_client_id != int(r["client_id"]):
-            con.execute(
-                "UPDATE repairs SET client_id=? WHERE id=?",
-                (selected_invoice_client_id, rid)
-            )
-            client_changed = True
-
         con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
         for line in lines:
             con.execute("""
@@ -17468,23 +16002,11 @@ def repair_close(rid):
 
         con.commit()
         con.close()
-
-        archive_refresh_ok = True
-        archive_refresh_info = ""
-        if client_changed and int(r["simple_invoice"] or 0) == 1:
-            archive_refresh_ok, archive_refresh_info = refresh_simple_invoice_archive(rid)
-
         tracking_published = publish_tracking_snapshot(rid)
         if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
             flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
         else:
             flash("Facture modifiée." if r["invoice_no"] else "Facture créée.")
-
-        if client_changed:
-            if archive_refresh_ok:
-                flash("Client de la facture modifié et PDF archivé actualisé.")
-            else:
-                flash(f"Client modifié, mais archive PDF à vérifier : {archive_refresh_info}")
         if read_tracking_settings().get("enabled"):
             flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
 
@@ -17612,37 +16134,10 @@ def repair_close(rid):
     ), 2)
     payment_summary = payment_summary_for_repair(con, rid, current_invoice_total)
     payment_rows = invoice_payment_rows(con, rid)
-    invoice_clients = []
-    if int(r["simple_invoice"] or 0) == 1 and r["invoice_no"]:
-        client_rows = con.execute("""
-            SELECT id, name, first_name, last_name, company
-            FROM clients
-            WHERE COALESCE(archived,0)=0
-        """).fetchall()
-        for item in client_rows:
-            item = dict(item)
-            first_name = str(item.get("first_name") or "").strip()
-            last_name = str(item.get("last_name") or item.get("name") or "").strip()
-            company = str(item.get("company") or "").strip()
-            person = " ".join(x for x in (first_name, last_name) if x).strip()
-            if person and company and normalize_global_search(person) != normalize_global_search(company):
-                display_name = f"{person} — {company}"
-            else:
-                display_name = person or company or str(item.get("name") or "").strip()
-            item["display_name"] = display_name
-            invoice_clients.append(item)
-        invoice_clients.sort(
-            key=lambda item: (
-                normalize_global_search(item.get("display_name") or ""),
-                int(item.get("id") or 0),
-            )
-        )
-
     con.close()
     return render_template(
         "close.html",
         r=r,
-        invoice_clients=invoice_clients,
         invoice_lines=lines,
         invoice_was_reconstructed=invoice_was_reconstructed,
         original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
@@ -17828,19 +16323,6 @@ def intake_pdf(rid):
     con.close()
     if not r:
         return "introuvable", 404
-
-    # PDF de suivi historique/original : ne jamais le régénérer par-dessus.
-    if lang == "fr" and request.args.get("rebuild") != "1":
-        original_followup = repair_original_pdf(r, "original_followup_pdf_path")
-        if original_followup:
-            force_download = request.args.get("download") == "1"
-            return send_pdf_with_title(
-                original_followup,
-                f"Suivi de réparation - {r['client_name']}",
-                download_name=original_followup.name,
-                as_attachment=force_download,
-            )
-
 
     bio = io.BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
@@ -18493,355 +16975,84 @@ def simple_invoice_done(rid):
     )
 
 
+MONTH_NAMES = {
+    1: "Janvier",
+    2: "Février",
+    3: "Mars",
+    4: "Avril",
+    5: "Mai",
+    6: "Juin",
+    7: "Juillet",
+    8: "Août",
+    9: "Septembre",
+    10: "Octobre",
+    11: "Novembre",
+    12: "Décembre",
+}
 
+def period_prefix(year, month=0):
+    """Retourne YYYY- ou YYYY-MM- pour les dates ISO de WOPR."""
+    if month:
+        return f"{int(year):04d}-{int(month):02d}-"
+    return f"{int(year):04d}-"
 
-def refresh_simple_invoice_archive(rid):
+def resolve_period_selection(
+    *,
+    requested_year=None,
+    available_years=None,
+    default_all_year=False,
+    search_active=False,
+):
     """
-    Réaligne l'archive PDF d'une facture simple après correction du client.
+    Source unique pour les filtres année/mois de WOPR.
 
-    - supprime uniquement les PDF archivés portant le même numéro de facture ;
-    - régénère immédiatement la version FR avec le client actuellement rattaché ;
-    - ne touche à aucune autre facture.
+    Règles :
+    - année courante + vue normale : mois courant par défaut ;
+    - année d'archive : toute l'année par défaut ;
+    - vue métier globale : toute l'année par défaut ;
+    - month=0 : « Toute l'année » explicite ;
+    - un mois choisi explicitement est conservé ;
+    - search_active neutralise le mois automatique.
     """
-    con = db()
-    row = con.execute("""
-        SELECT id, invoice_no, finished_at, received_date
-        FROM repairs
-        WHERE id=? AND COALESCE(simple_invoice,0)=1
-    """, (rid,)).fetchone()
-    con.close()
-
-    if not row or not str(row["invoice_no"] or "").strip():
-        return False, "Facture simple introuvable"
-
-    invoice_no = str(row["invoice_no"]).strip()
-    invoice_date_value = invoice_no_date(invoice_no)
-    if not invoice_date_value:
-        invoice_date_value = str(row["finished_at"] or row["received_date"] or "")[:10]
-    try:
-        datetime.strptime(str(invoice_date_value or ""), "%Y-%m-%d")
-    except Exception:
-        invoice_date_value = now().strftime("%Y-%m-%d")
-
-    invoice_folder = year_month_folder(
-        FACTURES_ROOT,
-        invoice_date_value,
-        create=True
-    )
-
-    token = safe_filename(invoice_no)
-    removed = []
-    for pdf in invoice_folder.glob(f"*_{token}_*.pdf"):
-        try:
-            pdf.unlink()
-            removed.append(pdf.name)
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            app.logger.warning(
-                "Impossible de supprimer l'ancienne archive facture %s : %s",
-                pdf, exc
-            )
+    current = now()
+    current_year = current.year
 
     try:
-        with app.test_client() as client:
-            with client.session_transaction() as sess:
-                sess.update(dict(session))
-            response = client.get(
-                url_for("invoice_pdf", rid=rid, lang="fr", inline="1")
+        year = int(requested_year if requested_year not in (None, "") else current_year)
+    except (TypeError, ValueError):
+        year = current_year
+
+    if available_years is not None:
+        valid_years = {int(y) for y in available_years}
+        if year not in valid_years:
+            year = current_year if current_year in valid_years else (
+                max(valid_years) if valid_years else current_year
             )
-            if response.status_code != 200 or not bytes(response.data).startswith(b"%PDF"):
-                return False, (
-                    f"ancienne(s) archive(s) supprimée(s): {len(removed)}, "
-                    f"mais régénération PDF impossible (HTTP {response.status_code})"
-                )
-    except Exception as exc:
-        app.logger.exception(
-            "Régénération archive facture simple %s impossible", invoice_no
-        )
-        return False, (
-            f"ancienne(s) archive(s) supprimée(s): {len(removed)}, "
-            f"mais régénération impossible: {exc}"
-        )
 
-    return True, f"{len(removed)} ancienne(s) archive(s) remplacée(s)"
+    raw_month = request.args.get("month")
+    explicit_month = raw_month not in (None, "")
 
-
-@app.route("/invoice/simple/<int:rid>/client", methods=["GET", "POST"])
-def simple_invoice_client_edit(rid):
-    """Corrige l'identité client d'une facture simple sans toucher aux autres factures."""
-    con = db()
-    row = con.execute("""
-        SELECT r.id, r.invoice_no, r.client_id, r.simple_invoice,
-               c.name, c.first_name, c.last_name, c.company,
-               c.address, c.address_street, c.postal_code, c.city,
-               c.phone, c.phone_secondary, c.email, c.email_secondary, c.notes
-        FROM repairs r
-        JOIN clients c ON c.id=r.client_id
-        WHERE r.id=? AND COALESCE(r.simple_invoice,0)=1
-    """, (rid,)).fetchone()
-
-    if not row:
-        con.close()
-        return "Facture simple introuvable", 404
-
-    if request.method == "POST":
-        selected_client_id_raw = request.form.get("selected_client_id", "").strip()
-
-        if selected_client_id_raw.isdigit():
-            selected_client = con.execute("""
-                SELECT *
-                FROM clients
-                WHERE id=? AND COALESCE(archived,0)=0
-            """, (int(selected_client_id_raw),)).fetchone()
-
-            if not selected_client:
-                con.close()
-                flash("Client sélectionné introuvable.")
-                return redirect(url_for("simple_invoice_client_edit", rid=rid))
-
-            old_client_id = int(row["client_id"])
-            new_client_id = int(selected_client["id"])
-            con.execute(
-                "UPDATE repairs SET client_id=? WHERE id=?",
-                (new_client_id, rid)
-            )
-            con.commit()
-            con.close()
-
-            archive_ok, archive_info = refresh_simple_invoice_archive(rid)
-
-            audit_event(
-                "SIMPLE_INVOICE_CLIENT_REASSIGN",
-                (
-                    f"repair_id={rid}; invoice={row['invoice_no']}; "
-                    f"old_client_id={old_client_id}; new_client_id={new_client_id}"
-                ),
-                request.remote_addr
-            )
-            if archive_ok:
-                flash(
-                    f"Facture {row['invoice_no']} rattachée à {selected_client['name']} "
-                    "et PDF archivé actualisé."
-                )
-            else:
-                flash(
-                    f"Facture {row['invoice_no']} rattachée à {selected_client['name']}, "
-                    f"mais archive PDF à vérifier : {archive_info}"
-                )
-            return redirect(url_for("invoices_page"))
-
-        first_name = request.form.get("first_name", "").strip()
-        last_name = request.form.get("last_name", "").strip()
-        company = request.form.get("company", "").strip()
-        name = compose_client_name(last_name, first_name).strip() or company
-
-        if not name:
-            con.close()
-            flash("Choisis un client existant ou renseigne au moins un prénom/nom ou une entreprise.")
-            return redirect(url_for("simple_invoice_client_edit", rid=rid))
-
-        old_client_id = int(row["client_id"])
-
-        # Si cette fiche client n'est utilisée QUE par cette facture simple,
-        # on la corrige directement. Sinon on duplique la fiche afin de ne pas
-        # modifier rétroactivement d'autres dossiers/factures/devis du client.
-        repair_count = int(con.execute(
-            "SELECT COUNT(*) FROM repairs WHERE client_id=?",
-            (old_client_id,)
-        ).fetchone()[0] or 0)
-        quote_count = int(con.execute(
-            "SELECT COUNT(*) FROM quotes WHERE client_id=?",
-            (old_client_id,)
-        ).fetchone()[0] or 0)
-
-        stamp = now().isoformat(timespec="seconds")
-
-        if repair_count == 1 and quote_count == 0:
-            con.execute("""
-                UPDATE clients
-                SET name=?, first_name=?, last_name=?, company=?, updated_at=?,
-                    google_sync_status='À synchroniser', google_sync_error=''
-                WHERE id=?
-            """, (
-                name, first_name, last_name, company, stamp, old_client_id
-            ))
-            new_client_id = old_client_id
-            mode = "client_corrigé"
-        else:
-            cur = con.execute("""
-                INSERT INTO clients(
-                    name,last_name,first_name,company,
-                    address,address_street,postal_code,city,
-                    phone,phone_secondary,email,email_secondary,notes,
-                    created_at,updated_at,google_sync_status,google_sync_error,archived
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
-            """, (
-                name,
-                last_name,
-                first_name,
-                company,
-                row["address"] or "",
-                row["address_street"] or "",
-                row["postal_code"] or "",
-                row["city"] or "",
-                row["phone"] or "",
-                row["phone_secondary"] or "",
-                row["email"] or "",
-                row["email_secondary"] or "",
-                row["notes"] or "",
-                stamp,
-                stamp,
-                "À synchroniser",
-                "",
-            ))
-            new_client_id = int(cur.lastrowid)
-            con.execute(
-                "UPDATE repairs SET client_id=? WHERE id=?",
-                (new_client_id, rid)
-            )
-            mode = "client_dupliqué_pour_isoler_facture"
-
-        con.commit()
-        con.close()
-
-        archive_ok, archive_info = refresh_simple_invoice_archive(rid)
-
-        audit_event(
-            "SIMPLE_INVOICE_CLIENT_EDIT",
-            (
-                f"repair_id={rid}; invoice={row['invoice_no']}; "
-                f"old_client_id={old_client_id}; new_client_id={new_client_id}; "
-                f"mode={mode}; name={name}"
-            ),
-            request.remote_addr
-        )
-        if archive_ok:
-            flash(
-                f"Client de la facture {row['invoice_no']} corrigé : {name}. "
-                "PDF archivé actualisé."
-            )
-        else:
-            flash(
-                f"Client de la facture {row['invoice_no']} corrigé : {name}, "
-                f"mais archive PDF à vérifier : {archive_info}"
-            )
-        return redirect(url_for("invoices_page"))
-
-    client_rows = con.execute("""
-        SELECT id, name, first_name, last_name, company
-        FROM clients
-        WHERE COALESCE(archived,0)=0
-    """).fetchall()
-
-    clients = []
-    for item in client_rows:
-        item = dict(item)
-        first_name = str(item.get("first_name") or "").strip()
-        last_name = str(item.get("last_name") or item.get("name") or "").strip()
-        company = str(item.get("company") or "").strip()
-        person = " ".join(x for x in (first_name, last_name) if x).strip()
-        if person and company and normalize_global_search(person) != normalize_global_search(company):
-            display_name = f"{person} — {company}"
-        else:
-            display_name = person or company or str(item.get("name") or "").strip()
-        item["display_name"] = display_name
-        clients.append(item)
-
-    clients.sort(
-        key=lambda item: (
-            normalize_global_search(item.get("display_name") or ""),
-            int(item.get("id") or 0),
-        )
-    )
-
-    con.close()
-    return render_template(
-        "simple_invoice_client_edit.html",
-        r=dict(row),
-        clients=clients,
-    )
-
-
-@app.route("/invoice/simple/<int:rid>/delete", methods=["GET", "POST"])
-def simple_invoice_delete(rid):
-    """Supprime une facture simple créée par erreur, avec sauvegarde préalable."""
-    con = db()
-    row = con.execute("""
-        SELECT r.*, c.name AS client_name
-        FROM repairs r
-        JOIN clients c ON c.id=r.client_id
-        WHERE r.id=? AND COALESCE(r.simple_invoice,0)=1
-    """, (rid,)).fetchone()
-
-    if not row:
-        con.close()
-        return "Facture simple introuvable", 404
-
-    payment_count = int(con.execute(
-        "SELECT COUNT(*) FROM invoice_payments WHERE repair_id=?",
-        (rid,)
-    ).fetchone()[0] or 0)
-
-    payment_locked = bool(
-        int(row["paid"] or 0)
-        or payment_count
-        or str(row["sumup_transaction_id"] or "").strip()
-    )
-
-    if request.method == "POST":
-        if payment_locked:
-            con.close()
-            flash("Suppression refusée : cette facture possède déjà un règlement ou une transaction SumUp.")
-            return redirect(url_for("invoices_page"))
-
-        if request.form.get("confirm_delete", "").strip() != "SUPPRIMER":
-            con.close()
-            flash("Suppression annulée : tape SUPPRIMER pour confirmer.")
-            return redirect(url_for("simple_invoice_delete", rid=rid))
-
-        backup = backup_database(
-            force=True,
-            tag=f"avant_suppression_facture_simple_{rid}",
-            only_if_changed=False
-        )
-
-        invoice_no = str(row["invoice_no"] or "")
-        client_id = int(row["client_id"])
-
+    if search_active:
+        selected_month = 0
+    elif explicit_month:
         try:
-            con.execute("BEGIN")
-            con.execute("DELETE FROM invoice_payments WHERE repair_id=?", (rid,))
-            con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
-            con.execute("DELETE FROM repair_status_history WHERE repair_id=?", (rid,))
-            con.execute("DELETE FROM repairs WHERE id=?", (rid,))
-            con.commit()
-        except Exception:
-            con.rollback()
-            con.close()
-            raise
+            selected_month = int(raw_month)
+        except (TypeError, ValueError):
+            selected_month = 0
+        if selected_month not in range(1, 13):
+            selected_month = 0
+    elif default_all_year:
+        selected_month = 0
+    elif year == current_year:
+        selected_month = current.month
+    else:
+        selected_month = 0
 
-        con.close()
+    return year, selected_month
 
-        audit_event(
-            "SIMPLE_INVOICE_DELETE",
-            (
-                f"repair_id={rid}; invoice={invoice_no}; client_id={client_id}; "
-                f"backup={backup.name if backup else 'none'}"
-            ),
-            request.remote_addr
-        )
-        flash(f"Facture simple {invoice_no} supprimée. La fiche client a été conservée.")
-        return redirect(url_for("invoices_page"))
-
-    con.close()
-    return render_template(
-        "simple_invoice_delete.html",
-        r=dict(row),
-        payment_locked=payment_locked,
-        payment_count=payment_count,
-    )
-
+def date_is_in_period(value, year, month=0):
+    """Teste l'appartenance d'une date texte ISO à une période."""
+    return str(value or "").startswith(period_prefix(year, month))
 
 @app.route("/factures")
 def invoices_page():
@@ -19070,6 +17281,22 @@ def invoices_page():
         reverse=True
     )
 
+    # Total général de TOUS les impayés, toutes années et périodes confondues.
+    # Pour une facture avec acompte, on additionne uniquement le reste à payer.
+    unpaid_grand_total = round(sum(
+        max(
+            0.0,
+            float(
+                inv.get("remaining_amount")
+                if inv.get("remaining_amount") is not None
+                else inv.get("invoice_total") or 0
+            )
+        )
+        for inv in invoices
+        if not bool(inv.get("is_paid"))
+    ), 2)
+    unpaid_grand_count = sum(1 for inv in invoices if not bool(inv.get("is_paid")))
+
     current_year = now().year
     available_years = sorted(
         {current_year} | {
@@ -19291,6 +17518,8 @@ def invoices_page():
         search_all_years=bool(q),
         sumup_enabled=bool(read_sumup_settings().get("enabled")),
         orphan_invoice_count=orphan_invoice_count,
+        unpaid_grand_total=unpaid_grand_total,
+        unpaid_grand_count=unpaid_grand_count,
     )
 
 
@@ -19538,14 +17767,11 @@ def _sumup_invoice_candidates():
 
     result = []
     for members in grouped.values():
-        # Uniquement les factures réellement encaissées, ou les anciennes lignes
-        # qui possèdent déjà une date comptable. Évite les impayés dans les candidats.
-        if not any(
-            bool(x.get("paid")) or str(x.get("accounting_date") or "").strip()
-            for x in members
-        ):
-            continue
-
+        # Inclure aussi les factures non encore marquées payées : une vente CB
+        # fraîchement encaissée sur le terminal doit pouvoir être reconnue par
+        # SumUp avant que WOPR ait déjà renseigné paid/accounting_date.
+        # La sécurité du rattachement automatique est assurée plus bas : montant
+        # exact + transaction POS réussie + facture unique du même jour.
         rep = next((x for x in members if not x.get("legacy_imported")), members[0])
         total, total_source = _sumup_invoice_total_from_members(members)
 
@@ -19878,22 +18104,59 @@ def sumup_transactions_page():
         second_score = int(second.get("_score") or 0) if second else -999
         strong = bool(best and best_score >= 60 and (best_score - second_score) >= 25)
 
-        # À partir de maintenant, rattachement direct des CB sans ambiguïté :
-        # une seule facture, montant exact, date d'encaissement exacte. Les
-        # transactions historiques et les montants concurrents restent manuels.
+        # Rattachement automatique sans ambiguïté. Deux cas sont acceptés :
+        # 1) facture déjà enregistrée payée : montant exact + date d'encaissement exacte ;
+        # 2) facture fraîchement créée mais pas encore marquée payée : montant exact,
+        #    une seule facture du même jour, transaction SumUp POS réussie.
+        # Dans le second cas, _sumup_auto_link_safe() renseigne lui-même paid, CB,
+        # date comptable et identifiant de transaction SumUp.
         auto_linked = False
         auto_candidate = best if (strong and len(ranked) == 1) else None
-        if (
+
+        fresh_same_day = []
+        tx_date = None
+        raw_ts = str(tx.get("timestamp") or "").strip()
+        if raw_ts:
+            try:
+                tx_date = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).date()
+            except Exception:
+                tx_date = None
+        if tx_date:
+            for candidate in ranked:
+                if candidate.get("paid") or str(candidate.get("accounting_date") or "").strip():
+                    continue
+                try:
+                    candidate_invoice_date = date.fromisoformat(str(candidate.get("invoice_date") or "")[:10])
+                except Exception:
+                    continue
+                if candidate_invoice_date == tx_date:
+                    fresh_same_day.append(candidate)
+
+        # Une facture impayée du jour est sûre seulement si elle est unique pour
+        # ce montant. Les autres factures historiques de même montant ne bloquent
+        # donc pas le cas courant « je facture puis j'encaisse immédiatement ».
+        fresh_candidate = fresh_same_day[0] if len(fresh_same_day) == 1 else None
+
+        successful_pos = (
             str(tx.get("status") or "").upper() == "SUCCESSFUL"
+            and str(tx.get("payment_type") or tx.get("entry_mode") or "").upper() in {"POS", "CB"}
             and not linked.get(tx_id)
             and not classifications.get(tx_id)
-            and auto_candidate
-            and int(auto_candidate.get("_score") or 0) >= 100
-            and str(auto_candidate.get("payment_mode") or "").upper() in {"CB", "MIXTE"}
-            and str(tx.get("payment_type") or tx.get("entry_mode") or "").upper() in {"POS", "CB"}
-        ):
-            auto_linked = _sumup_auto_link_safe(tx, auto_candidate)
-            if auto_linked:
+        )
+
+        if successful_pos:
+            if (
+                auto_candidate
+                and int(auto_candidate.get("_score") or 0) >= 100
+                and str(auto_candidate.get("payment_mode") or "").upper() in {"CB", "MIXTE"}
+            ):
+                auto_linked = _sumup_auto_link_safe(tx, auto_candidate)
+            elif fresh_candidate:
+                auto_linked = _sumup_auto_link_safe(tx, fresh_candidate)
+                if auto_linked:
+                    auto_candidate = fresh_candidate
+
+            if auto_linked and auto_candidate:
                 linked[tx_id] = {
                     "rid": int(auto_candidate["id"]),
                     "invoice_no": str(auto_candidate.get("invoice_no") or ""),
@@ -20372,7 +18635,7 @@ def sumup_transaction_relink_existing():
         try:
             tx_date = datetime.fromisoformat(
                 tx_timestamp.replace("Z", "+00:00")
-            ).astimezone(europe_paris_tz()).date().isoformat()
+            ).astimezone(ZoneInfo("Europe/Paris")).date().isoformat()
         except Exception:
             tx_date = ""
 
@@ -21383,23 +19646,26 @@ def invoice_pdf(rid):
     if not r["invoice_no"]:
         return "La réparation n'est pas clôturée.", 400
 
-    # Facture historique/originale importée : elle reste la référence.
-    # Le paramètre ?rebuild=1 permet volontairement de demander une reconstruction WOPR.
-    if lang == "fr" and request.args.get("rebuild") != "1":
-        original_invoice = repair_original_pdf(r, "original_invoice_pdf_path")
-        if original_invoice:
-            return send_pdf_with_title(
-                original_invoice,
-                f"Facture {r['invoice_no']} - {r['client_name']}",
-                download_name=original_invoice.name,
-                as_attachment=force_download,
-            )
+    # V2.6.2 — les factures liées à une réparation rappellent que
+    # les détails techniques complets sont disponibles sur la feuille de suivi.
+    # Ne concerne pas les factures simples.
+    invoice_followup_note = translate_pdf_text("Détails sur la feuille de suivi", lang)
 
     # V2.3.20 : une ancienne facture ODS peut avoir beaucoup plus de détails
     # dans son PDF d'origine que dans le Suivi importé. Tant que l'utilisateur
     # n'a pas réellement reconstruit / enregistré cette facture dans l'éditeur,
     # le PDF original reste la référence.
-    if lang == "fr" and r["legacy_imported"] and not invoice_lines and request.args.get("rebuild") != "1":
+    has_commercial_refs = bool(
+        str(r["quote_no"] or "").strip() or str(r["order_no"] or "").strip()
+    )
+
+    if (
+        lang == "fr"
+        and r["legacy_imported"]
+        and not invoice_lines
+        and request.args.get("rebuild") != "1"
+        and not has_commercial_refs
+    ):
         original_pdf = find_client_invoice_pdf(
             r["invoice_no"],
             r["client_name"]
@@ -21453,11 +19719,30 @@ def invoice_pdf(rid):
     c.drawCentredString(bx + bw/2, by + 25*mm, pdf_t("invoice", lang))
 
     c.setFillColor(BLACK)
-    c.setFont(PDF_FONTS["regular"], 10.5)
-    c.drawString(bx + 1.5*mm, by + 9*mm, pdf_t("invoice_no", lang) + " :")
-    fit_text(c, r["invoice_no"], bx + 29*mm, by + 9*mm, bw - 31*mm, PDF_FONTS["regular"], 10.5, 7)
-    c.drawString(bx + 1.5*mm, by + 3.5*mm, pdf_t("date", lang) + " :")
-    c.drawString(bx + 29*mm, by + 3.5*mm, fr_date(r["finished_at"]))
+    commercial_refs = []
+    if str(r["quote_no"] or "").strip():
+        commercial_refs.append((pdf_t("quote_no", lang), str(r["quote_no"]).strip()))
+    if str(r["order_no"] or "").strip():
+        commercial_refs.append((pdf_t("order_no", lang), str(r["order_no"]).strip()))
+
+    if commercial_refs:
+        c.setFont(PDF_FONTS["regular"], 8.8)
+        meta_rows = [
+            (pdf_t("invoice_no", lang), str(r["invoice_no"] or "")),
+            (pdf_t("date", lang), fr_date(r["finished_at"])),
+        ] + commercial_refs
+        meta_y = by + 16.0*mm
+        for label, value in meta_rows:
+            c.drawString(bx + 1.5*mm, meta_y, label + " :")
+            fit_text(c, value, bx + 27.5*mm, meta_y, bw - 29.5*mm, PDF_FONTS["regular"], 8.8, 6.6)
+            meta_y -= 5.0*mm
+    else:
+        # Sans référence commerciale, conserver exactement le cartouche historique.
+        c.setFont(PDF_FONTS["regular"], 10.5)
+        c.drawString(bx + 1.5*mm, by + 9*mm, pdf_t("invoice_no", lang) + " :")
+        fit_text(c, r["invoice_no"], bx + 29*mm, by + 9*mm, bw - 31*mm, PDF_FONTS["regular"], 10.5, 7)
+        c.drawString(bx + 1.5*mm, by + 3.5*mm, pdf_t("date", lang) + " :")
+        c.drawString(bx + 29*mm, by + 3.5*mm, fr_date(r["finished_at"]))
 
     line_y = H - 64*mm
     c.setStrokeColor(BLUE)
@@ -21541,28 +19826,20 @@ def invoice_pdf(rid):
     c.drawCentredString(xs[3] + col_total/2, ty_top-6.1*mm, pdf_t("total", lang))
 
     rows = []
-    followup_detail_note = translate_pdf_text("Détails sur feuille de suivi", lang)
     if invoice_lines:
         for line in invoice_lines:
             qty = float(line["quantity"] or 0)
             unit = float(line["unit_price"] or 0)
-            description = translate_pdf_text(line["description"], lang)
-            if str(line["line_type"] or "").strip().lower() == "service":
-                description = f"{description}\n{followup_detail_note}"
-            rows.append((qty, description, qty * unit, unit))
+            line_type = str(line["line_type"] or "").strip().lower()
+            rows.append((qty, translate_pdf_text(line["description"], lang), qty * unit, unit, line_type))
     else:
         # Ancienne facture sans lignes détaillées.
         if r["service_amount"]:
-            service_description = translate_pdf_text(
-                r["service_description"] or r["tests_validation"] or r["problem"] or "Prestation de service",
-                lang,
-            )
-            service_description = f"{service_description}\n{followup_detail_note}"
-            rows.append((1, service_description,
-                         float(r["service_amount"]), float(r["service_amount"])))
+            rows.append((1, translate_pdf_text(r["service_description"] or r["tests_validation"] or r["problem"] or "Prestation de service", lang),
+                         float(r["service_amount"]), float(r["service_amount"]), "service"))
         if r["goods_amount"]:
             rows.append((1, translate_pdf_text(r["goods_description"] or "Vente de marchandises / pièces", lang),
-                         float(r["goods_amount"]), float(r["goods_amount"])))
+                         float(r["goods_amount"]), float(r["goods_amount"]), "goods"))
 
     # -----------------------------------------------------------------
     # Typographie facture WOPR :
@@ -21575,7 +19852,12 @@ def invoice_pdf(rid):
     visual_rows = []
     desc_width = col_desc - 2*mm
 
-    for item_index, (qty, description, amount, unit) in enumerate(rows):
+    # La mention "Détails sur la feuille de suivi" appartient à la prestation :
+    # elle est ajoutée juste sous la dernière ligne de service, avant toute marchandise.
+    service_indexes = [i for i, row in enumerate(rows) if row[4] == "service"]
+    last_service_index = service_indexes[-1] if service_indexes else None
+
+    for item_index, (qty, description, amount, unit, line_type) in enumerate(rows):
         raw_lines = str(description or "").replace("\r", "").split("\n")
         if not raw_lines:
             raw_lines = [""]
@@ -21599,6 +19881,16 @@ def invoice_pdf(rid):
                 "amount": amount if line_index == 0 else None,
                 "unit": unit if line_index == 0 else None,
                 "font_size": 12 if is_title else 10,
+                "spacer": False,
+            })
+
+        if invoice_followup_note and item_index == last_service_index:
+            visual_rows.append({
+                "qty": None,
+                "desc": invoice_followup_note,
+                "amount": None,
+                "unit": None,
+                "font_size": 10,
                 "spacer": False,
             })
 
@@ -22682,7 +20974,7 @@ def import_proton_cancel():
 def global_search():
     """Recherche globale WOPR : multi-mots, accents et ponctuation ignorés."""
     q = " ".join(str(request.args.get("q") or "").split()).strip()
-    results = {"clients": [], "repairs": [], "ledger": [], "quotes": [], "archived_invoices": []}
+    results = {"clients": [], "repairs": [], "ledger": [], "quotes": [], "archived_invoices": [], "stock": []}
 
     if q:
         normalized_q = normalize_global_search(q)
@@ -22812,6 +21104,24 @@ def global_search():
             if canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
                not in found_invoice_nos
         ]
+
+        # Stock composants : référence, fonction, quantité et remarques.
+        # Même logique multi-mots / accents / ponctuation que le reste de la recherche globale.
+        ensure_stock_table()
+        stock_expr = [
+            "COALESCE(reference,'')",
+            "COALESCE(function,'')",
+            "COALESCE(quantity,'')",
+            "COALESCE(remarks,'')",
+        ]
+        where, params = build_where(stock_expr)
+        results["stock"] = con.execute(f"""
+            SELECT *
+            FROM stock_items
+            WHERE {where}
+            ORDER BY reference COLLATE NOCASE, id
+            LIMIT 50
+        """, params).fetchall()
 
         quote_expr = [
             "COALESCE(q.quote_no,'')",
@@ -23612,161 +21922,32 @@ def documents_audit():
     )
 
 
-
-
-
-
-
-def _repair_exact_unlinked_supplier_documents():
-    """Rattache les justificatifs exacts, y compris une facture couvrant plusieurs lignes d'achat.
-
-    Point important : plusieurs lignes Achats/Ventes peuvent légitimement partager
-    le même numéro de facture et le même justificatif. Ce n'est donc PAS une ambiguïté.
-
-    Sécurité :
-    - numéro de facture exact uniquement ;
-    - un seul justificatif logique doit correspondre à cette référence ;
-    - toutes les lignes Achat portant cette référence peuvent partager ce fichier ;
-    - seules les lignes sans document_path sont mises à jour ;
-    - aucun lien existant n'est écrasé ;
-    - aucun fichier n'est déplacé, renommé ou supprimé.
-    """
-    if not FOURNISSEURS_ROOT.exists():
-        return 0
-
-    con = db()
-    rows = con.execute("""
-        SELECT *
-        FROM ledger_entries
-        WHERE lower(COALESCE(operation,''))='achat'
-          AND TRIM(COALESCE(invoice_no,''))<>''
-        ORDER BY id
-    """).fetchall()
-
-    rows_by_key = {}
-    for row in rows:
-        raw = str(row["invoice_no"] or "").strip()
-        key = _match_key(raw)
-        if len(key) < 4:
-            continue
-
-        # Anciens pseudo-numéros historiques de type date/heure.
-        if raw.isdigit() and len(raw) in (11, 12):
-            continue
-
-        rows_by_key.setdefault(key, []).append(row)
-
-    if not rows_by_key:
-        con.close()
-        return 0
-
-    groups = _supplier_logical_document_groups()
-
-    # Pour chaque référence de facture, cherche le ou les justificatifs logiques exacts.
-    docs_by_invoice = {}
-    for invoice_key in rows_by_key:
-        matches = []
-
-        for group_paths in groups.values():
-            chosen = _supplier_choose_logical_document(group_paths)
-            if not chosen:
-                continue
-
-            stem_key = _match_key(chosen.stem)
-            filename_keys = _supplier_filename_invoice_keys(chosen)
-
-            if stem_key.endswith(invoice_key) or invoice_key in filename_keys:
-                matches.append(chosen)
-
-        # Un seul document logique exact => correspondance certaine.
-        if len(matches) == 1:
-            docs_by_invoice[invoice_key] = matches[0]
-
-    repaired = 0
-    stamp = now().isoformat(timespec="seconds")
-
-    for invoice_key, chosen in docs_by_invoice.items():
-        if not chosen.is_file():
-            continue
-
-        try:
-            rel = str(chosen.relative_to(DOCUMENTS_ROOT))
-        except Exception:
-            continue
-
-        # Toutes les lignes portant exactement cette facture peuvent pointer
-        # vers le même justificatif. On ne touche qu'aux lignes actuellement vides.
-        for row in rows_by_key[invoice_key]:
-            if str(row["document_path"] or "").strip():
-                continue
-
-            cur = con.execute("""
-                UPDATE ledger_entries
-                SET document_path=?,
-                    document_original_name=?,
-                    updated_at=?
-                WHERE id=?
-                  AND lower(COALESCE(operation,''))='achat'
-                  AND TRIM(COALESCE(document_path,''))=''
-            """, (
-                rel,
-                chosen.name,
-                stamp,
-                int(row["id"]),
-            ))
-
-            if int(cur.rowcount or 0) != 1:
-                continue
-
-            repaired += 1
-            try:
-                con.execute(
-                    "INSERT INTO audit_log(created_at,action,details,ip) VALUES(?,?,?,?)",
-                    (
-                        stamp,
-                        "LEDGER_DOCUMENT_AUTO_LINK_EXACT",
-                        f"id={int(row['id'])} invoice={row['invoice_no']} file={rel}"[:1000],
-                        request.remote_addr or "",
-                    ),
-                )
-            except Exception:
-                pass
-
-    if repaired:
-        con.commit()
-    con.close()
-    return repaired
-
-
 @app.route("/achats-ventes/controle-justificatifs")
 def supplier_documents_audit():
-    """Audit diagnostic en lecture seule des justificatifs fournisseurs.
+    """Audit non destructif des justificatifs fournisseurs.
 
-    IMPORTANT : cette page ne rattache plus rien automatiquement.
-    Elle expose la raison exacte pour chaque fichier considéré comme orphelin.
+    Signale :
+    - les liens valides ;
+    - les liens cassés ;
+    - les fichiers utilisés par plusieurs lignes d'achat ;
+    - les fichiers présents dans Fournisseurs mais non rattachés en base.
+
+    Cette route ne crée, ne déplace, ne renomme et ne supprime aucun fichier.
     """
     con = db()
-
-    linked_rows = con.execute("""
+    rows = con.execute("""
         SELECT * FROM ledger_entries
         WHERE lower(COALESCE(operation,''))='achat'
           AND COALESCE(document_path,'')<>''
         ORDER BY entry_date DESC, id DESC
     """).fetchall()
-
-    all_ledger_rows = con.execute("""
-        SELECT * FROM ledger_entries
-        WHERE TRIM(COALESCE(invoice_no,''))<>''
-        ORDER BY entry_date DESC, id DESC
-    """).fetchall()
-
     con.close()
 
     ok_rows, broken_rows = [], []
     resolved_by_row = {}
     linked_real_paths = set()
 
-    for row in linked_rows:
+    for row in rows:
         path = ledger_document_file(row)
         if path and path.is_file():
             ok_rows.append(row)
@@ -23774,31 +21955,17 @@ def supplier_documents_audit():
                 resolved = path.resolve()
             except Exception:
                 resolved = path
-
             resolved_by_row[int(row["id"])] = resolved
             linked_real_paths.add(str(resolved))
-
-            # PDF/XML frères = un seul justificatif logique.
-            try:
-                suffix = resolved.suffix.lower()
-                if suffix == ".pdf":
-                    sibling = resolved.with_suffix(".xml")
-                    if sibling.is_file():
-                        linked_real_paths.add(str(sibling.resolve()))
-                elif suffix == ".xml":
-                    sibling = resolved.with_suffix(".pdf")
-                    if sibling.is_file():
-                        linked_real_paths.add(str(sibling.resolve()))
-            except Exception:
-                pass
         else:
             broken_rows.append(row)
 
     path_groups = {}
     for row in ok_rows:
         resolved = resolved_by_row.get(int(row["id"]))
-        if resolved:
-            path_groups.setdefault(str(resolved), []).append(row)
+        if not resolved:
+            continue
+        path_groups.setdefault(str(resolved), []).append(row)
 
     duplicate_file_groups = []
     for resolved, members in sorted(path_groups.items()):
@@ -23814,194 +21981,32 @@ def supplier_documents_audit():
             "count": len(members),
         })
 
-    # Index de toutes les références réellement présentes en base.
-    invoice_rows_by_key = {}
-    for row in all_ledger_rows:
-        raw = str(row["invoice_no"] or "").strip()
-        key = _match_key(raw)
-        if len(key) >= 4:
-            invoice_rows_by_key.setdefault(key, []).append(row)
-
     supplier_exts = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
     orphan_files = []
-    orphan_diagnostics = []
-    alternative_files = []
-    alternative_diagnostics = []
-
     if FOURNISSEURS_ROOT.exists():
-        all_supplier_files = [
-            p for p in sorted(FOURNISSEURS_ROOT.rglob("*"))
-            if p.is_file() and p.suffix.lower() in supplier_exts
-        ]
-
-        for path in all_supplier_files:
+        for path in sorted(FOURNISSEURS_ROOT.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in supplier_exts:
+                continue
             try:
                 resolved = path.resolve()
             except Exception:
                 resolved = path
-
             if str(resolved) in linked_real_paths:
                 continue
-
             try:
-                display_path = str(path.relative_to(DOCUMENTS_ROOT))
+                orphan_files.append(str(path.relative_to(DOCUMENTS_ROOT)))
             except Exception:
-                display_path = str(path)
-
-            stem_key = _match_key(path.stem)
-            filename_keys = sorted(_supplier_filename_invoice_keys(path))
-
-            # Trouve toutes les lignes dont la référence exacte correspond à CE nom.
-            candidate_rows = []
-            matched_invoice_keys = []
-
-            for invoice_key, members in invoice_rows_by_key.items():
-                if stem_key.endswith(invoice_key) or invoice_key in filename_keys:
-                    matched_invoice_keys.append(invoice_key)
-                    candidate_rows.extend(members)
-
-            # Déduplique les lignes par id.
-            dedup = {}
-            for row in candidate_rows:
-                dedup[int(row["id"])] = row
-            candidate_rows = list(dedup.values())
-
-            purchase_rows = [
-                row for row in candidate_rows
-                if str(row["operation"] or "").strip().casefold() == "achat"
-            ]
-            empty_purchase_rows = [
-                row for row in purchase_rows
-                if not str(row["document_path"] or "").strip()
-            ]
-            already_linked_purchase_rows = [
-                row for row in purchase_rows
-                if str(row["document_path"] or "").strip()
-            ]
-
-            # Combien de justificatifs logiques correspondent à chacune des références ?
-            matching_files = []
-            for other in all_supplier_files:
-                other_stem_key = _match_key(other.stem)
-                other_keys = _supplier_filename_invoice_keys(other)
-                if any(
-                    other_stem_key.endswith(k) or k in other_keys
-                    for k in matched_invoice_keys
-                ):
-                    try:
-                        other_display = str(other.relative_to(DOCUMENTS_ROOT))
-                    except Exception:
-                        other_display = str(other)
-                    matching_files.append(other_display)
-
-            # Ce que le résolveur commun retournerait pour chaque ligne Achat candidate.
-            resolver_results = []
-            for row in purchase_rows:
-                try:
-                    chosen = _supplier_exact_invoice_document(row)
-                except Exception as exc:
-                    chosen = None
-                    resolver_results.append({
-                        "row_id": int(row["id"]),
-                        "result": "",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
-                    continue
-
-                if chosen:
-                    try:
-                        result = str(chosen.relative_to(DOCUMENTS_ROOT))
-                    except Exception:
-                        result = str(chosen)
-                else:
-                    result = ""
-
-                resolver_results.append({
-                    "row_id": int(row["id"]),
-                    "result": result,
-                    "error": "",
-                })
-
-            # Détermine si ce fichier est simplement une copie/alternative d'une
-            # facture déjà correctement rattachée à une ligne Achat.
-            linked_existing_rows = []
-            linked_existing_paths = []
-            for row in already_linked_purchase_rows:
-                linked_path = ledger_document_file(row)
-                if linked_path and linked_path.is_file():
-                    linked_existing_rows.append(row)
-                    try:
-                        linked_existing_paths.append(str(linked_path.relative_to(DOCUMENTS_ROOT)))
-                    except Exception:
-                        linked_existing_paths.append(str(linked_path))
-
-            is_alternative = bool(
-                matched_invoice_keys
-                and purchase_rows
-                and not empty_purchase_rows
-                and linked_existing_rows
-            )
-
-            if is_alternative:
-                reason = (
-                    "Copie / justificatif alternatif d'une facture déjà rattachée. "
-                    "Aucune action nécessaire."
-                )
-            elif not matched_invoice_keys:
-                reason = "Aucune référence de facture de la base ne correspond exactement au nom du fichier."
-            elif not candidate_rows:
-                reason = "Référence détectée dans le nom, mais aucune ligne correspondante n'a été retrouvée."
-            elif not purchase_rows:
-                reason = "Référence trouvée, mais uniquement sur des lignes qui ne sont pas des achats."
-            elif empty_purchase_rows:
-                if len(set(matching_files)) == 1:
-                    reason = (
-                        "Correspondance exacte trouvée avec au moins une ligne Achat sans justificatif. "
-                        "Le moteur devrait pouvoir la rattacher : vérifier le résultat du résolveur ci-dessous."
-                    )
-                else:
-                    reason = (
-                        "Correspondance exacte trouvée, mais plusieurs fichiers portent la même référence : "
-                        "rattachement automatique volontairement bloqué."
-                    )
-            else:
-                reason = "Cas non classé — voir les données détaillées."
-
-            diag = {
-                "path": display_path,
-                "stem_key": stem_key,
-                "filename_keys": filename_keys,
-                "matched_invoice_keys": sorted(set(matched_invoice_keys)),
-                "candidate_rows": candidate_rows,
-                "purchase_rows": purchase_rows,
-                "empty_purchase_rows": empty_purchase_rows,
-                "already_linked_purchase_rows": already_linked_purchase_rows,
-                "linked_existing_rows": linked_existing_rows,
-                "linked_existing_paths": sorted(set(linked_existing_paths)),
-                "matching_files": sorted(set(matching_files)),
-                "resolver_results": resolver_results,
-                "reason": reason,
-            }
-
-            if is_alternative:
-                alternative_files.append(display_path)
-                alternative_diagnostics.append(diag)
-            else:
-                orphan_files.append(display_path)
-                orphan_diagnostics.append(diag)
+                orphan_files.append(str(path))
 
     return render_template(
         "supplier_documents_audit.html",
         ok_rows=ok_rows,
         broken_rows=broken_rows,
-        linked_count=len(linked_rows),
+        linked_count=len(rows),
         duplicate_file_groups=duplicate_file_groups,
         orphan_files=orphan_files,
-        orphan_diagnostics=orphan_diagnostics,
-        alternative_files=alternative_files,
-        alternative_diagnostics=alternative_diagnostics,
-        diagnostic_readonly=True,
     )
+
 
 @app.route("/contacts")
 def contacts_page():
@@ -25191,264 +23196,7 @@ def export_ventes():
     return Response(data, mimetype="text/csv",
                     headers={"Content-Disposition":"attachment; filename=Achats_Ventes_Ventes.csv"})
 
-
-def run_wopr_self_tests():
-    """Tests de non-régression rapides, en lecture seule."""
-    tests = []
-
-    def record(name, ok, detail=""):
-        tests.append((name, bool(ok), str(detail or "")))
-
-    try:
-        state = initialize_database_security()
-        record("Sécurité base", state != "locked", state)
-        if state == "locked":
-            return tests
-        init_db()
-    except Exception as exc:
-        record("Initialisation base", False, f"{type(exc).__name__}: {exc}")
-        return tests
-
-    con = None
-    try:
-        con = db()
-        row = con.execute("PRAGMA quick_check").fetchone()
-        record("Intégrité SQLite/SQLCipher", bool(row and str(row[0]).casefold() == "ok"), row[0] if row else "")
-        tables = {
-            str(r[0]) for r in con.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        required = {"clients", "repairs", "ledger_entries", "quotes", "audit_log"}
-        record("Tables métier", required.issubset(tables), ", ".join(sorted(required - tables)))
-    except Exception as exc:
-        record("Lecture base", False, f"{type(exc).__name__}: {exc}")
-    finally:
-        if con is not None:
-            try:
-                con.close()
-            except Exception:
-                pass
-
-    # Environnement / portabilité -------------------------------------------------
-    try:
-        tz = ZoneInfo("Europe/Paris")
-        sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
-        record(
-            "Fuseau Europe/Paris",
-            sample.utcoffset() is not None,
-            f"{tz.key} · UTC{sample.utcoffset()}",
-        )
-    except Exception as exc:
-        record("Fuseau Europe/Paris", False, f"{type(exc).__name__}: {exc}")
-
-    req_file = BASE / "requirements.txt"
-    try:
-        req_text = req_file.read_text(encoding="utf-8") if req_file.is_file() else ""
-        has_tzdata = bool(re.search(r"(?im)^tzdata(?:[<>=!~].*)?$", req_text))
-        has_win_sqlcipher = (
-            "sqlcipher3==0.6.2" in req_text
-            and 'platform_system == "Windows"' in req_text
-        )
-        record(
-            "Préparation Windows",
-            req_file.is_file() and has_tzdata and has_win_sqlcipher,
-            "tzdata + SQLCipher Windows déclarés"
-            if req_file.is_file() and has_tzdata and has_win_sqlcipher
-            else "public/requirements.txt incomplet",
-        )
-    except Exception as exc:
-        record("Préparation Windows", False, f"{type(exc).__name__}: {exc}")
-
-    # Fichiers d'interface indispensables -----------------------------------------
-    important_templates = [
-        "base.html",
-        "atelier.html",
-        "index.html",
-        "invoices.html",
-        "quotes.html",
-        "achats_ventes.html",
-        "contacts.html",
-        "health.html",
-        "activity.html",
-    ]
-    missing_templates = [
-        name for name in important_templates
-        if not (BASE / "templates" / name).is_file()
-    ]
-    record(
-        "Templates principaux",
-        not missing_templates,
-        "OK" if not missing_templates else "manquants : " + ", ".join(missing_templates),
-    )
-
-    eight_bit_css = BASE / "static" / "wopr-8bit-hotfix.css"
-    try:
-        css_text = eight_bit_css.read_text(encoding="utf-8", errors="ignore") if eight_bit_css.is_file() else ""
-        css_ok = (
-            eight_bit_css.is_file()
-            and "theme-8bit" in css_text
-            and "wopr-nav-dropdown" in css_text
-        )
-        record(
-            "Assets thème 8-bit",
-            css_ok,
-            "hotfix + sous-menus détectés" if css_ok else "wopr-8bit-hotfix.css absent/incomplet",
-        )
-    except Exception as exc:
-        record("Assets thème 8-bit", False, f"{type(exc).__name__}: {exc}")
-
-    # Services optionnels : on vérifie la cohérence locale sans faire d'appel réseau.
-    try:
-        sumup = read_sumup_settings()
-        if sumup.get("enabled"):
-            api_ok = bool(str(sumup.get("api_key") or "").strip())
-            merchant_ok = bool(str(sumup.get("merchant_code") or "").strip())
-            record(
-                "Configuration SumUp",
-                api_ok and merchant_ok,
-                "activée · clé API + merchant code présents"
-                if api_ok and merchant_ok
-                else "activée mais configuration incomplète",
-            )
-        else:
-            record("Configuration SumUp", True, "désactivée")
-    except Exception as exc:
-        record("Configuration SumUp", False, f"{type(exc).__name__}: {exc}")
-
-    try:
-        if GOOGLE_LIBS_OK:
-            detail = "bibliothèques disponibles"
-            if GOOGLE_TOKEN.exists():
-                detail += " · jeton présent"
-            elif GOOGLE_CLIENT_SECRET.exists():
-                detail += " · OAuth configuré, pas encore connecté"
-            else:
-                detail += " · non configuré"
-            record("Google Contacts", True, detail)
-        else:
-            record("Google Contacts", False, "bibliothèques Google absentes")
-    except Exception as exc:
-        record("Google Contacts", False, f"{type(exc).__name__}: {exc}")
-
-    current_year = now().year
-    current_month = now().month
-    urls = [
-        ("/atelier", "Atelier"),
-        (f"/suivi?year={current_year}&month={current_month}", "Suivi mois courant"),
-        (f"/suivi?year={current_year}&en_cours=1", "Suivi En cours"),
-        (f"/suivi?year={current_year}&attente_piece=1", "Suivi Attente pièce"),
-        (f"/suivi?year={current_year}&overdue=1", "Suivi +14 j"),
-        (f"/suivi?year={current_year}&a_restituer=1", "Suivi À restituer"),
-        ("/factures", "Factures"),
-        ("/factures?unpaid=1", "Factures impayées"),
-        ("/devis", "Devis"),
-        ("/achats-ventes", "Achats / Ventes"),
-        ("/contacts", "Clients"),
-        ("/contacts?google_status=pending", "Clients à synchroniser"),
-        ("/etat-sante", "État de santé"),
-        ("/activite", "Activité récente"),
-    ]
-
-    try:
-        with app.test_client() as client:
-            with client.session_transaction() as sess:
-                sess["admin_authenticated"] = True
-                sess["client_mode"] = False
-            for url, label in urls:
-                try:
-                    response = client.get(url, follow_redirects=False)
-                    record(label, response.status_code == 200, f"HTTP {response.status_code}")
-                except Exception as exc:
-                    record(label, False, f"{type(exc).__name__}: {exc}")
-
-            # Le mode client ne doit exposer ni les impayés ni les règlements en attente.
-            try:
-                with client.session_transaction() as sess:
-                    sess["admin_authenticated"] = True
-                    sess["client_mode"] = True
-                response = client.get("/atelier", follow_redirects=False)
-                html = response.get_data(as_text=True)
-                hidden_ok = (
-                    response.status_code == 200
-                    and "Impayés" not in html
-                    and "Règlements en attente" not in html
-                )
-                record(
-                    "Mode client confidentiel",
-                    hidden_ok,
-                    "impayés/règlements masqués"
-                    if hidden_ok
-                    else f"HTTP {response.status_code} · contenu sensible encore visible",
-                )
-
-                # Ouvrir Nouvelle réparation ne doit plus désactiver le Mode Client.
-                response_new = client.get("/repair/new", follow_redirects=False)
-                with client.session_transaction() as sess:
-                    still_client = bool(sess.get("client_mode"))
-                record(
-                    "Mode client → Nouvelle réparation",
-                    response_new.status_code == 200 and still_client,
-                    "mode client conservé"
-                    if response_new.status_code == 200 and still_client
-                    else f"HTTP {response_new.status_code} · mode client perdu",
-                )
-            except Exception as exc:
-                record("Mode client confidentiel", False, f"{type(exc).__name__}: {exc}")
-    except Exception as exc:
-        record("Client Flask", False, f"{type(exc).__name__}: {exc}")
-
-    return tests
-
-
-def print_wopr_self_tests():
-    tests = run_wopr_self_tests()
-    failed = 0
-    print(f"WOPR {APP_VERSION} — tests de non-régression")
-    print("-" * 58)
-    for name, ok, detail in tests:
-        status = "OK " if ok else "FAIL"
-        suffix = f" — {detail}" if detail else ""
-        print(f"[{status}] {name}{suffix}")
-        if not ok:
-            failed += 1
-    print("-" * 58)
-    if failed:
-        print(f"ÉCHEC : {failed} test(s) en erreur.")
-        return 1
-    print(f"SUCCÈS : {len(tests)} test(s) validé(s).")
-    return 0
-
-
-def local_ip():
-    """Retourne l'IP locale utilisée pour joindre WOPR depuis le téléphone."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # Aucun paquet utile n'est envoyé : connect() sert seulement à laisser
-        # Windows/Linux choisir l'interface réseau locale active.
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-        if ip:
-            return ip
-    except OSError:
-        pass
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-
-    try:
-        return socket.gethostbyname(socket.gethostname())
-    except OSError:
-        return "127.0.0.1"
-
-
-
 if __name__ == "__main__":
-    if "--self-test" in sys.argv:
-        raise SystemExit(print_wopr_self_tests())
-
     if "--check-db-unlock" in sys.argv:
         try:
             initialize_database_security()

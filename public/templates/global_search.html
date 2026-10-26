@@ -3,7 +3,7 @@
 {% block body %}
 <div class="sheet-banner narrow"><div class="banner-top">WOPR</div><div class="banner-title">Recherche globale</div><div class="banner-subtitle">Multi-mots, accents et ponctuation ignorés</div></div>
 <form method="get" class="global-search-form">
-  <input type="search" name="q" value="{{ q }}" placeholder="Client, téléphone, dossier, appareil, panne, facture, devis, montant..." autofocus autocomplete="off">
+  <input type="search" name="q" value="{{ q }}" placeholder="Client, téléphone, dossier, appareil, panne, facture, devis, composant, référence..." autofocus autocomplete="off">
   <button class="button primary" type="submit">🔎 Rechercher</button>
   {% if q %}<a class="button" href="{{ url_for('global_search') }}">Effacer</a>{% endif %}
 </form>
@@ -15,6 +15,10 @@
 
 {% if results.repairs %}<section class="search-section"><h2>🛠️ Réparations ({{ results.repairs|length }})</h2><div class="search-cards">
 {% for r in results.repairs %}<div class="search-card"><strong>{{ r.received_date }} · {{ r.client_first_name or '' }} {{ r.client_last_name or r.client_name }}</strong><br>{{ r.device_type or '' }} {{ r.brand_model or '' }} · {{ r.status }}{% if r.invoice_no %} · <span class="invoice-number-value">{{ r.invoice_no }}</span>{% endif %}<div><a class="button primary" href="{{ url_for('repair_detail', rid=r.id) }}">Ouvrir le dossier</a></div></div>{% endfor %}
+</div></section>{% endif %}
+
+{% if results.stock %}<section class="search-section"><h2>📦 Stock composants ({{ results.stock|length }})</h2><div class="search-cards">
+{% for s in results.stock %}<div class="search-card"><strong>{{ s.reference }}</strong>{% if s.function %} · {{ s.function }}{% endif %}<br>Quantité : {{ s.quantity or '—' }}{% if s.remarks %} · {{ s.remarks }}{% endif %}<div><a class="button primary" href="{{ url_for('stock_page', q=s.reference) }}">Voir dans le stock</a></div></div>{% endfor %}
 </div></section>{% endif %}
 
 {% if results.ledger %}<section class="search-section"><h2>🛍️ Achats / Ventes ({{ results.ledger|length }})</h2><div class="search-cards">

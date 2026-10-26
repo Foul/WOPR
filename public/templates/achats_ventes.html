@@ -2,78 +2,179 @@
 {% block title %}Achats / Ventes {{ year }} - WOPR{% endblock %}
 {% block body %}
 
+
 <style>
-  .ledger-doc-pair{
-    display:flex;
-    flex-direction:column;
-    gap:4px;
-    align-items:center;
-    justify-content:center;
-    width:100%;
-  }
+/* ===== Achats / Ventes — contrôles 8-bit compacts ===== */
 
-  /* Chaque ligne occupe exactement les mêmes 2 colonnes :
-     document à gauche, action à droite. */
-  .ledger-doc-line{
-    display:grid;
-    grid-template-columns:72px 28px;
-    align-items:center;
-    justify-content:center;
-    column-gap:4px;
-    width:104px;
-    margin:0 auto;
-    white-space:nowrap;
-  }
+/* Sélecteur d'archive dans l'en-tête */
+.ledger-archive{
+  position:relative;
+}
+.ledger-archive > summary{
+  list-style:none;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  min-height:32px;
+  padding:4px 9px;
+  cursor:pointer;
+  user-select:none;
+  border:2px solid #07131d !important;
+  border-radius:0 !important;
+  background:#dcecff !important;
+  color:#103d66 !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 #07131d !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  text-transform:uppercase;
+}
+.ledger-archive > summary::-webkit-details-marker{display:none}
+.ledger-archive > summary::marker{content:""}
+.ledger-archive > summary:hover{
+  transform:translate(1px,1px);
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.65),
+    inset -1px -1px 0 rgba(0,0,0,.10),
+    1px 1px 0 #07131d !important;
+}
+.ledger-archive .pixel-arrow{
+  font-size:10px;
+  transform-origin:center;
+}
+.ledger-archive[open] > summary .pixel-arrow{transform:rotate(90deg)}
+.ledger-archive > a{
+  margin-top:6px;
+  border-radius:0 !important;
+}
 
-  .ledger-doc-line .ledger-doc-link{
-    box-sizing:border-box;
-    width:72px;
-    min-width:72px;
-    text-align:center;
-    justify-content:center;
-  }
+/* Bouton qui ouvre le formulaire */
+.ledger-add-box{
+  margin-top:10px;
+}
+.ledger-add-box > summary{
+  list-style:none;
+  display:inline-flex !important;
+  align-items:center;
+  gap:7px;
+  width:auto !important;
+  min-height:32px !important;
+  padding:4px 9px !important;
+  cursor:pointer;
+  user-select:none;
+  border:2px solid #07131d !important;
+  border-radius:0 !important;
+  background:#ddf5e6 !important;
+  color:#14502e !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 #07131d !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  letter-spacing:0 !important;
+  text-transform:uppercase;
+}
+.ledger-add-box > summary::-webkit-details-marker{display:none}
+.ledger-add-box > summary::marker{content:""}
+.ledger-add-box > summary:hover{
+  transform:translate(1px,1px);
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.65),
+    inset -1px -1px 0 rgba(0,0,0,.10),
+    1px 1px 0 #07131d !important;
+}
+.ledger-add-box > summary .pixel-plus{
+  display:inline-grid;
+  place-items:center;
+  width:18px;
+  height:18px;
+  flex:0 0 18px;
+  border:2px solid #07131d;
+  background:#f6f2a9;
+  color:#124c35;
+  box-shadow:inset 1px 1px 0 #fffbd2,inset -1px -1px 0 #b39e42;
+  font-size:14px;
+  line-height:1;
+}
 
-  .ledger-doc-line .ledger-attach-form{
-    display:flex;
-    margin:0;
-    width:28px;
-    justify-content:center;
-  }
+/* Bouton AJOUTER du formulaire */
+.ledger-form-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+}
+#ledger-add-submit{
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  display:inline-flex !important;
+  align-items:center;
+  justify-content:center;
+  gap:6px !important;
+  width:auto !important;
+  min-width:0 !important;
+  min-height:32px !important;
+  height:32px !important;
+  padding:4px 10px !important;
+  border:2px solid #07131d !important;
+  border-radius:0 !important;
+  background:#ffedbd !important;
+  background-image:none !important;
+  color:#6b4500 !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.72),
+    inset -1px -1px 0 rgba(0,0,0,.12),
+    2px 2px 0 #07131d !important;
+  font-family:"DejaVu Sans Mono","Liberation Mono",Consolas,monospace !important;
+  font-size:10px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  letter-spacing:0 !important;
+  text-transform:uppercase !important;
+  text-shadow:none !important;
+  clip-path:none !important;
+}
+#ledger-add-submit .pixel-ok{
+  display:inline-grid;
+  place-items:center;
+  width:18px;
+  height:18px;
+  flex:0 0 18px;
+  border:2px solid #07131d;
+  background:#fff6bd;
+  color:#14502e;
+  box-shadow:inset 1px 1px 0 #fffde9,inset -1px -1px 0 #bd8120;
+  font-size:12px;
+  line-height:1;
+}
+#ledger-add-submit:hover{
+  transform:translate(1px,1px) !important;
+  filter:none !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.62),
+    inset -1px -1px 0 rgba(0,0,0,.10),
+    1px 1px 0 #07131d !important;
+}
+#ledger-add-submit:active{
+  transform:translate(2px,2px) !important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.45) !important;
+}
 
-  .ledger-doc-line .ledger-attach-form .ledger-attach-btn{
-    box-sizing:border-box;
-    width:28px;
-    min-width:28px;
-    padding:2px 0;
-    text-align:center;
-    justify-content:center;
-  }
-
-  /* Si PDF/XML absent : le bouton Joindre est centré sur la largeur
-     totale du couple document + action, et non collé à gauche. */
-  .ledger-doc-line > .ledger-attach-form:first-child{
-    grid-column:1 / 3;
-    justify-self:center;
-    width:72px;
-  }
-
-  .ledger-doc-line > .ledger-attach-form:first-child .ledger-attach-btn{
-    width:72px;
-    min-width:72px;
-    padding:2px 4px;
-  }
-
-  .ledger-doc-line .mini-btn{
-    line-height:1.15;
-  }
-
-  .ledger-document-cell{
-    white-space:nowrap;
-    text-align:center;
-    vertical-align:middle;
-  }
+/* Le runtime 8-bit ne doit pas regonfler ce bouton spécifique. */
+body.theme-8bit #ledger-add-submit{
+  min-width:0 !important;
+  min-height:32px !important;
+  height:32px !important;
+  padding:4px 10px !important;
+  font-size:10px !important;
+}
 </style>
-
 <div class="ledger-audit-shortcut">
   <a class="button" href="{{ url_for('supplier_documents_audit') }}">🔍 Vérifier les justificatifs liés</a>
 </div>
@@ -89,7 +190,7 @@
     {% if year == 2026 %}
       <span class="ledger-year-current">2026</span>
       <details class="ledger-archive">
-        <summary>Archives</summary>
+        <summary><span>Archives</span><span class="pixel-arrow">▶</span></summary>
         <a href="{{ url_for('achats_ventes_page', year=2025) }}">2025</a>
       </details>
     {% else %}
@@ -141,7 +242,7 @@
 </div>
 
 <details class="ledger-add-box">
-  <summary>+ Ajouter une opération</summary>
+  <summary id="ledger-add-toggle"><span class="pixel-plus">+</span><span>Ajouter une opération</span></summary>
   <form method="post" enctype="multipart/form-data" action="{{ url_for('achats_ventes_add') }}" class="ledger-add-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
 
@@ -184,14 +285,9 @@
       <input name="invoice_no">
     </label>
 
-    <label class="wide ledger-document-field">📄 Facture fournisseur PDF / image (optionnel)
-      <input type="file" name="supplier_pdf" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
-      <small>Document principal affiché par WOPR. Si Abby fournit le vrai PDF, il est conservé tel quel au lieu du PDF synthétique.</small>
-    </label>
-
-    <label class="wide ledger-document-field">🧾 Données XML (optionnel)
-      <input type="file" name="supplier_xml" accept=".xml,application/xml,text/xml">
-      <small>XML structuré conservé avec la facture. Si PDF + XML sont fournis ensemble, WOPR ne génère pas de copie PDF.</small>
+    <label class="wide ledger-document-field">Facture fournisseur (optionnel)
+      <input type="file" name="supplier_document" accept=".pdf,.xml,.jpg,.jpeg,.png,application/pdf,text/xml,image/jpeg,image/png">
+      <small>Rangée dans le dossier Fournisseurs du mois. Nom proposé : FOURNISSEUR_NumeroFacture.ext (ex. SLE-FRANCE_20260903-0006.pdf).</small>
     </label>
 
     <label class="wide">Remarques
@@ -199,7 +295,7 @@
     </label>
 
     <div class="wide ledger-form-actions">
-      <button class="primary" type="submit">AJOUTER</button>
+      <button id="ledger-add-submit" class="button primary wopr-action-save" type="submit"><span class="pixel-ok">✓</span><span>AJOUTER</span></button>
     </div>
   </form>
 </details>
@@ -295,51 +391,16 @@
 
             <td class="ledger-document-cell">
               {% if e['operation']=='Achat' %}
-                <div class="ledger-doc-pair">
-                  <div class="ledger-doc-line">
-                    {% if e.get('document_pdf_available') %}
-                      <a class="mini-btn ledger-doc-link wopr-action-open"
-                         href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}"
-                         target="_blank" title="Ouvrir le PDF / justificatif principal">📄 PDF</a>
-                    {% endif %}
-                    <form method="post" enctype="multipart/form-data"
-                          action="{{ url_for('achats_ventes_document_add', entry_id=e['id']) }}"
-                          class="ledger-attach-form">
-                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="document_kind" value="pdf">
-                      <input type="hidden" name="replace_existing" value="{{ 1 if e.get('document_pdf_available') else 0 }}">
-                      <label class="mini-btn ledger-attach-btn wopr-action-special"
-                             title="{{ 'Remplacer le PDF existant par le PDF officiel' if e.get('document_pdf_available') else 'Joindre le PDF fournisseur' }}">
-                        {{ '↻' if e.get('document_pdf_available') else '📎 PDF' }}
-                        <input type="file" name="supplier_pdf"
-                               accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
-                               onchange="this.form.submit()">
-                      </label>
-                    </form>
-                  </div>
-
-                  <div class="ledger-doc-line">
-                    {% if e.get('document_xml_available') %}
-                      <a class="mini-btn ledger-doc-link wopr-action-open"
-                         href="{{ url_for('achats_ventes_document_xml_view', entry_id=e['id']) }}"
-                         target="_blank" title="Ouvrir le XML structuré">🧾 XML</a>
-                    {% endif %}
-                    <form method="post" enctype="multipart/form-data"
-                          action="{{ url_for('achats_ventes_document_add', entry_id=e['id']) }}"
-                          class="ledger-attach-form">
-                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="document_kind" value="xml">
-                      <input type="hidden" name="replace_existing" value="{{ 1 if e.get('document_xml_available') else 0 }}">
-                      <label class="mini-btn ledger-attach-btn wopr-action-special"
-                             title="{{ 'Remplacer le XML associé' if e.get('document_xml_available') else 'Joindre le XML structuré' }}">
-                        {{ '↻' if e.get('document_xml_available') else '📎 XML' }}
-                        <input type="file" name="supplier_xml"
-                               accept=".xml,application/xml,text/xml"
-                               onchange="this.form.submit()">
-                      </label>
-                    </form>
-                  </div>
-                </div>
+                {% if e['document_path'] %}
+                  <a class="mini-btn ledger-doc-link wopr-action-open" href="{{ url_for('achats_ventes_document_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture fournisseur">📄 Ouvrir</a>
+                {% else %}
+                  <form method="post" enctype="multipart/form-data" action="{{ url_for('achats_ventes_document_add', entry_id=e['id']) }}" class="ledger-attach-form">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <label class="mini-btn ledger-attach-btn wopr-action-special" title="Joindre la facture fournisseur">📎 Joindre
+                      <input type="file" name="supplier_document" accept=".pdf,.xml,.jpg,.jpeg,.png,application/pdf,text/xml,image/jpeg,image/png" onchange="this.form.submit()">
+                    </label>
+                  </form>
+                {% endif %}
               {% else %}
                 {% if e['invoice_no'] %}
                   <a class="mini-btn ledger-doc-link wopr-action-open" href="{{ url_for('achats_ventes_sale_invoice_view', entry_id=e['id']) }}" target="_blank" title="Ouvrir la facture de vente client">📄 Ouvrir</a>

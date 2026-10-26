@@ -101,10 +101,7 @@
       </td>
       <td>
         <strong>{{ r['client_name'] }}</strong>
-        {% if r.get('client_company')
-              and (r['client_company']|trim|lower) != (r['client_name']|trim|lower) %}
-          <small class="invoice-client-company">{{ r['client_company'] }}</small>
-        {% endif %}
+        {% if r.get('client_company') %}<small class="invoice-client-company">{{ r['client_company'] }}</small>{% endif %}
       </td>
       <td class="invoice-list-total">
         {{ '%.2f'|format(r['invoice_total'] or 0)|replace('.', ',') }} €
@@ -170,10 +167,11 @@
              href="{{ url_for('repair_close', rid=r['id'], return='factures') }}">
             Modifier facture
           </a>
-          {% if r['simple_invoice'] %}
-          <a class="mini-btn wopr-action-delete"
-             href="{{ url_for('simple_invoice_delete', rid=r['id']) }}">
-            🗑 Supprimer
+          {% if unpaid_only and not r['simple_invoice'] %}
+          <a class="mini-btn wopr-action-edit"
+             href="{{ url_for('repair_edit', rid=r['id']) }}"
+             title="Modifier la feuille de suivi de ce dossier">
+            Modifier suivi
           </a>
           {% endif %}
           <select class="pdf-lang-select mini-btn wopr-action-open wopr-action-invoice-pdf" aria-label="Langue facture PDF" onchange="if(this.value){ window.location.href=this.value; this.selectedIndex=0; }">
@@ -184,6 +182,8 @@
           </select>
           {% if r['client_email'] %}
           <a class="mini-btn invoice-email-btn wopr-action-send" href="{{ url_for('invoice_email', rid=r['id'], from_page='factures') }}">📧 Envoyer</a>
+          {% else %}
+          <span class="invoice-email-missing" title="Aucune adresse e-mail client">📧 —</span>
           {% endif %}
           {% if sumup_enabled and not r['is_paid'] %}
           <a class="mini-btn wopr-action-send"

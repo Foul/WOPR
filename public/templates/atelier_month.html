@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Réparations / ventes {{ month_name }} {{ selected_year }} - WOPR{% endblock %}
+{% block body %}
+
+<div class="atelier-head">
+  <div>
+    <h1>🧰 Réparations / ventes atelier</h1>
+    <p>{{ month_name }} {{ selected_year }} · {{ rows|length }} entrée(s)</p>
+  </div>
+  <div class="atelier-head-actions">
+    <a class="navbtn navbtn-new" href="{{ url_for('atelier_dashboard', year=selected_year, month=selected_month) }}">
+      <span class="nav-ico">↩</span><span>Tableau de bord</span>
+    </a>
+  </div>
+</div>
+
+{% set ns = namespace(repairs=0, sales=0) %}
+{% for r in rows %}
+  {% if r['simple_invoice'] %}{% set ns.sales = ns.sales + 1 %}{% else %}{% set ns.repairs = ns.repairs + 1 %}{% endif %}
+{% endfor %}
+
+<div class="atelier-kpis">
+  <div class="atelier-kpi"><span class="atelier-kpi-icon">📅</span><span class="atelier-kpi-label">Période</span><strong>{{ month_name }}</strong><small>{{ selected_year }}</small></div>
+  <div class="atelier-kpi"><span class="atelier-kpi-icon">🧰</span><span class="atelier-kpi-label">Réparations</span><strong>{{ ns.repairs }}</strong><small>dossier(s)</small></div>
+  <div class="atelier-kpi"><span class="atelier-kpi-icon">🧾</span><span class="atelier-kpi-label">Ventes / factures</span><strong>{{ ns.sales }}</strong><small>facture(s) simple(s)</small></div>
+  <div class="atelier-kpi"><span class="atelier-kpi-icon">📊</span><span class="atelier-kpi-label">Total</span><strong>{{ rows|length }}</strong><small>entrée(s)</small></div>
+</div>
+
+<div class="atelier-panels">
+  <section class="atelier-panel atelier-panel-wide">
+    <div class="atelier-panel-title">
+      <div>
+        <h2>📋 Détail {{ month_name }} {{ selected_year }}</h2>
+        <span>Chaque ligne ouvre directement le dossier ou la facture correspondante.</span>
+      </div>
+    </div>
+
+    {% if rows %}
+      <div class="atelier-list">
+      {% for r in rows %}
+        {% set st = r['status'] or '—' %}
+        {% set client_label = r['client_company'] or ((r['client_first_name'] or '') ~ ' ' ~ (r['client_last_name'] or r['client_name'] or ''))|trim %}
+        {% set device_label = ((r['device_type'] or '') ~ ' ' ~ (r['brand_model'] or ''))|trim or r['problem'] or 'Sans description' %}
+        {% set doc_label = r['invoice_no'] if r['simple_invoice'] and r['invoice_no'] else (r['dossier_no'] or ('#' ~ r['id'])) %}
+
+        {% if r['simple_invoice'] and r['invoice_no'] %}
+          <a class="atelier-list-row atelier-month-entry" href="{{ url_for('invoices_page', q=r['invoice_no']) }}">
+        {% else %}
+          <a class="atelier-list-row atelier-month-entry" href="{{ url_for('repair_detail', rid=r['id']) }}">
+        {% endif %}
+            <div class="atelier-month-date">
+              <strong>{% if r['received_date'] %}{{ r['received_date'][8:10] }}/{{ r['received_date'][5:7] }}/{{ r['received_date'][0:4] }}{% endif %}</strong>
+              <span>{{ 'Facture simple' if r['simple_invoice'] else 'Réparation' }}</span>
+            </div>
+
+            <div class="atelier-month-main">
+              {% if client_mode %}
+                <strong class="client-mode-redacted">Dossier masqué</strong>
+                <span class="client-mode-redacted">Informations confidentielles</span>
+              {% else %}
+                <strong>{{ client_label or 'Client non renseigné' }}</strong>
+                <span>{{ device_label }}</span>
+              {% endif %}
+            </div>
+
+            <div class="atelier-month-doc">
+              <span>{{ 'Facture' if r['simple_invoice'] else 'Dossier' }}</span>
+              <strong>{{ doc_label }}</strong>
+            </div>
+
+            <div class="atelier-month-status">
+              {% if st == 'Terminé' %}
+                <span class="repair-state-badge repair-state-badge-finished">À restituer</span>
+              {% elif st == 'Restitué' %}
+                <span class="repair-state-badge repair-state-badge-returned">Restitué</span>
+              {% elif st == 'En attente pièce' %}
+                <span class="repair-state-badge repair-state-badge-parts">En attente pièce</span>
+              {% else %}
+                <span class="repair-state-badge">{{ st }}</span>
+              {% endif %}
+            </div>
+
+            <div class="atelier-month-open"><span class="mini-btn wopr-action-open">OUVRIR</span></div>
+          </a>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="atelier-empty">Aucune entrée pour cette période.</div>
+    {% endif %}
+  </section>
+</div>
+
+<style>
+.atelier-month-entry{display:grid!important;grid-template-columns:145px minmax(280px,1fr) 190px 150px 90px;align-items:center!important;gap:14px!important}
+.atelier-month-date,.atelier-month-main,.atelier-month-doc{display:flex;flex-direction:column;gap:3px;min-width:0}
+.atelier-month-main span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atelier-month-doc strong{text-decoration:underline}
+.atelier-month-status{display:flex;align-items:center}
+.atelier-month-open{display:flex;justify-content:flex-end}
+@media (max-width:1050px){.atelier-month-entry{grid-template-columns:120px minmax(220px,1fr) 160px}.atelier-month-status,.atelier-month-open{justify-self:start}}
+</style>
+
+{% endblock %}
