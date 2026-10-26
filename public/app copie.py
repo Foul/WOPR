@@ -1,0 +1,23256 @@
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, jsonify, Response, session, abort
+import sqlite3
+try:
+    from sqlcipher3 import dbapi2 as sqlcipher3
+except Exception:
+    sqlcipher3 = None
+from pathlib import Path
+from datetime import datetime, timedelta, date, timezone
+import secrets
+import base64
+import io
+from PIL import Image, ImageOps, ImageFilter
+import json
+import hashlib
+import csv
+import socket
+import smtplib
+import mimetypes
+import subprocess
+import shutil
+import gzip
+import ssl
+import re
+import unicodedata
+import html
+import ipaddress
+import time
+import threading
+import os
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+import xml.etree.ElementTree as ET
+from email.message import EmailMessage
+from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet, InvalidToken
+from zoneinfo import ZoneInfo
+
+try:
+    from google.oauth2.credentials import Credentials
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request as GoogleRequest
+    from google_auth_oauthlib.flow import Flow
+    from googleapiclient.discovery import build as google_build
+    from googleapiclient.errors import HttpError
+    GOOGLE_LIBS_OK = True
+except Exception:
+    GOOGLE_LIBS_OK = False
+
+
+import qrcode
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+BASE = Path(__file__).resolve().parent
+WOPR_ROOT = BASE.parent
+PRIVATE_ROOT = WOPR_ROOT / "private"
+PUBLIC_ASSETS = BASE / "assets"
+PRIVATE_ASSETS = PRIVATE_ROOT / "assets"
+PRIVATE_SEEDS = PRIVATE_ROOT / "seeds"
+EMAIL_SIGNATURE_FILE = PRIVATE_ROOT / "email_signature.json"
+
+# WOPR est autonome : tous les documents gérés par l'application
+# voyagent avec le dossier WOPR dans private/documents.
+DOCUMENTS_ROOT = PRIVATE_ROOT / "documents"
+DEVIS_ROOT = DOCUMENTS_ROOT / "Devis"
+FACTURES_ROOT = DOCUMENTS_ROOT / "Factures"
+FOURNISSEURS_ROOT = DOCUMENTS_ROOT / "Fournisseurs"
+COMMANDES_ROOT = DOCUMENTS_ROOT / "Commandes"
+SUIVI_REPARATIONS_ROOT = DOCUMENTS_ROOT / "Suivi de réparation"
+STOCK_IMAGES_ROOT = PRIVATE_ASSETS / "stock"
+
+MONTH_FOLDER_NAMES = {
+    1: "01 - Janvier",
+    2: "02 - Février",
+    3: "03 - Mars",
+    4: "04 - Avril",
+    5: "05 - Mai",
+    6: "06 - Juin",
+    7: "07 - Juillet",
+    8: "08 - Août",
+    9: "09 - Septembre",
+    10: "10 - Octobre",
+    11: "11 - Novembre",
+    12: "12 - Décembre",
+}
+def _database_score(path):
+    """Évalue une base WOPR par son contenu réel, jamais par son nom."""
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+        try:
+            tables = {
+                row[0]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "clients" not in tables or "repairs" not in tables:
+                return (-1, -1, -1, -1, -1)
+
+            client_cols = {
+                row[1] for row in con.execute("PRAGMA table_info(clients)").fetchall()
+            }
+            clients = int(con.execute("SELECT COUNT(*) FROM clients").fetchone()[0] or 0)
+            repairs = int(con.execute("SELECT COUNT(*) FROM repairs").fetchone()[0] or 0)
+
+            # Une vraie base de travail contient bien plus que les seuls noms.
+            fields = [
+                field for field in (
+                    "first_name", "last_name", "company", "phone", "email",
+                    "address", "address_street", "postal_code", "city", "notes"
+                )
+                if field in client_cols
+            ]
+            filled = 0
+            for field in fields:
+                filled += int(con.execute(
+                    f"SELECT COUNT(*) FROM clients "
+                    f"WHERE TRIM(COALESCE({field},''))<>''"
+                ).fetchone()[0] or 0)
+
+            synced = 0
+            if "google_sync_status" in client_cols:
+                synced = int(con.execute(
+                    "SELECT COUNT(*) FROM clients "
+                    "WHERE google_sync_status='Synchronisé'"
+                ).fetchone()[0] or 0)
+
+            # Priorité : richesse des fiches > clients > réparations > synchro > taille.
+            return (filled, clients, repairs, synced, int(path.stat().st_size))
+        finally:
+            con.close()
+    except Exception:
+        return (-1, -1, -1, -1, -1)
+
+
+def _database_path():
+    """Sélectionne la base WOPR la plus complète sans déplacer ni supprimer de fichier."""
+    data_dir = PRIVATE_ROOT / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    preferred = data_dir / "wopr.db"
+
+    candidates = [
+        p for p in data_dir.glob("*.db")
+        if p.is_file() and not p.name.startswith(".")
+    ]
+    if not candidates:
+        return preferred
+
+    scored = sorted(
+        ((_database_score(p), p) for p in candidates),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    best_score, best = scored[0]
+
+    if best_score[0] >= 0:
+        return best
+    # Une base SQLCipher ne porte plus l'en-tête SQLite en clair : le sqlite3
+    # standard ne peut donc pas la noter ici. Si wopr.db existe, il reste la
+    # référence prioritaire ; sinon on conserve le candidat existant le plus
+    # plausible au lieu de créer une nouvelle base vide.
+    if preferred.is_file():
+        return preferred
+    if len(candidates) == 1:
+        return candidates[0]
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+
+DB = _database_path()
+SIGNATURES = PRIVATE_ROOT / "signatures"
+CONFIG_PATH = PRIVATE_ROOT / "config.json"
+
+# Personnalisation privée : logo facture choisi par l'utilisateur et signature technicien.
+# Aucun logo d'entreprise n'est livré dans public/ : chaque installation garde le sien dans private/.
+_PRIVATE_LOGO_INVOICE = PRIVATE_ASSETS / "logo_invoice_user.png"
+TECH_SIGNATURE = PRIVATE_ASSETS / "tech_signature.png"
+
+def invoice_logo_path():
+    """Retourne le logo facture privé courant, ou None si aucun logo n'est configuré."""
+    return _PRIVATE_LOGO_INVOICE if _PRIVATE_LOGO_INVOICE.is_file() else None
+
+GOOGLE_CLIENT_SECRET = PRIVATE_ROOT / "data" / "google_client_secret.json"
+GOOGLE_TOKEN = PRIVATE_ROOT / "data" / "google_token.json"
+SMTP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "smtp_settings.json"
+ABBY_SETTINGS_FILE = PRIVATE_ROOT / "data" / "abby_settings.json"
+SUMUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sumup_settings.json"
+TRACKING_SETTINGS_FILE = PRIVATE_ROOT / "data" / "tracking_settings.json"
+TRACKING_STATS_HIDDEN_FILE = PRIVATE_ROOT / "data" / "tracking_stats_hidden.json"
+EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
+SUMUP_API_BASE = "https://api.sumup.com"
+ABBY_API_BASE = "https://api.app-abby.com"
+APP_VERSION = "2.6.2"
+GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
+
+# Sécurité locale WOPR
+ADMIN_PIN_FILE = PRIVATE_ROOT / "data" / "admin_pin.json"
+APP_SECRET_FILE = PRIVATE_ROOT / "data" / "app_secret.key"
+SQLCIPHER_SETTINGS_FILE = PRIVATE_ROOT / "data" / "sqlcipher.json"
+
+# Clé maîtresse des secrets : volontairement hors du dossier WOPR.
+def _secret_key_path():
+    if os.name == "nt":
+        root = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
+    else:
+        root = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    current = root / "WOPR" / "master.key"
+    if current.exists():
+        return current
+
+    # Compatibilité avec une installation plus ancienne sans conserver
+    # d'ancien nom de marque dans le code public.
+    legacy = [
+        p for p in root.glob("*/master.key")
+        if p.is_file() and p.parent.name.casefold() != "wopr"
+    ]
+    if len(legacy) == 1:
+        return legacy[0]
+    return current
+
+MASTER_SECRET_FILE = _secret_key_path()
+BACKUP_DIR = PRIVATE_ROOT / "data" / "backups"
+IMPORT_DIR = PRIVATE_ROOT / "data" / "imports"
+ADMIN_SESSION_HOURS = 8
+PIN_MIN_LENGTH = 4
+PIN_MAX_LENGTH = 8
+PIN_MAX_ATTEMPTS = 5
+PIN_BLOCK_SECONDS = 60
+LOGIN_FAILURES = {}
+
+
+# Données historiques privées.
+# En version publique, ces fichiers peuvent être absents : l'application démarre alors
+# avec des jeux historiques vides, sans révéler les anciens clients/comptes.
+LEGACY_LEDGER_ENTRIES = []
+LEGACY_ANTIVIRUS_ENTRIES = []
+LEGACY_QUOTE = {}
+LEGACY_QUOTES_37 = []
+LEGACY_QUOTE_DOCUMENTS_37 = []
+LEGACY_FOLLOWUPS = []
+
+if PRIVATE_SEEDS.exists():
+    sys.path.insert(0, str(PRIVATE_SEEDS))
+    try:
+        from legacy_ledger_seed import LEGACY_LEDGER_ENTRIES
+    except Exception:
+        pass
+    try:
+        from legacy_management_seed import LEGACY_ANTIVIRUS_ENTRIES, LEGACY_QUOTE
+    except Exception:
+        pass
+    try:
+        from legacy_quotes37_seed import LEGACY_QUOTES_37, LEGACY_QUOTE_DOCUMENTS_37
+    except Exception:
+        pass
+    try:
+        from legacy_followups_seed import LEGACY_FOLLOWUPS
+    except Exception:
+        pass
+
+
+# V2.3.108 - PDF multilingues. L'interface et les donnees restent en francais.
+PDF_LANGUAGES = {
+    "fr": ("FR", "Français"),
+    "en": ("EN", "English"),
+    "uk": ("UA", "Українська"),
+    "es": ("ES", "Español"),
+    "de": ("DE", "Deutsch"),
+    "it": ("IT", "Italiano"),
+}
+
+PDF_FRENCH = {
+    "invoice": "FACTURE", "invoice_no": "Facture n°", "quote_no": "Devis n°", "order_no": "Commande n°", "date": "Date", "client": "Client", "phone": "Tél.",
+    "quantity": "Quantité", "description": "Désignation", "unit_price": "P.U.", "total": "Total",
+    "vat_notice": "TVA non applicable, art. 293 B du CGI", "invoice_euros": "Facture en euros", "net_payable": "Net à payer",
+    "abandon_1": "Tout matériel confié et non récupéré dans un délai de 3 mois après information de mise à disposition sera considéré comme abandonné.",
+    "abandon_2": "Passé ce délai, le matériel pourra être détruit ou recyclé en déchetterie, sans possibilité de réclamation ni indemnisation.",
+    "payment_1": "Conditions de paiement : paiement à réception de facture", "payment_2": "Aucun escompte consenti pour règlement anticipé",
+    "payment_3": "Tout incident de paiement est passible d'intérêt de retard au taux légal en vigueur au moment de l'incident.",
+    "payment_4": "Indemnité forfaitaire pour frais de recouvrement due en cas de retard de paiement : 40 EUR",
+    "intake_title": "Prise en charge / Suivi de réparation", "client_info": "Informations Client", "first_name": "Prénom", "last_name": "Nom",
+    "address": "Adresse", "postal_city": "Code postal / Ville", "email": "Courriel", "device_details": "Détails de l'Appareil",
+    "device_type": "Type d'Appareil", "brand_model": "Marque et Modèle", "serial": "Numéro de Série", "system": "Système",
+    "password": "Mot de passe", "accessories": "Accessoires", "condition": "État", "problem_desc": "Description du Problème",
+    "problem": "Panne", "diagnosis": "Diagnostic", "repair_authorization": "Autorisation de Réparation", "client_signature": "Signature du Client",
+    "signed_on": "Signé le", "validation_return": "Validation et Retour", "tests_validation": "Tests et Validation",
+    "technician_signature": "Signature du Technicien", "warranty": "Garantie", "warranty_duration": "Durée de la Garantie",
+    "six_months": "Six mois", "warranty_text": "Conformément à l'article L211-4 du Code de la consommation, vous bénéficiez d'une garantie légale de six mois à compter de la date de réparation pour les travaux effectués. Cette garantie couvre les mêmes défauts ou problèmes que ceux réparés initialement.",
+    "warranty_conditions": "Conditions de Garantie", "warranty_only": "La garantie couvre uniquement les défauts mentionnés ci-dessus.",
+    "remarks": "Remarques", "thanks": "Merci de votre confiance.",
+    "siret_no": "N° Siret", "ape_code": "Code APE",
+    "legal_registration_exemption": "Dispensé d’immatriculation au registre du commerce et des sociétés, en application de l’article L. 123-1-1 du Code de commerce",
+}
+
+PDF_TRANSLATIONS = {
+    "en": {
+        "invoice":"INVOICE","invoice_no":"Invoice no.","quote_no":"Quote no.","order_no":"Order no.","date":"Date","client":"Customer","phone":"Phone","quantity":"Quantity","description":"Description","unit_price":"Unit price","total":"Total",
+        "vat_notice":"VAT not applicable - Art. 293 B of the French Tax Code","invoice_euros":"Invoice in euros","net_payable":"Amount due",
+        "abandon_1":"Any equipment entrusted to us and not collected within 3 months after notification that it is available will be considered abandoned.",
+        "abandon_2":"After this period, the equipment may be destroyed or recycled, with no possibility of claim or compensation.",
+        "payment_1":"Payment terms: payment due upon receipt of invoice","payment_2":"No discount granted for early payment","payment_3":"Any late payment may incur interest at the legal rate in force.","payment_4":"Fixed recovery fee in case of late payment: EUR 40",
+        "intake_title":"Repair intake / Service report","client_info":"Customer Information","first_name":"First name","last_name":"Last name","address":"Address","postal_city":"Postcode / City","email":"Email",
+        "device_details":"Device Details","device_type":"Device type","brand_model":"Brand and model","serial":"Serial number","system":"System","password":"Password","accessories":"Accessories","condition":"Condition",
+        "problem_desc":"Problem Description","problem":"Problem","diagnosis":"Diagnosis","repair_authorization":"Repair Authorization","client_signature":"Customer signature","signed_on":"Signed on",
+        "validation_return":"Validation and Return","tests_validation":"Tests and validation","technician_signature":"Technician signature","warranty":"Warranty","warranty_duration":"Warranty period","six_months":"Six months",
+        "warranty_text":"In accordance with Article L211-4 of the French Consumer Code, the work carried out is covered by a six-month legal warranty from the repair date. This warranty covers the same defects or problems as those initially repaired.",
+        "warranty_conditions":"Warranty conditions","warranty_only":"The warranty covers only the defects mentioned above.","remarks":"Notes","thanks":"Thank you for your trust.","siret_no":"SIRET No.","ape_code":"APE code","legal_registration_exemption":"Exempt from registration with the Trade and Companies Register, pursuant to Article L. 123-1-1 of the French Commercial Code",
+    },
+    "uk": {
+        "invoice":"РАХУНОК-ФАКТУРА","invoice_no":"Рахунок №","quote_no":"Кошторис №","order_no":"Замовлення №","date":"Дата","client":"Клієнт","phone":"Тел.","quantity":"Кількість","description":"Найменування","unit_price":"Ціна за од.","total":"Сума",
+        "vat_notice":"ПДВ не застосовується - ст. 293 B Податкового кодексу Франції","invoice_euros":"Рахунок у євро","net_payable":"До сплати",
+        "abandon_1":"Обладнання, передане нам і не забране протягом 3 місяців після повідомлення про готовність, вважатиметься залишеним.",
+        "abandon_2":"Після цього строку обладнання може бути утилізоване або перероблене без можливості претензій чи компенсації.",
+        "payment_1":"Умови оплати: оплата після отримання рахунку","payment_2":"Знижка за дострокову оплату не надається","payment_3":"У разі прострочення оплати можуть нараховуватися відсотки за чинною законною ставкою.","payment_4":"Фіксована компенсація витрат на стягнення у разі прострочення: 40 EUR",
+        "intake_title":"Приймання / Звіт про ремонт","client_info":"Інформація про клієнта","first_name":"Ім'я","last_name":"Прізвище","address":"Адреса","postal_city":"Поштовий індекс / Місто","email":"Ел. пошта",
+        "device_details":"Відомості про пристрій","device_type":"Тип пристрою","brand_model":"Марка та модель","serial":"Серійний номер","system":"Система","password":"Пароль","accessories":"Комплектація","condition":"Стан",
+        "problem_desc":"Опис несправності","problem":"Несправність","diagnosis":"Діагностика","repair_authorization":"Дозвіл на ремонт","client_signature":"Підпис клієнта","signed_on":"Підписано",
+        "validation_return":"Перевірка та повернення","tests_validation":"Тести та перевірка","technician_signature":"Підпис техніка","warranty":"Гарантія","warranty_duration":"Термін гарантії","six_months":"Шість місяців",
+        "warranty_text":"Відповідно до статті L211-4 Кодексу споживання Франції, на виконані роботи надається законна гарантія строком шість місяців від дати ремонту. Гарантія поширюється на ті самі несправності, які були усунені під час початкового ремонту.",
+        "warranty_conditions":"Умови гарантії","warranty_only":"Гарантія поширюється лише на зазначені вище несправності.","remarks":"Примітки","thanks":"Дякуємо за довіру.","siret_no":"№ SIRET","ape_code":"Код APE","legal_registration_exemption":"Звільнено від реєстрації в Реєстрі торгівлі та компаній відповідно до статті L. 123-1-1 Торгового кодексу Франції",
+    },
+    "es": {
+        "invoice":"FACTURA","invoice_no":"Factura n.º","quote_no":"Presupuesto n.º","order_no":"Pedido n.º","date":"Fecha","client":"Cliente","phone":"Tel.","quantity":"Cantidad","description":"Descripción","unit_price":"P. unit.","total":"Total",
+        "vat_notice":"IVA no aplicable - art. 293 B del Código Fiscal francés","invoice_euros":"Factura en euros","net_payable":"Total a pagar",
+        "abandon_1":"Todo material confiado y no recogido en un plazo de 3 meses tras avisar de su disponibilidad se considerará abandonado.","abandon_2":"Pasado este plazo, el material podrá destruirse o reciclarse sin posibilidad de reclamación ni indemnización.",
+        "payment_1":"Condiciones de pago: pago a la recepción de la factura","payment_2":"No se concede descuento por pago anticipado","payment_3":"Todo retraso de pago puede generar intereses al tipo legal vigente.","payment_4":"Indemnización fija por gastos de cobro en caso de retraso: 40 EUR",
+        "intake_title":"Recepción / Seguimiento de reparación","client_info":"Información del cliente","first_name":"Nombre","last_name":"Apellidos","address":"Dirección","postal_city":"Código postal / Ciudad","email":"Correo electrónico",
+        "device_details":"Datos del dispositivo","device_type":"Tipo de dispositivo","brand_model":"Marca y modelo","serial":"Número de serie","system":"Sistema","password":"Contraseña","accessories":"Accesorios","condition":"Estado",
+        "problem_desc":"Descripción del problema","problem":"Avería","diagnosis":"Diagnóstico","repair_authorization":"Autorización de reparación","client_signature":"Firma del cliente","signed_on":"Firmado el",
+        "validation_return":"Validación y devolución","tests_validation":"Pruebas y validación","technician_signature":"Firma del técnico","warranty":"Garantía","warranty_duration":"Duración de la garantía","six_months":"Seis meses",
+        "warranty_text":"De conformidad con el artículo L211-4 del Código de Consumo francés, los trabajos realizados disponen de una garantía legal de seis meses desde la fecha de reparación. Esta garantía cubre los mismos defectos o problemas reparados inicialmente.",
+        "warranty_conditions":"Condiciones de garantía","warranty_only":"La garantía cubre únicamente los defectos indicados anteriormente.","remarks":"Observaciones","thanks":"Gracias por su confianza.","siret_no":"N.º SIRET","ape_code":"Código APE","legal_registration_exemption":"Exento de inscripción en el Registro Mercantil y de Sociedades, de conformidad con el artículo L. 123-1-1 del Código de Comercio francés",
+    },
+    "de": {
+        "invoice":"RECHNUNG","invoice_no":"Rechnung Nr.","quote_no":"Angebot Nr.","order_no":"Bestellung Nr.","date":"Datum","client":"Kunde","phone":"Tel.","quantity":"Menge","description":"Bezeichnung","unit_price":"Einzelpreis","total":"Gesamt",
+        "vat_notice":"MwSt. nicht anwendbar - Art. 293 B des französischen Steuergesetzbuchs","invoice_euros":"Rechnung in Euro","net_payable":"Zu zahlen",
+        "abandon_1":"Überlassenes und trotz Bereitstellungsmitteilung innerhalb von 3 Monaten nicht abgeholtes Gerät gilt als aufgegeben.","abandon_2":"Nach Ablauf dieser Frist kann das Gerät ohne Anspruch auf Reklamation oder Entschädigung entsorgt oder recycelt werden.",
+        "payment_1":"Zahlungsbedingungen: Zahlung bei Rechnungserhalt","payment_2":"Kein Skonto bei vorzeitiger Zahlung","payment_3":"Bei Zahlungsverzug können Verzugszinsen zum geltenden gesetzlichen Zinssatz berechnet werden.","payment_4":"Pauschale Beitreibungskosten bei Zahlungsverzug: 40 EUR",
+        "intake_title":"Annahme / Reparaturbericht","client_info":"Kundeninformationen","first_name":"Vorname","last_name":"Nachname","address":"Adresse","postal_city":"PLZ / Ort","email":"E-Mail",
+        "device_details":"Gerätedaten","device_type":"Gerätetyp","brand_model":"Marke und Modell","serial":"Seriennummer","system":"System","password":"Passwort","accessories":"Zubehör","condition":"Zustand",
+        "problem_desc":"Problembeschreibung","problem":"Fehler","diagnosis":"Diagnose","repair_authorization":"Reparaturfreigabe","client_signature":"Unterschrift des Kunden","signed_on":"Unterschrieben am",
+        "validation_return":"Prüfung und Rückgabe","tests_validation":"Tests und Prüfung","technician_signature":"Unterschrift des Technikers","warranty":"Garantie","warranty_duration":"Garantiedauer","six_months":"Sechs Monate",
+        "warranty_text":"Gemäß Artikel L211-4 des französischen Verbrauchergesetzbuchs gilt für die ausgeführten Arbeiten eine gesetzliche Garantie von sechs Monaten ab Reparaturdatum. Sie deckt dieselben Mängel oder Probleme ab, die ursprünglich repariert wurden.",
+        "warranty_conditions":"Garantiebedingungen","warranty_only":"Die Garantie deckt ausschließlich die oben genannten Mängel ab.","remarks":"Bemerkungen","thanks":"Vielen Dank für Ihr Vertrauen.","siret_no":"SIRET-Nr.","ape_code":"APE-Code","legal_registration_exemption":"Von der Eintragung in das französische Handels- und Gesellschaftsregister gemäß Artikel L. 123-1-1 des französischen Handelsgesetzbuchs befreit",
+    },
+    "it": {
+        "invoice":"FATTURA","invoice_no":"Fattura n.","quote_no":"Preventivo n.","order_no":"Ordine n.","date":"Data","client":"Cliente","phone":"Tel.","quantity":"Quantità","description":"Descrizione","unit_price":"Prezzo unit.","total":"Totale",
+        "vat_notice":"IVA non applicabile - art. 293 B del Codice tributario francese","invoice_euros":"Fattura in euro","net_payable":"Da pagare",
+        "abandon_1":"Il materiale affidato e non ritirato entro 3 mesi dalla comunicazione di disponibilità sarà considerato abbandonato.","abandon_2":"Trascorso tale termine, il materiale potrà essere distrutto o riciclato senza possibilità di reclamo o indennizzo.",
+        "payment_1":"Condizioni di pagamento: pagamento al ricevimento della fattura","payment_2":"Nessuno sconto per pagamento anticipato","payment_3":"In caso di ritardo possono essere applicati interessi al tasso legale vigente.","payment_4":"Indennità forfettaria per spese di recupero in caso di ritardo: 40 EUR",
+        "intake_title":"Accettazione / Scheda di riparazione","client_info":"Informazioni cliente","first_name":"Nome","last_name":"Cognome","address":"Indirizzo","postal_city":"CAP / Città","email":"E-mail",
+        "device_details":"Dettagli dispositivo","device_type":"Tipo di dispositivo","brand_model":"Marca e modello","serial":"Numero di serie","system":"Sistema","password":"Password","accessories":"Accessori","condition":"Stato",
+        "problem_desc":"Descrizione del problema","problem":"Guasto","diagnosis":"Diagnosi","repair_authorization":"Autorizzazione alla riparazione","client_signature":"Firma del cliente","signed_on":"Firmato il",
+        "validation_return":"Verifica e restituzione","tests_validation":"Test e verifica","technician_signature":"Firma del tecnico","warranty":"Garanzia","warranty_duration":"Durata della garanzia","six_months":"Sei mesi",
+        "warranty_text":"Ai sensi dell'articolo L211-4 del Codice del consumo francese, i lavori eseguiti sono coperti da una garanzia legale di sei mesi dalla data della riparazione. La garanzia copre gli stessi difetti o problemi riparati inizialmente.",
+        "warranty_conditions":"Condizioni di garanzia","warranty_only":"La garanzia copre esclusivamente i difetti indicati sopra.","remarks":"Note","thanks":"Grazie per la fiducia.","siret_no":"N. SIRET","ape_code":"Codice APE","legal_registration_exemption":"Esente dall’iscrizione al Registro del Commercio e delle Società ai sensi dell’articolo L. 123-1-1 del Codice di commercio francese",
+    },
+}
+
+PDF_FREE_TEXT = {
+    "uk": {"Forfait réparation Informatique":"Пакет послуг з ремонту комп'ютера","Préparation Ordinateur + Mise à jour":"Підготовка комп'ютера + оновлення","Sauvegarde/Restauration des données utilisateurs":"Резервне копіювання / відновлення даних користувача","Installation/Configuration chez cliente + vérification":"Встановлення / налаштування у клієнта + перевірка","Installation/Configuration chez client + vérification":"Встановлення / налаштування у клієнта + перевірка","Prestation de service":"Послуга","Vente de marchandises / pièces":"Продаж товарів / запчастин","Remplacement":"Заміна","Mise à jour":"Оновлення","Nettoyage":"Очищення","Diagnostic":"Діагностика","Réparation":"Ремонт","Passage du Mode S au mode \"Full\" sur Windows 11":"Перехід Windows 11 з режиму S у повний режим","Cleaning Spywares":"Видалення шпигунського ПЗ","Suppressions Logiciels inutiles et installation logiciels\n\"indispensables\"":"Видалення непотрібних програм і встановлення необхідного ПЗ","Suppressions Logiciels inutiles et installation logiciels \"indispensables\"":"Видалення непотрібних програм і встановлення необхідного ПЗ","Update Windows":"Оновлення Windows"},
+    "en": {"Forfait réparation Informatique":"Computer repair package","Préparation Ordinateur + Mise à jour":"Computer setup + update","Sauvegarde/Restauration des données utilisateurs":"User data backup / restore","Installation/Configuration chez cliente + vérification":"On-site installation / configuration + check","Installation/Configuration chez client + vérification":"On-site installation / configuration + check","Prestation de service":"Service","Vente de marchandises / pièces":"Sale of goods / parts","Remplacement":"Replacement","Mise à jour":"Update","Nettoyage":"Cleaning","Diagnostic":"Diagnosis","Réparation":"Repair","Passage du Mode S au mode \"Full\" sur Windows 11":"Switching Windows 11 from S mode to full mode","Cleaning Spywares":"Spyware removal","Suppressions Logiciels inutiles et installation logiciels\n\"indispensables\"":"Removal of unnecessary software and installation of essential software","Suppressions Logiciels inutiles et installation logiciels \"indispensables\"":"Removal of unnecessary software and installation of essential software","Update Windows":"Windows update"},
+    "es": {"Forfait réparation Informatique":"Paquete de reparación informática","Préparation Ordinateur + Mise à jour":"Preparación del ordenador + actualización","Sauvegarde/Restauration des données utilisateurs":"Copia de seguridad / restauración de datos del usuario","Installation/Configuration chez cliente + vérification":"Instalación / configuración in situ + verificación","Installation/Configuration chez client + vérification":"Instalación / configuración in situ + verificación","Prestation de service":"Servicio","Vente de marchandises / pièces":"Venta de productos / piezas","Remplacement":"Sustitución","Mise à jour":"Actualización","Nettoyage":"Limpieza","Diagnostic":"Diagnóstico","Réparation":"Reparación","Passage du Mode S au mode \"Full\" sur Windows 11":"Cambio de Windows 11 del modo S al modo completo","Cleaning Spywares":"Eliminación de software espía","Suppressions Logiciels inutiles et installation logiciels\n\"indispensables\"":"Eliminación de software innecesario e instalación del software esencial","Suppressions Logiciels inutiles et installation logiciels \"indispensables\"":"Eliminación de software innecesario e instalación del software esencial","Update Windows":"Actualización de Windows"},
+    "de": {"Forfait réparation Informatique":"Pauschale Computerreparatur","Préparation Ordinateur + Mise à jour":"Computer-Einrichtung + Update","Sauvegarde/Restauration des données utilisateurs":"Sicherung / Wiederherstellung von Benutzerdaten","Installation/Configuration chez cliente + vérification":"Installation / Konfiguration vor Ort + Prüfung","Installation/Configuration chez client + vérification":"Installation / Konfiguration vor Ort + Prüfung","Prestation de service":"Dienstleistung","Vente de marchandises / pièces":"Verkauf von Waren / Teilen","Remplacement":"Austausch","Mise à jour":"Aktualisierung","Nettoyage":"Reinigung","Diagnostic":"Diagnose","Réparation":"Reparatur","Passage du Mode S au mode \"Full\" sur Windows 11":"Windows 11 vom S-Modus in den vollständigen Modus wechseln","Cleaning Spywares":"Entfernung von Spyware","Suppressions Logiciels inutiles et installation logiciels\n\"indispensables\"":"Entfernung unnötiger Software und Installation erforderlicher Software","Suppressions Logiciels inutiles et installation logiciels \"indispensables\"":"Entfernung unnötiger Software und Installation erforderlicher Software","Update Windows":"Windows-Aktualisierung"},
+    "it": {"Forfait réparation Informatique":"Pacchetto riparazione informatica","Préparation Ordinateur + Mise à jour":"Preparazione computer + aggiornamento","Sauvegarde/Restauration des données utilisateurs":"Backup / ripristino dati utente","Installation/Configuration chez cliente + vérification":"Installazione / configurazione presso il cliente + verifica","Installation/Configuration chez client + vérification":"Installazione / configurazione presso il cliente + verifica","Prestation de service":"Prestazione di servizio","Vente de marchandises / pièces":"Vendita di prodotti / ricambi","Remplacement":"Sostituzione","Mise à jour":"Aggiornamento","Nettoyage":"Pulizia","Diagnostic":"Diagnosi","Réparation":"Riparazione","Passage du Mode S au mode \"Full\" sur Windows 11":"Passaggio di Windows 11 dalla modalità S alla modalità completa","Cleaning Spywares":"Rimozione di spyware","Suppressions Logiciels inutiles et installation logiciels\n\"indispensables\"":"Rimozione del software non necessario e installazione del software essenziale","Suppressions Logiciels inutiles et installation logiciels \"indispensables\"":"Rimozione del software non necessario e installazione del software essenziale","Update Windows":"Aggiornamento di Windows"},
+}
+
+
+# V2.3.156 — vocabulaire atelier commun, traduit dans TOUTES les langues PDF.
+# Les champs libres restent saisis en français dans l'interface ; seule la copie PDF est traduite.
+PDF_FREE_TEXT_EXTRA = {
+    "en": {
+        "Forfait Repair électronique": "Electronics repair package",
+        "Forfait réparation électronique": "Electronics repair package",
+        "Forfait réparation Informatique & électronique": "Computer & electronics repair package",
+        "Forfait réparation informatique et électronique": "Computer & electronics repair package",
+        "Réparation électronique": "Electronics repair",
+        "Réparation informatique": "Computer repair",
+        "Diagnostic électronique": "Electronics diagnosis",
+        "Diagnostic informatique": "Computer diagnosis",
+        "Réparation carte électronique": "Electronic board repair",
+        "Réparation carte mère": "Motherboard repair",
+        "(soudure/micro-soudure)": "(soldering/microsoldering)",
+        "soudure / micro-soudure": "soldering/microsoldering",
+        "soudure/micro-soudure": "soldering/microsoldering",
+        "micro-soudure": "microsoldering",
+        "microsoudure": "microsoldering",
+        "soudure": "soldering",
+        "Carte électronique": "Electronic board",
+        "Carte mère": "Motherboard",
+        "Remplacement connecteur HDMI": "HDMI connector replacement",
+        "Remplacement connecteur USB-C": "USB-C connector replacement",
+        "Remplacement connecteur de charge": "Charging connector replacement",
+        "Remplacement écran": "Screen replacement",
+        "Remplacement batterie": "Battery replacement",
+        "Remplacement ventilateur": "Fan replacement",
+        "Remplacement pâte thermique": "Thermal paste replacement",
+        "Remplacement métal liquide": "Liquid metal replacement",
+        "Nettoyage complet": "Full cleaning",
+        "Nettoyage console": "Console cleaning",
+        "Installation SSD": "SSD installation",
+        "Installation Windows": "Windows installation",
+        "Réinstallation Windows": "Windows reinstallation",
+        "Récupération de données": "Data recovery",
+        "Sauvegarde de données": "Data backup",
+        "Suppression virus": "Virus removal",
+        "Suppression malware": "Malware removal",
+        "Main d'œuvre": "Labour",
+        "Main d’oeuvre": "Labour",
+        "Pièce détachée": "Spare part",
+        "Connecteur de charge": "Charging connector",
+        "Connecteur HDMI": "HDMI connector",
+        "Port USB-C": "USB-C port",
+        "Ventilateur": "Fan",
+        "Écran": "Screen",
+        "Batterie": "Battery",
+        "Alimentation": "Power supply",
+    },
+    "uk": {
+        "Forfait Repair électronique": "Пакет послуг з ремонту електроніки",
+        "Forfait réparation électronique": "Пакет послуг з ремонту електроніки",
+        "Forfait réparation Informatique & électronique": "Пакет послуг з ремонту комп'ютерів та електроніки",
+        "Forfait réparation informatique et électronique": "Пакет послуг з ремонту комп'ютерів та електроніки",
+        "Réparation électronique": "Ремонт електроніки",
+        "Réparation informatique": "Ремонт комп'ютера",
+        "Diagnostic électronique": "Діагностика електроніки",
+        "Diagnostic informatique": "Діагностика комп'ютера",
+        "Réparation carte électronique": "Ремонт електронної плати",
+        "Réparation carte mère": "Ремонт материнської плати",
+        "(soudure/micro-soudure)": "(пайка/мікропайка)",
+        "soudure / micro-soudure": "пайка/мікропайка",
+        "soudure/micro-soudure": "пайка/мікропайка",
+        "micro-soudure": "мікропайка",
+        "microsoudure": "мікропайка",
+        "soudure": "пайка",
+        "Carte électronique": "Електронна плата",
+        "Carte mère": "Материнська плата",
+        "Remplacement connecteur HDMI": "Заміна роз'єму HDMI",
+        "Remplacement connecteur USB-C": "Заміна роз'єму USB-C",
+        "Remplacement connecteur de charge": "Заміна роз'єму заряджання",
+        "Remplacement écran": "Заміна екрана",
+        "Remplacement batterie": "Заміна акумулятора",
+        "Remplacement ventilateur": "Заміна вентилятора",
+        "Remplacement pâte thermique": "Заміна термопасти",
+        "Remplacement métal liquide": "Заміна рідкого металу",
+        "Nettoyage complet": "Повне очищення",
+        "Nettoyage console": "Очищення консолі",
+        "Installation SSD": "Встановлення SSD",
+        "Installation Windows": "Встановлення Windows",
+        "Réinstallation Windows": "Перевстановлення Windows",
+        "Récupération de données": "Відновлення даних",
+        "Sauvegarde de données": "Резервне копіювання даних",
+        "Suppression virus": "Видалення вірусів",
+        "Suppression malware": "Видалення шкідливого ПЗ",
+        "Main d'œuvre": "Робота",
+        "Main d’oeuvre": "Робота",
+        "Pièce détachée": "Запасна частина",
+        "Connecteur de charge": "Роз'єм заряджання",
+        "Connecteur HDMI": "Роз'єм HDMI",
+        "Port USB-C": "Порт USB-C",
+        "Ventilateur": "Вентилятор",
+        "Écran": "Екран",
+        "Batterie": "Акумулятор",
+        "Alimentation": "Блок живлення",
+    },
+    "es": {
+        "Forfait Repair électronique": "Paquete de reparación electrónica",
+        "Forfait réparation électronique": "Paquete de reparación electrónica",
+        "Forfait réparation Informatique & électronique": "Paquete de reparación informática y electrónica",
+        "Forfait réparation informatique et électronique": "Paquete de reparación informática y electrónica",
+        "Réparation électronique": "Reparación electrónica",
+        "Réparation informatique": "Reparación informática",
+        "Diagnostic électronique": "Diagnóstico electrónico",
+        "Diagnostic informatique": "Diagnóstico informático",
+        "Réparation carte électronique": "Reparación de placa electrónica",
+        "Réparation carte mère": "Reparación de placa base",
+        "(soudure/micro-soudure)": "(soldadura/microsoldadura)",
+        "soudure / micro-soudure": "soldadura/microsoldadura",
+        "soudure/micro-soudure": "soldadura/microsoldadura",
+        "micro-soudure": "microsoldadura",
+        "microsoudure": "microsoldadura",
+        "soudure": "soldadura",
+        "Carte électronique": "Placa electrónica",
+        "Carte mère": "Placa base",
+        "Remplacement connecteur HDMI": "Sustitución del conector HDMI",
+        "Remplacement connecteur USB-C": "Sustitución del conector USB-C",
+        "Remplacement connecteur de charge": "Sustitución del conector de carga",
+        "Remplacement écran": "Sustitución de pantalla",
+        "Remplacement batterie": "Sustitución de batería",
+        "Remplacement ventilateur": "Sustitución de ventilador",
+        "Remplacement pâte thermique": "Sustitución de pasta térmica",
+        "Remplacement métal liquide": "Sustitución de metal líquido",
+        "Nettoyage complet": "Limpieza completa",
+        "Nettoyage console": "Limpieza de consola",
+        "Installation SSD": "Instalación de SSD",
+        "Installation Windows": "Instalación de Windows",
+        "Réinstallation Windows": "Reinstalación de Windows",
+        "Récupération de données": "Recuperación de datos",
+        "Sauvegarde de données": "Copia de seguridad de datos",
+        "Suppression virus": "Eliminación de virus",
+        "Suppression malware": "Eliminación de malware",
+        "Main d'œuvre": "Mano de obra",
+        "Main d’oeuvre": "Mano de obra",
+        "Pièce détachée": "Pieza de repuesto",
+        "Connecteur de charge": "Conector de carga",
+        "Connecteur HDMI": "Conector HDMI",
+        "Port USB-C": "Puerto USB-C",
+        "Ventilateur": "Ventilador",
+        "Écran": "Pantalla",
+        "Batterie": "Batería",
+        "Alimentation": "Fuente de alimentación",
+    },
+    "de": {
+        "Forfait Repair électronique": "Pauschale Elektronikreparatur",
+        "Forfait réparation électronique": "Pauschale Elektronikreparatur",
+        "Forfait réparation Informatique & électronique": "Pauschale Computer- und Elektronikreparatur",
+        "Forfait réparation informatique et électronique": "Pauschale Computer- und Elektronikreparatur",
+        "Réparation électronique": "Elektronikreparatur",
+        "Réparation informatique": "Computerreparatur",
+        "Diagnostic électronique": "Elektronikdiagnose",
+        "Diagnostic informatique": "Computerdiagnose",
+        "Réparation carte électronique": "Reparatur der Elektronikplatine",
+        "Réparation carte mère": "Mainboard-Reparatur",
+        "(soudure/micro-soudure)": "(Löten/Mikrolöten)",
+        "soudure / micro-soudure": "Löten/Mikrolöten",
+        "soudure/micro-soudure": "Löten/Mikrolöten",
+        "micro-soudure": "Mikrolöten",
+        "microsoudure": "Mikrolöten",
+        "soudure": "Löten",
+        "Carte électronique": "Elektronikplatine",
+        "Carte mère": "Mainboard",
+        "Remplacement connecteur HDMI": "Austausch des HDMI-Anschlusses",
+        "Remplacement connecteur USB-C": "Austausch des USB-C-Anschlusses",
+        "Remplacement connecteur de charge": "Austausch des Ladeanschlusses",
+        "Remplacement écran": "Bildschirmtausch",
+        "Remplacement batterie": "Akkutausch",
+        "Remplacement ventilateur": "Lüftertausch",
+        "Remplacement pâte thermique": "Austausch der Wärmeleitpaste",
+        "Remplacement métal liquide": "Austausch des Flüssigmetalls",
+        "Nettoyage complet": "Komplettreinigung",
+        "Nettoyage console": "Konsolenreinigung",
+        "Installation SSD": "SSD-Installation",
+        "Installation Windows": "Windows-Installation",
+        "Réinstallation Windows": "Windows-Neuinstallation",
+        "Récupération de données": "Datenwiederherstellung",
+        "Sauvegarde de données": "Datensicherung",
+        "Suppression virus": "Virenentfernung",
+        "Suppression malware": "Malware-Entfernung",
+        "Main d'œuvre": "Arbeitsleistung",
+        "Main d’oeuvre": "Arbeitsleistung",
+        "Pièce détachée": "Ersatzteil",
+        "Connecteur de charge": "Ladeanschluss",
+        "Connecteur HDMI": "HDMI-Anschluss",
+        "Port USB-C": "USB-C-Anschluss",
+        "Ventilateur": "Lüfter",
+        "Écran": "Bildschirm",
+        "Batterie": "Akku",
+        "Alimentation": "Netzteil",
+    },
+    "it": {
+        "Forfait Repair électronique": "Pacchetto riparazione elettronica",
+        "Forfait réparation électronique": "Pacchetto riparazione elettronica",
+        "Forfait réparation Informatique & électronique": "Pacchetto riparazione informatica ed elettronica",
+        "Forfait réparation informatique et électronique": "Pacchetto riparazione informatica ed elettronica",
+        "Réparation électronique": "Riparazione elettronica",
+        "Réparation informatique": "Riparazione informatica",
+        "Diagnostic électronique": "Diagnosi elettronica",
+        "Diagnostic informatique": "Diagnosi informatica",
+        "Réparation carte électronique": "Riparazione scheda elettronica",
+        "Réparation carte mère": "Riparazione scheda madre",
+        "(soudure/micro-soudure)": "(saldatura/microsaldatura)",
+        "soudure / micro-soudure": "saldatura/microsaldatura",
+        "soudure/micro-soudure": "saldatura/microsaldatura",
+        "micro-soudure": "microsaldatura",
+        "microsoudure": "microsaldatura",
+        "soudure": "saldatura",
+        "Carte électronique": "Scheda elettronica",
+        "Carte mère": "Scheda madre",
+        "Remplacement connecteur HDMI": "Sostituzione connettore HDMI",
+        "Remplacement connecteur USB-C": "Sostituzione connettore USB-C",
+        "Remplacement connecteur de charge": "Sostituzione connettore di ricarica",
+        "Remplacement écran": "Sostituzione schermo",
+        "Remplacement batterie": "Sostituzione batteria",
+        "Remplacement ventilateur": "Sostituzione ventola",
+        "Remplacement pâte thermique": "Sostituzione pasta termica",
+        "Remplacement métal liquide": "Sostituzione metallo liquido",
+        "Nettoyage complet": "Pulizia completa",
+        "Nettoyage console": "Pulizia console",
+        "Installation SSD": "Installazione SSD",
+        "Installation Windows": "Installazione Windows",
+        "Réinstallation Windows": "Reinstallazione Windows",
+        "Récupération de données": "Recupero dati",
+        "Sauvegarde de données": "Backup dei dati",
+        "Suppression virus": "Rimozione virus",
+        "Suppression malware": "Rimozione malware",
+        "Main d'œuvre": "Manodopera",
+        "Main d’oeuvre": "Manodopera",
+        "Pièce détachée": "Ricambio",
+        "Connecteur de charge": "Connettore di ricarica",
+        "Connecteur HDMI": "Connettore HDMI",
+        "Port USB-C": "Porta USB-C",
+        "Ventilateur": "Ventola",
+        "Écran": "Schermo",
+        "Batterie": "Batteria",
+        "Alimentation": "Alimentatore",
+    },
+}
+
+for _lang, _entries in PDF_FREE_TEXT_EXTRA.items():
+    PDF_FREE_TEXT.setdefault(_lang, {}).update(_entries)
+
+
+# V2.3.195 - Complément de traduction des textes techniques réellement saisis
+# dans les factures et feuilles de suivi. Les libellés structurés étaient déjà
+# complets dans les 5 langues ; ce bloc couvre les phrases libres fréquentes.
+PDF_FREE_TEXT_REPAIR_EXTRA = {
+    "en": {
+        "Diagnostic et tentative de Réparation": "Diagnosis and attempted repair",
+        "Détails sur la feuille de suivi": "Details on the service report",
+        "Composant HS": "Faulty component",
+        "Condensateur coté affichage HS et remplacé": "Faulty display-side capacitor replaced",
+        "Condensateur côté affichage HS et remplacé": "Faulty display-side capacitor replaced",
+        "Carte mère nettoyé au niveau du composant brulé.": "Motherboard cleaned around the burnt component.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Motherboard cleaned around the burnt component.",
+        "Composant brulé remplacé et ressoudé.": "Burnt component replaced and resoldered.",
+        "Composant brûlé remplacé et ressoudé.": "Burnt component replaced and resoldered.",
+        "Toujours pas de démarrage": "Still does not start",
+        "ne consomme rien": "draws no current",
+        "Court circuit": "Short circuit",
+        "Court-circuit": "Short circuit",
+        "PCB abimée": "Damaged PCB",
+        "PCB abîmée": "Damaged PCB",
+        "Non réparable sans changer la Carte mère.": "Not repairable without replacing the motherboard.",
+        "Non réparable sans changer la carte mère.": "Not repairable without replacing the motherboard.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Returned with the components replaced, but the PC still does not power on.",
+        "composant brulé": "burnt component",
+        "composant brûlé": "burnt component",
+        "remplacé": "replaced",
+        "ressoudé": "resoldered",
+        "démarrage": "startup",
+        "allumage": "power-on",
+        "nettoyé": "cleaned",
+        "nettoyée": "cleaned",
+        "abimée": "damaged",
+        "abîmée": "damaged",
+        "sans changer": "without replacing",
+        "tentative de": "attempted",
+        "Détail sur": "Details on",
+        "feuille de suivi": "service report",
+    },
+    "uk": {
+        "Diagnostic et tentative de Réparation": "Діагностика та спроба ремонту",
+        "Détails sur la feuille de suivi": "Деталі у звіті про ремонт",
+        "Composant HS": "Несправний компонент",
+        "Condensateur coté affichage HS et remplacé": "Несправний конденсатор з боку дисплея замінено",
+        "Condensateur côté affichage HS et remplacé": "Несправний конденсатор з боку дисплея замінено",
+        "Carte mère nettoyé au niveau du composant brulé.": "Материнську плату очищено в зоні згорілого компонента.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Материнську плату очищено в зоні згорілого компонента.",
+        "Composant brulé remplacé et ressoudé.": "Згорілий компонент замінено та перепаяно.",
+        "Composant brûlé remplacé et ressoudé.": "Згорілий компонент замінено та перепаяно.",
+        "Toujours pas de démarrage": "Пристрій усе ще не запускається",
+        "ne consomme rien": "не споживає струм",
+        "Court circuit": "Коротке замикання",
+        "Court-circuit": "Коротке замикання",
+        "PCB abimée": "Пошкоджена друкована плата",
+        "PCB abîmée": "Пошкоджена друкована плата",
+        "Non réparable sans changer la Carte mère.": "Ремонт неможливий без заміни материнської плати.",
+        "Non réparable sans changer la carte mère.": "Ремонт неможливий без заміни материнської плати.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Повернено із заміненими компонентами, але ПК усе ще не вмикається.",
+        "composant brulé": "згорілий компонент",
+        "composant brûlé": "згорілий компонент",
+        "remplacé": "замінено",
+        "ressoudé": "перепаяно",
+        "démarrage": "запуск",
+        "allumage": "увімкнення",
+        "nettoyé": "очищено",
+        "nettoyée": "очищено",
+        "abimée": "пошкоджена",
+        "abîmée": "пошкоджена",
+        "sans changer": "без заміни",
+        "tentative de": "спроба",
+        "Détail sur": "Деталі у",
+        "feuille de suivi": "звіті про ремонт",
+    },
+    "es": {
+        "Diagnostic et tentative de Réparation": "Diagnóstico e intento de reparación",
+        "Détails sur la feuille de suivi": "Detalles en la hoja de seguimiento",
+        "Composant HS": "Componente defectuoso",
+        "Condensateur coté affichage HS et remplacé": "Condensador del lado de la pantalla defectuoso y sustituido",
+        "Condensateur côté affichage HS et remplacé": "Condensador del lado de la pantalla defectuoso y sustituido",
+        "Carte mère nettoyé au niveau du composant brulé.": "Placa base limpiada alrededor del componente quemado.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Placa base limpiada alrededor del componente quemado.",
+        "Composant brulé remplacé et ressoudé.": "Componente quemado sustituido y resoldado.",
+        "Composant brûlé remplacé et ressoudé.": "Componente quemado sustituido y resoldado.",
+        "Toujours pas de démarrage": "Sigue sin arrancar",
+        "ne consomme rien": "no consume corriente",
+        "Court circuit": "Cortocircuito",
+        "Court-circuit": "Cortocircuito",
+        "PCB abimée": "PCB dañada",
+        "PCB abîmée": "PCB dañada",
+        "Non réparable sans changer la Carte mère.": "No se puede reparar sin sustituir la placa base.",
+        "Non réparable sans changer la carte mère.": "No se puede reparar sin sustituir la placa base.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Devuelto con los componentes sustituidos, pero el PC sigue sin encender.",
+        "composant brulé": "componente quemado",
+        "composant brûlé": "componente quemado",
+        "remplacé": "sustituido",
+        "ressoudé": "resoldado",
+        "démarrage": "arranque",
+        "allumage": "encendido",
+        "nettoyé": "limpiado",
+        "nettoyée": "limpiada",
+        "abimée": "dañada",
+        "abîmée": "dañada",
+        "sans changer": "sin sustituir",
+        "tentative de": "intento de",
+        "Détail sur": "Detalles en",
+        "feuille de suivi": "hoja de seguimiento",
+    },
+    "de": {
+        "Diagnostic et tentative de Réparation": "Diagnose und Reparaturversuch",
+        "Détails sur la feuille de suivi": "Details im Servicebericht",
+        "Composant HS": "Defektes Bauteil",
+        "Condensateur coté affichage HS et remplacé": "Defekter Kondensator auf der Displayseite ersetzt",
+        "Condensateur côté affichage HS et remplacé": "Defekter Kondensator auf der Displayseite ersetzt",
+        "Carte mère nettoyé au niveau du composant brulé.": "Mainboard im Bereich des verbrannten Bauteils gereinigt.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Mainboard im Bereich des verbrannten Bauteils gereinigt.",
+        "Composant brulé remplacé et ressoudé.": "Verbranntes Bauteil ersetzt und neu verlötet.",
+        "Composant brûlé remplacé et ressoudé.": "Verbranntes Bauteil ersetzt und neu verlötet.",
+        "Toujours pas de démarrage": "Startet weiterhin nicht",
+        "ne consomme rien": "nimmt keinen Strom auf",
+        "Court circuit": "Kurzschluss",
+        "Court-circuit": "Kurzschluss",
+        "PCB abimée": "Beschädigte Leiterplatte",
+        "PCB abîmée": "Beschädigte Leiterplatte",
+        "Non réparable sans changer la Carte mère.": "Ohne Austausch des Mainboards nicht reparierbar.",
+        "Non réparable sans changer la carte mère.": "Ohne Austausch des Mainboards nicht reparierbar.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Mit ersetzten Bauteilen zurückgegeben, der PC lässt sich jedoch weiterhin nicht einschalten.",
+        "composant brulé": "verbranntes Bauteil",
+        "composant brûlé": "verbranntes Bauteil",
+        "remplacé": "ersetzt",
+        "ressoudé": "neu verlötet",
+        "démarrage": "Start",
+        "allumage": "Einschalten",
+        "nettoyé": "gereinigt",
+        "nettoyée": "gereinigt",
+        "abimée": "beschädigt",
+        "abîmée": "beschädigt",
+        "sans changer": "ohne Austausch",
+        "tentative de": "Versuch einer",
+        "Détail sur": "Details im",
+        "feuille de suivi": "Servicebericht",
+    },
+    "it": {
+        "Diagnostic et tentative de Réparation": "Diagnosi e tentativo di riparazione",
+        "Détails sur la feuille de suivi": "Dettagli nel rapporto di assistenza",
+        "Composant HS": "Componente guasto",
+        "Condensateur coté affichage HS et remplacé": "Condensatore lato display guasto e sostituito",
+        "Condensateur côté affichage HS et remplacé": "Condensatore lato display guasto e sostituito",
+        "Carte mère nettoyé au niveau du composant brulé.": "Scheda madre pulita nella zona del componente bruciato.",
+        "Carte mère nettoyée au niveau du composant brûlé.": "Scheda madre pulita nella zona del componente bruciato.",
+        "Composant brulé remplacé et ressoudé.": "Componente bruciato sostituito e risaldato.",
+        "Composant brûlé remplacé et ressoudé.": "Componente bruciato sostituito e risaldato.",
+        "Toujours pas de démarrage": "Continua a non avviarsi",
+        "ne consomme rien": "non assorbe corrente",
+        "Court circuit": "Cortocircuito",
+        "Court-circuit": "Cortocircuito",
+        "PCB abimée": "PCB danneggiata",
+        "PCB abîmée": "PCB danneggiata",
+        "Non réparable sans changer la Carte mère.": "Non riparabile senza sostituire la scheda madre.",
+        "Non réparable sans changer la carte mère.": "Non riparabile senza sostituire la scheda madre.",
+        "Rendu avec les composants remplacés mais pas d'allumage PC.": "Restituito con i componenti sostituiti, ma il PC continua a non accendersi.",
+        "composant brulé": "componente bruciato",
+        "composant brûlé": "componente bruciato",
+        "remplacé": "sostituito",
+        "ressoudé": "risaldato",
+        "démarrage": "avvio",
+        "allumage": "accensione",
+        "nettoyé": "pulito",
+        "nettoyée": "pulita",
+        "abimée": "danneggiata",
+        "abîmée": "danneggiata",
+        "sans changer": "senza sostituire",
+        "tentative de": "tentativo di",
+        "Détail sur": "Dettagli nel",
+        "feuille de suivi": "rapporto di assistenza",
+    },
+}
+
+for _lang, _entries in PDF_FREE_TEXT_REPAIR_EXTRA.items():
+    PDF_FREE_TEXT.setdefault(_lang, {}).update(_entries)
+
+def pdf_lang(value=None):
+    lang = str(value if value is not None else request.args.get("lang", "fr")).strip().lower()
+    return lang if lang in PDF_LANGUAGES else "fr"
+
+def pdf_t(key, lang="fr"):
+    if lang == "fr":
+        return PDF_FRENCH.get(key, key)
+    return PDF_TRANSLATIONS.get(lang, {}).get(key, PDF_FRENCH.get(key, key))
+
+def translate_pdf_text(text, lang="fr"):
+    """Traduction uniquement au rendu PDF; aucune donnee n'est modifiee."""
+    raw = str(text or "")
+    if lang == "fr" or not raw:
+        return raw
+    out = raw
+    glossary = PDF_FREE_TEXT.get(lang, {})
+    for src in sorted(glossary, key=len, reverse=True):
+        out = re.sub(re.escape(src), glossary[src], out, flags=re.IGNORECASE)
+    return out
+
+def pdf_language_suffix(lang="fr"):
+    return PDF_LANGUAGES.get(lang, PDF_LANGUAGES["fr"])[0]
+
+PDF_FONTS = {
+    "regular": "Helvetica",
+    "bold": "Helvetica-Bold",
+    "italic": "Helvetica-Oblique",
+}
+
+def register_roboto():
+    """Utilise Roboto si elle est installée sur Linux, sinon Helvetica."""
+    global PDF_FONTS
+    candidates = {
+        # Roboto reste prioritaire pour conserver le rendu historique WOPR.
+        # DejaVu Sans sert de repli Unicode/Cyrillique si Roboto n'est pas installee.
+        "Roboto": [
+            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
+            "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
+            "/usr/share/fonts/TTF/Roboto-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ],
+        "Roboto-Bold": [
+            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf",
+            "/usr/share/fonts/truetype/roboto/Roboto-Bold.ttf",
+            "/usr/share/fonts/TTF/Roboto-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ],
+        "Roboto-Italic": [
+            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Italic.ttf",
+            "/usr/share/fonts/truetype/roboto/Roboto-Italic.ttf",
+            "/usr/share/fonts/TTF/Roboto-Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+        ],
+    }
+    mapping = {
+        "regular": "Helvetica",
+        "bold": "Helvetica-Bold",
+        "italic": "Helvetica-Oblique",
+    }
+    for font_name, paths in candidates.items():
+        for p in paths:
+            if Path(p).exists():
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, p))
+                    if font_name == "Roboto":
+                        mapping["regular"] = "Roboto"
+                    elif font_name == "Roboto-Bold":
+                        mapping["bold"] = "Roboto-Bold"
+                    elif font_name == "Roboto-Italic":
+                        mapping["italic"] = "Roboto-Italic"
+                    break
+                except Exception:
+                    pass
+    PDF_FONTS = mapping
+
+register_roboto()
+
+QUOTE_FONTS = {
+    "regular": "Helvetica",
+    "bold": "Helvetica-Bold",
+    "italic": "Helvetica-Oblique",
+}
+
+def register_quote_fonts():
+    """Police des devis historiques : priorité à Liberation Sans (très proche du Calc d'origine)."""
+    global QUOTE_FONTS
+    candidates = {
+        "FFQuoteRegular": [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        ],
+        "FFQuoteBold": [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ],
+        "FFQuoteItalic": [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Italic.ttf",
+        ],
+    }
+    mapping = dict(QUOTE_FONTS)
+    for font_name, paths in candidates.items():
+        for p in paths:
+            if Path(p).exists():
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, p))
+                    if font_name == "FFQuoteRegular":
+                        mapping["regular"] = font_name
+                    elif font_name == "FFQuoteBold":
+                        mapping["bold"] = font_name
+                    elif font_name == "FFQuoteItalic":
+                        mapping["italic"] = font_name
+                    break
+                except Exception:
+                    pass
+    QUOTE_FONTS = mapping
+
+register_quote_fonts()
+
+app = Flask(__name__)
+# V2.3.165 — WOPR doit rester autonome même si app.py est lancé directement,
+# sans passer par un lanceur Linux/Windows.
+for _directory in (
+    PRIVATE_ROOT, DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR,
+    PRIVATE_ASSETS, PRIVATE_SEEDS, DOCUMENTS_ROOT, DEVIS_ROOT, FACTURES_ROOT,
+    FOURNISSEURS_ROOT, COMMANDES_ROOT, SUIVI_REPARATIONS_ROOT,
+    STOCK_IMAGES_ROOT,
+):
+    _directory.mkdir(parents=True, exist_ok=True)
+
+def load_or_create_app_secret():
+    if APP_SECRET_FILE.exists():
+        value = APP_SECRET_FILE.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    value = secrets.token_urlsafe(48)
+    APP_SECRET_FILE.write_text(value, encoding="utf-8")
+    try:
+        os.chmod(APP_SECRET_FILE, 0o600)
+    except OSError:
+        pass
+    return value
+
+app.secret_key = load_or_create_app_secret()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,  # appli locale HTTP ; passera à True si HTTPS un jour
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=ADMIN_SESSION_HOURS),
+    SESSION_REFRESH_EACH_REQUEST=True,
+    MAX_CONTENT_LENGTH=8 * 1024 * 1024,
+)
+
+
+
+def _wopr_remove_topbar_simple_invoice(html):
+    """Supprime UNIQUEMENT le premier bouton Facture simple de la navigation haute."""
+    # Dans base.html, la navigation principale est rendue avant le menu/pages.
+    # On retire donc seulement le premier lien /invoice/simple dont le texte est Facture simple.
+    pattern = re.compile(
+        r'<a\b(?=[^>]*\bhref=["\']/invoice/simple(?:[?#][^"\']*)?["\'])[^>]*>'
+        r'(?:(?!</a>).)*?Facture\s+simple(?:(?!</a>).)*?</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.sub("", html, count=1)
+
+
+
+
+
+
+# Force explicitement UTF-8 pour toutes les pages HTML.
+# Certains navigateurs Windows peuvent sinon interpréter les accents en Windows-1252
+# lorsque l'en-tête HTTP ne précise pas le charset.
+@app.after_request
+def force_utf8_html(response):
+    content_type = response.headers.get("Content-Type", "")
+    if content_type.lower().startswith("text/html"):
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+
+        # V2.3.222 — correctifs responsive globaux.
+        # Injectés ici pour s'appliquer à toutes les pages sans dupliquer
+        # les inclusions dans chaque template.
+        try:
+            html = response.get_data(as_text=True)
+            html = _wopr_remove_topbar_simple_invoice(html)
+
+            js_tag = f'<script src="/static/wopr-responsive.js?v={APP_VERSION}"></script>'
+            print_js_tag = f'<script src="/static/wopr-print.js?v={APP_VERSION}"></script>'
+            google_sync_js_tag = f'<script src="/static/wopr-google-sync.js?v={APP_VERSION}"></script>'
+            folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}"></script>'
+            actions_8bit_runtime_js_tag = f'<script src="/static/wopr-8bit-actions-runtime.js?v={APP_VERSION}"></script>'
+            tracking_preview_js_tag = f'<script src="/static/wopr-tracking-preview.js?v={APP_VERSION}"></script>'
+
+
+
+            if "wopr-responsive.js" not in html and "</body>" in html:
+                html = html.replace("</body>", js_tag + "\n</body>", 1)
+
+            if "wopr-print.js" not in html and "</body>" in html:
+                html = html.replace("</body>", print_js_tag + "\n</body>", 1)
+
+            if "wopr-google-sync.js" not in html and "</body>" in html:
+                html = html.replace("</body>", google_sync_js_tag + "\n</body>", 1)
+
+            if "wopr-folders-v248.js" not in html and "</body>" in html:
+                html = html.replace("</body>", folders_v248_js_tag + "\n</body>", 1)
+            if "wopr-8bit-actions-runtime.js" not in html and "</body>" in html:
+                html = html.replace("</body>", actions_8bit_runtime_js_tag + "\n</body>", 1)
+            if "wopr-tracking-preview.js" not in html and "</body>" in html:
+                html = html.replace("</body>", tracking_preview_js_tag + "\n</body>", 1)
+
+            response.set_data(html)
+        except Exception:
+            # Un problème cosmétique ne doit jamais empêcher WOPR de répondre.
+            pass
+
+    return response
+
+def cfg():
+    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def read_tracking_settings():
+    defaults = {
+        "enabled": False,
+        "api_url": "https://foul-fix.fr/suivi-api.php",
+        "api_key": "",
+    }
+    try:
+        if TRACKING_SETTINGS_FILE.exists():
+            loaded = json.loads(TRACKING_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                defaults.update({k: loaded.get(k, v) for k, v in defaults.items()})
+    except Exception:
+        pass
+    return defaults
+
+
+def read_external_backup_settings():
+    """Lit la configuration portable du script de sauvegarde externe."""
+    defaults = {
+        "enabled": True,
+        "script_path": "~/.local/bin/foul-fix-backup.sh",
+        "log_file": "~/.local/state/foul-fix-backup.log",
+        "freebox_path": "/mnt/Freebox/Backup/Web/Foul-Fix/backups",
+        "proton_remote": "protondrive:Sauvegardes/Foul-Fix",
+        "schedule": "10:00",
+    }
+    try:
+        if EXTERNAL_BACKUP_SETTINGS_FILE.exists():
+            loaded = json.loads(EXTERNAL_BACKUP_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                defaults.update({key: loaded[key] for key in defaults if key in loaded})
+    except Exception:
+        pass
+    return defaults
+
+
+def external_backup_status():
+    """Retourne l'état de la sauvegarde Freebox/Proton sans dépendance à un chemin fixe."""
+    settings = read_external_backup_settings()
+    log_path = Path(os.path.expanduser(str(settings.get("log_file") or "")))
+    status = {
+        "enabled": bool(settings.get("enabled")),
+        "script_path": str(settings.get("script_path") or ""),
+        "log_file": str(log_path),
+        "freebox_path": str(settings.get("freebox_path") or ""),
+        "proton_remote": str(settings.get("proton_remote") or ""),
+        "schedule": str(settings.get("schedule") or ""),
+        "log_exists": log_path.is_file(),
+        "last_ok": "",
+        "last_error": "",
+    }
+    if not log_path.is_file():
+        return status
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        latest_result = ""
+        for line in reversed(lines):
+            padded = f" {line}"
+            is_ok = " OK:" in padded
+            is_error = " ERREUR:" in padded or " ERROR:" in padded
+
+            # Le journal est chronologique : le premier résultat rencontré en
+            # remontant est donc l'état réellement actuel de la sauvegarde.
+            if not latest_result and (is_ok or is_error):
+                latest_result = "error" if is_error else "ok"
+
+            if not status["last_ok"] and is_ok:
+                status["last_ok"] = line.strip()
+
+            # Une ancienne erreur déjà suivie d'un backup OK est résolue :
+            # elle ne doit plus rester affichée dans la page Sécurité.
+            if latest_result == "error" and not status["last_error"] and is_error:
+                status["last_error"] = line.strip()
+
+            if status["last_ok"] and (latest_result == "ok" or status["last_error"]):
+                break
+    except OSError:
+        pass
+    return status
+
+
+def business_identity():
+    """Identité de l'entreprise configurée localement, sans valeur personnelle codée en dur."""
+    conf = cfg()
+    name = str(conf.get("business_name") or "WOPR").strip() or "WOPR"
+    owner = str(conf.get("owner_name") or "").strip()
+    website = str(conf.get("website") or "").strip()
+    email = str(conf.get("email") or "").strip()
+    signature = f"{owner} – {name}" if owner and owner.casefold() != name.casefold() else (owner or name)
+    return {"name": name, "owner": owner, "website": website, "email": email, "signature": signature}
+
+
+def business_signature():
+    ident = business_identity()
+    lines = [ident["signature"]]
+    if ident["website"]:
+        lines.append(ident["website"])
+    return "\n".join(lines)
+
+
+def message_signature():
+    """Signature courte réservée aux messages clients."""
+    ident = business_identity()
+    first_name = ident["owner"].split()[0] if ident["owner"] else ""
+    if first_name and ident["name"]:
+        return f"{first_name} / {ident['name']}"
+    return first_name or ident["name"]
+
+
+SECRET_PREFIX = "enc:v1:"
+
+
+def validate_master_secret(raw):
+    """Valide et normalise une clé Fernet WOPR."""
+    raw = bytes(raw or b"").strip()
+    if not raw:
+        raise ValueError("Le fichier de clé est vide.")
+    try:
+        Fernet(raw)
+    except Exception as exc:
+        raise ValueError("Ce fichier n'est pas une clé maître WOPR valide.") from exc
+    return raw
+
+
+def install_master_secret(raw):
+    """Installe une clé maître locale avec des permissions restrictives."""
+    raw = validate_master_secret(raw)
+    MASTER_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = MASTER_SECRET_FILE.with_suffix(".tmp")
+    tmp.write_bytes(raw + b"\n")
+    try:
+        os.chmod(MASTER_SECRET_FILE.parent, 0o700)
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, MASTER_SECRET_FILE)
+    try:
+        os.chmod(MASTER_SECRET_FILE, 0o600)
+    except OSError:
+        pass
+    return MASTER_SECRET_FILE
+
+
+def create_master_secret():
+    """Crée une nouvelle clé maître locale."""
+    return install_master_secret(Fernet.generate_key())
+
+
+def load_or_create_master_secret():
+    """Retourne la clé Fernet locale. La création passe par l'écran dédié."""
+    if not MASTER_SECRET_FILE.exists():
+        raise RuntimeError(
+            "Clé maître WOPR absente. Importez votre master.key au démarrage."
+        )
+    try:
+        return validate_master_secret(MASTER_SECRET_FILE.read_bytes())
+    except ValueError as exc:
+        raise RuntimeError(f"Clé maître WOPR invalide : {MASTER_SECRET_FILE}") from exc
+
+
+def encrypt_local_secret(value):
+    value = str(value or "")
+    if not value:
+        return ""
+    if value.startswith(SECRET_PREFIX):
+        return value
+    token = Fernet(load_or_create_master_secret()).encrypt(value.encode("utf-8")).decode("ascii")
+    return SECRET_PREFIX + token
+
+
+def decrypt_local_secret(value):
+    value = str(value or "")
+    if not value:
+        return ""
+    if not value.startswith(SECRET_PREFIX):
+        # Compatibilité/migration avec les anciennes versions où le secret était en clair.
+        return value
+    token = value[len(SECRET_PREFIX):]
+    try:
+        return Fernet(load_or_create_master_secret()).decrypt(token.encode("ascii")).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError(
+            "Impossible de déchiffrer un secret WOPR. La clé maître locale est absente ou différente."
+        ) from exc
+
+
+def decrypt_repair_password(value):
+    """Déchiffre un mot de passe appareil stocké en base, avec compatibilité ancien clair."""
+    return decrypt_local_secret(value)
+
+
+def encrypt_repair_password(value):
+    """Chiffre un mot de passe appareil avant stockage en base."""
+    return encrypt_local_secret(value)
+
+
+def _migrate_secret_in_json(path, field, loaded):
+    """Chiffre silencieusement un ancien secret stocké en clair."""
+    raw = str(loaded.get(field) or "")
+    if not raw or raw.startswith(SECRET_PREFIX):
+        return
+    migrated = dict(loaded)
+    migrated[field] = encrypt_local_secret(raw)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def read_smtp_settings():
+    """Paramètres SMTP locaux. Le jeton est chiffré sur disque."""
+    business = cfg()
+    business_email = str(business.get("email") or "").strip()
+    business_name = str(business.get("business_name") or "WOPR").strip() or "WOPR"
+    defaults = {
+        "enabled": False,
+        "host": "smtp.protonmail.ch",
+        "port": 587,
+        "security": "starttls",
+        "username": business_email,
+        "sender_email": business_email,
+        "sender_name": business_name,
+        "token": "",
+    }
+    try:
+        if SMTP_SETTINGS_FILE.exists():
+            loaded = json.loads(SMTP_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                _migrate_secret_in_json(SMTP_SETTINGS_FILE, "token", loaded)
+                loaded = dict(loaded)
+                loaded["token"] = decrypt_local_secret(loaded.get("token", ""))
+                defaults.update(loaded)
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+    return defaults
+
+
+def write_smtp_settings(settings):
+    SMTP_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    stored = dict(settings)
+    stored["token"] = encrypt_local_secret(stored.get("token", ""))
+    SMTP_SETTINGS_FILE.write_text(
+        json.dumps(stored, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    try:
+        os.chmod(SMTP_SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+
+def read_email_signature_settings():
+    """Signature e-mail locale optionnelle, stockée uniquement dans private/."""
+    defaults = {
+        "enabled": False,
+        "link": "",
+        "image": "assets/email_signature.png",
+        "width": 140,
+        "height": 62,
+        "alt": "",
+    }
+    try:
+        if EMAIL_SIGNATURE_FILE.exists():
+            loaded = json.loads(EMAIL_SIGNATURE_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                defaults.update(loaded)
+    except Exception:
+        pass
+    return defaults
+
+
+def set_email_content(msg, body):
+    """Ajoute le corps texte + HTML et, si configurée, la signature e-mail inline."""
+    plain_body = str(body or "").rstrip()
+    signature = read_email_signature_settings()
+
+    enabled = bool(signature.get("enabled"))
+    link = str(signature.get("link") or "").strip()
+    image_rel = str(signature.get("image") or "assets/email_signature.png").strip()
+    image_path = PRIVATE_ROOT / image_rel
+
+    try:
+        width = max(1, min(1000, int(signature.get("width") or 140)))
+    except Exception:
+        width = 140
+    try:
+        height = max(1, min(1000, int(signature.get("height") or 62)))
+    except Exception:
+        height = 62
+
+    alt = str(signature.get("alt") or business_identity().get("name") or "").strip()
+    has_image = enabled and image_path.is_file()
+
+    # Fallback texte : le message reste lisible même si le HTML est ignoré.
+    plain = plain_body
+    if enabled and link:
+        plain += f"\n\n-- \n{link}"
+    msg.set_content(plain)
+
+    if not has_image:
+        return
+
+    escaped_body = html.escape(plain_body).replace("\n", "<br>\n")
+    escaped_link = html.escape(link, quote=True)
+    escaped_alt = html.escape(alt, quote=True)
+
+    image_html = (
+        f'<img src="cid:wopr-email-signature" '
+        f'width="{width}" height="{height}" alt="{escaped_alt}" '
+        f'style="display:block;border:0;max-width:100%;height:auto;">'
+    )
+    if link:
+        image_html = (
+            f'<a href="{escaped_link}" target="_blank" '
+            f'style="display:inline-block;text-decoration:none;border:0;">'
+            f'{image_html}</a>'
+        )
+
+    html_body = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+        'line-height:1.5;color:#111;">'
+        f'{escaped_body}'
+        '<br><br>-- <br>'
+        f'{image_html}'
+        '</div>'
+    )
+
+    msg.add_alternative(html_body, subtype="html")
+    html_part = msg.get_payload()[-1]
+    try:
+        html_part.add_related(
+            image_path.read_bytes(),
+            maintype="image",
+            subtype="png",
+            cid="<wopr-email-signature>",
+            filename=image_path.name,
+            disposition="inline",
+        )
+    except Exception:
+        pass
+
+
+def smtp_send_message(msg):
+    settings = read_smtp_settings()
+    if not settings.get("enabled"):
+        raise RuntimeError("SMTP Proton non activé.")
+    if not settings.get("token"):
+        raise RuntimeError("Jeton SMTP Proton absent.")
+
+    host = str(settings.get("host") or "smtp.protonmail.ch").strip()
+    port = int(settings.get("port") or 587)
+    security = str(settings.get("security") or "starttls").lower()
+    username = str(settings.get("username") or settings.get("sender_email") or "").strip()
+    token = str(settings.get("token") or "")
+
+    context = ssl.create_default_context()
+    if security == "ssl":
+        server = smtplib.SMTP_SSL(host, port, timeout=20, context=context)
+    else:
+        server = smtplib.SMTP(host, port, timeout=20)
+        server.ehlo()
+        if security == "starttls":
+            server.starttls(context=context)
+            server.ehlo()
+
+    try:
+        if username:
+            server.login(username, token)
+        server.send_message(msg)
+    finally:
+        try:
+            server.quit()
+        except Exception:
+            pass
+
+
+def kdeconnect_cli_path():
+    """Retourne le chemin de kdeconnect-cli sur Linux ou Windows.
+
+    Ordre de recherche sous Windows :
+    1. PATH ;
+    2. installation classique / Chocolatey dans Program Files ;
+    3. package Microsoft Store (AppX/MSIX), détecté dynamiquement.
+    """
+    cli = shutil.which("kdeconnect-cli") or shutil.which("kdeconnect-cli.exe")
+    if cli:
+        return cli
+
+    if os.name != "nt":
+        return None
+
+    candidates = []
+
+    program_files = os.environ.get("ProgramFiles")
+    if program_files:
+        candidates.append(Path(program_files) / "KDE Connect" / "bin" / "kdeconnect-cli.exe")
+
+    program_files_x86 = os.environ.get("ProgramFiles(x86)")
+    if program_files_x86:
+        candidates.append(Path(program_files_x86) / "KDE Connect" / "bin" / "kdeconnect-cli.exe")
+
+    # Repli explicite pour les installations standards 64 bits.
+    candidates.append(Path(r"C:\Program Files\KDE Connect\bin\kdeconnect-cli.exe"))
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            pass
+
+    # Microsoft Store / AppX / MSIX : ne jamais coder le dossier WindowsApps
+    # en dur, car le chemin contient la version du package et change lors
+    # des mises à jour. On demande directement son InstallLocation à Windows.
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if powershell:
+        commands = [
+            "Get-AppxPackage *KDEConnect* | Select-Object -First 1 -ExpandProperty InstallLocation",
+            "Get-AppxPackage *KDE*Connect* | Select-Object -First 1 -ExpandProperty InstallLocation",
+        ]
+        for command in commands:
+            try:
+                proc = subprocess.run(
+                    [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except Exception:
+                continue
+
+            install_location = (proc.stdout or "").strip().splitlines()
+            if not install_location:
+                continue
+
+            root = Path(install_location[0].strip())
+            store_candidates = [
+                root / "bin" / "kdeconnect-cli.exe",
+                root / "kdeconnect-cli.exe",
+            ]
+            for candidate in store_candidates:
+                try:
+                    if candidate.is_file():
+                        return str(candidate)
+                except OSError:
+                    pass
+
+    return None
+
+
+def send_tracking_sms(phone, message, device_id=""):
+    """Envoie un SMS de suivi via KDE Connect sans lever d'erreur Flask."""
+    normalized = normalize_sms_phone(phone)
+    if not re.fullmatch(r"\+?[0-9]{6,15}", normalized):
+        return False, "Numéro de téléphone invalide."
+
+    cli = kdeconnect_cli_path()
+    if not cli:
+        return False, "KDE Connect CLI introuvable."
+
+    devices = kdeconnect_available_devices()
+    available_ids = {d["id"] for d in devices}
+    selected = device_id or (devices[0]["id"] if len(devices) == 1 else "")
+    if not selected or selected not in available_ids:
+        return False, "Aucun téléphone KDE Connect joignable."
+
+    try:
+        proc = subprocess.run(
+            [cli, "--send-sms", message, "--destination", normalized, "--device", selected],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "KDE Connect n'a pas répondu à temps."
+    except Exception as exc:
+        return False, f"Erreur KDE Connect : {exc}"
+
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "Échec de l'envoi SMS.").strip()
+    audit_event("KDECONNECT_SMS", f"SMS de suivi envoyé vers {normalized}")
+    return True, "SMS envoyé."
+
+
+def publish_tracking_snapshot(rid):
+    """Publie le dernier état public sur le portail Foul-Fix si activé."""
+    publish_tracking_snapshot.last_error = ""
+    try:
+        conf = read_tracking_settings()
+        if not bool(conf.get("enabled", False)):
+            return False
+        endpoint = str(conf.get("api_url") or "").strip()
+        api_key = str(conf.get("api_key") or "").strip()
+        if not endpoint or not api_key:
+            publish_tracking_snapshot.last_error = "URL ou clé API manquante"
+            return False
+
+        con = db()
+        row = con.execute("""
+            SELECT r.*, c.name AS client_name
+            FROM repairs r JOIN clients c ON c.id=r.client_id
+            WHERE r.id=?
+        """, (int(rid),)).fetchone()
+        history = con.execute("""
+            SELECT status, changed_at FROM repair_status_history
+            WHERE repair_id=? ORDER BY changed_at DESC, id DESC
+        """, (int(rid),)).fetchall()
+        con.close()
+        if not row or not str(row["public_tracking_code"] or "").strip():
+            publish_tracking_snapshot.last_error = "code de suivi absent dans WOPR"
+            return False
+
+        total = float(row["service_amount"] or 0) + float(row["goods_amount"] or 0)
+        deposit = max(0.0, min(total, float(row["deposit_amount"] or 0)))
+        remaining = max(0.0, total - (total if bool(row["paid"]) else deposit))
+        timeline = [{
+            "state": "current" if index == 1 else "done",
+            "icon": str(index), "title": str(item["status"] or "Étape"),
+            "text": "Votre dossier est suivi par Foul-Fix.",
+            "date": str(item["changed_at"] or "")[:16].replace("T", " "),
+        } for index, item in enumerate(history, 1)]
+        if not timeline:
+            timeline.append({
+                "state": "current", "icon": "1", "title": str(row["status"] or "Dossier reçu"),
+                "text": "Votre dossier est suivi par Foul-Fix.",
+                "date": str(row["created_at"] or "")[:16].replace("T", " "),
+            })
+
+        public_parts = []
+        if str(row["diagnosis"] or "").strip():
+            public_parts.append("Diagnostic :\n" + str(row["diagnosis"]).strip())
+        if str(row["work_done"] or "").strip():
+            public_parts.append("Intervention réalisée :\n" + str(row["work_done"]).strip())
+        if str(row["tests_validation"] or "").strip():
+            public_parts.append("Contrôles effectués :\n" + str(row["tests_validation"]).strip())
+        if str(row["remarks"] or "").strip():
+            public_parts.append("Remarques :\n" + str(row["remarks"]).strip())
+        public_message = "\n\n".join(public_parts) or "Votre dossier est suivi par Foul-Fix."
+        title_parts = [str(row["device_type"] or "").strip(), str(row["brand_model"] or "").strip()]
+        payload = {
+            "code": str(row["public_tracking_code"]),
+            "status": str(row["status"] or "Suivi en cours"),
+            "paid": bool(row["paid"]),
+            "title": " — ".join(x for x in title_parts if x) or "Réparation",
+            "opened_at": str(row["received_date"] or row["created_at"] or "")[:10],
+            "updated_at": now().isoformat(timespec="seconds"),
+            "message": public_message,
+            "amount": f"{remaining:.2f}".replace(".", ",") + " €" if remaining > 0 else "",
+            "payment_url": str(row["sumup_payment_url"] or "") if remaining > 0 and str(row["sumup_payment_url"] or "").startswith("https://") else "",
+            "timeline": timeline,
+        }
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json", "X-WOPR-Key": api_key},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            ok = 200 <= int(response.status) < 300
+            if not ok:
+                publish_tracking_snapshot.last_error = f"HTTP {response.status}"
+            return ok
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            raw_detail = exc.read().decode("utf-8", errors="replace")
+            parsed_detail = json.loads(raw_detail)
+            detail = str(parsed_detail.get("error") or "") if isinstance(parsed_detail, dict) else ""
+        except Exception:
+            pass
+        publish_tracking_snapshot.last_error = f"HTTP {exc.code}" + (f" — {detail}" if detail else "")
+        audit_event("TRACKING_SYNC_ERROR", f"HTTP {exc.code} pendant la publication du dossier {rid}: {detail}".strip())
+        return False
+    except urllib.error.URLError as exc:
+        publish_tracking_snapshot.last_error = f"connexion : {exc.reason}"
+        audit_event("TRACKING_SYNC_ERROR", f"Connexion impossible pendant la publication du dossier {rid}: {exc.reason}")
+        return False
+    except Exception as exc:
+        publish_tracking_snapshot.last_error = type(exc).__name__
+        audit_event("TRACKING_SYNC_ERROR", f"{type(exc).__name__} pendant la publication du dossier {rid}")
+        return False
+
+
+publish_tracking_snapshot.last_error = ""
+
+
+def _tracking_message(rid, phase, row, ident):
+    """Construit un message autonome, volontairement neutre et professionnel."""
+    tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+    tracking_url = f"{tracking_site}/suivi.html" if tracking_site else ""
+    if phase == "initial":
+        intro = f"Votre appareil a bien été pris en charge par {ident['name']}."
+    else:
+        intro = "Votre réparation est terminée. Vous pouvez venir la récupérer aux horaires d’ouverture habituels."
+    lines = ["Bonjour,", "", intro]
+    if tracking_url:
+        lines.append(f"Suivi : {tracking_url}")
+    lines.append(f"Code : {row['public_tracking_code']}")
+    lines.extend(["", "Cordialement,", f"— {ident['name']}"])
+    return "\n".join(lines)
+
+
+def _send_tracking_email(recipient, subject, message):
+    try:
+        settings = read_smtp_settings()
+        if not settings.get("enabled") or not settings.get("token"):
+            return False, "SMTP Proton non configuré"
+        sender_email = str(settings.get("sender_email") or settings.get("username") or "").strip()
+        sender_name = str(settings.get("sender_name") or business_identity()["name"]).strip()
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+        msg["To"] = recipient
+        set_email_content(msg, message)
+        smtp_send_message(msg)
+        return True, "E-mail envoyé."
+    except Exception as exc:
+        return False, f"E-mail non envoyé : {exc}"
+
+
+def send_tracking_notification(rid, phase):
+    """Envoie une notification unique sur un seul canal (SMS ou e-mail)."""
+    if not bool(cfg().get("tracking_notifications_enabled", False)):
+        return False, "Notifications de suivi désactivées", ""
+    con = db()
+    row = con.execute("""
+        SELECT r.id, r.status, r.public_tracking_code,
+               r.tracking_notification_channel, r.tracking_initial_notification_sent,
+               r.tracking_initial_notification_error, r.tracking_completion_notification_sent,
+               r.tracking_completion_notification_error, r.tracking_completion_sms_sent,
+               c.phone, c.phone_secondary, c.email, c.email_secondary
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (int(rid),)).fetchone()
+    if not row:
+        con.close()
+        return False, "Dossier introuvable", ""
+    if phase == "completion" and row["status"] not in {"Terminé", "Restitué"}:
+        con.close()
+        return False, "Le dossier n'est pas encore terminé", ""
+    already_sent = (
+        int(row["tracking_initial_notification_sent"] or 0)
+        if phase == "initial"
+        else int(row["tracking_completion_notification_sent"] or 0) or int(row["tracking_completion_sms_sent"] or 0)
+    )
+    if already_sent:
+        con.close()
+        return False, "Notification déjà envoyée", str(row["tracking_notification_channel"] or "")
+
+    channel = str(row["tracking_notification_channel"] or "").strip().lower()
+    phone = normalize_sms_phone(row["phone"] or "") or normalize_sms_phone(row["phone_secondary"] or "")
+    email = str(row["email"] or row["email_secondary"] or "").strip()
+    if channel not in {"sms", "email"}:
+        channel = "sms" if phone else "email" if email and "@" in email else ""
+    if not channel:
+        con.close()
+        return False, "Aucun téléphone ou e-mail disponible", ""
+
+    ident = business_identity()
+    message = _tracking_message(rid, phase, row, ident)
+    if channel == "sms":
+        sent, detail = send_tracking_sms(phone, message)
+    else:
+        subject = "Votre prise en charge Foul-Fix" if phase == "initial" else "Votre réparation est terminée — Foul-Fix"
+        sent, detail = _send_tracking_email(email, subject, message)
+    if sent:
+        if phase == "initial":
+            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_initial_notification_sent=1, tracking_initial_notification_error='' WHERE id=?""", (channel, int(rid)))
+            event = "TRACKING_INITIAL_SMS" if channel == "sms" else "TRACKING_INITIAL_EMAIL"
+        else:
+            con.execute("""UPDATE repairs SET tracking_notification_channel=?, tracking_completion_notification_sent=1, tracking_completion_notification_error='', tracking_completion_sms_sent=? WHERE id=?""", (channel, 1 if channel == "sms" else 0, int(rid)))
+            event = "TRACKING_COMPLETION_SMS" if channel == "sms" else "TRACKING_COMPLETION_EMAIL"
+    else:
+        error_column = "tracking_initial_notification_error" if phase == "initial" else "tracking_completion_notification_error"
+        con.execute(f"UPDATE repairs SET {error_column}=? WHERE id=?", (str(detail or "Échec d'envoi")[:500], int(rid)))
+    if sent:
+        con.commit()
+        audit_event(event, f"Notification {phase} envoyée repair_id={rid}")
+    else:
+        con.commit()
+    con.close()
+    return sent, detail, channel
+
+
+def read_abby_settings():
+    """Configuration Abby locale. La clé API est chiffrée sur disque."""
+    defaults = {
+        "enabled": False,
+        "api_key": "",
+        "base_url": ABBY_API_BASE,
+        "last_test_at": "",
+        "last_test_ok": False,
+        "last_test_message": "",
+        "last_sync_at": "",
+        "last_sync_summary": "",
+    }
+    try:
+        if ABBY_SETTINGS_FILE.exists():
+            loaded = json.loads(ABBY_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                _migrate_secret_in_json(ABBY_SETTINGS_FILE, "api_key", loaded)
+                loaded = dict(loaded)
+                loaded["api_key"] = decrypt_local_secret(loaded.get("api_key", ""))
+                defaults.update(loaded)
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+    return defaults
+
+
+def write_abby_settings(settings):
+    ABBY_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    stored = dict(settings)
+    stored["api_key"] = encrypt_local_secret(stored.get("api_key", ""))
+    ABBY_SETTINGS_FILE.write_text(
+        json.dumps(stored, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    try:
+        os.chmod(ABBY_SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def read_sumup_settings():
+    """Configuration locale SumUp. La clé API est chiffrée sur disque."""
+    defaults = {
+        "enabled": False,
+        "mode": "manual_payment_link",
+        "api_key": "",
+        "merchant_code": "",
+        "base_url": SUMUP_API_BASE,
+        "last_test_at": "",
+        "last_test_ok": False,
+        "last_test_message": "",
+    }
+    try:
+        if SUMUP_SETTINGS_FILE.exists():
+            loaded = json.loads(SUMUP_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                _migrate_secret_in_json(SUMUP_SETTINGS_FILE, "api_key", loaded)
+                defaults.update(loaded)
+                defaults["api_key"] = decrypt_local_secret(defaults.get("api_key", ""))
+    except Exception:
+        pass
+    return defaults
+
+
+def write_sumup_settings(settings):
+    SUMUP_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    stored = {
+        "enabled": bool(settings.get("enabled")),
+        "mode": "manual_payment_link",
+        "api_key": encrypt_local_secret(settings.get("api_key", "")),
+        "merchant_code": str(settings.get("merchant_code") or "").strip(),
+        "base_url": SUMUP_API_BASE,
+        "last_test_at": str(settings.get("last_test_at") or ""),
+        "last_test_ok": bool(settings.get("last_test_ok")),
+        "last_test_message": str(settings.get("last_test_message") or ""),
+    }
+    SUMUP_SETTINGS_FILE.write_text(
+        json.dumps(stored, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    try:
+        os.chmod(SUMUP_SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def sumup_request(method, path, *, query=None, body=None, timeout=25):
+    """Appel serveur -> SumUp. La clé API n'est jamais envoyée au navigateur."""
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        raise RuntimeError("Intégration SumUp non activée.")
+    api_key = str(settings.get("api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError("Clé API SumUp absente.")
+
+    base_url = str(settings.get("base_url") or SUMUP_API_BASE).strip().rstrip("/")
+    url = base_url + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query, doseq=True)
+
+    payload = None
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            if not raw:
+                return {}
+            return json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw else {}
+            detail = parsed.get("detail") or parsed.get("message") or parsed.get("title") or ""
+        except Exception:
+            detail = ""
+        message = f"SumUp HTTP {exc.code}"
+        if detail:
+            message += f" — {detail}"
+        raise RuntimeError(message) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Connexion SumUp impossible — {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("Connexion SumUp expirée (timeout).") from exc
+
+
+def _sumup_api_period(date_from, date_to):
+    """
+    Convert inclusive local dates to SumUp UTC bounds.
+    Foul-Fix operates in Europe/Paris; `newest_time` is exclusive here.
+    """
+    tz = ZoneInfo("Europe/Paris")
+    start_local = datetime.combine(date_from, datetime.min.time(), tzinfo=tz)
+    end_local = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    return (
+        start_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        end_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+
+
+def sumup_transaction_history(date_from=None, date_to=None, limit_per_page=100):
+    """
+    Retrieve every SumUp transaction for the requested inclusive date period.
+    Follows the API's rel=next pagination links instead of imposing a WOPR cap.
+    """
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    if not merchant_code:
+        raise RuntimeError("Merchant code SumUp absent.")
+
+    query = {
+        "order": "descending",
+        "limit": max(1, min(int(limit_per_page or 100), 100)),
+    }
+    if date_from and date_to:
+        oldest_time, newest_time = _sumup_api_period(date_from, date_to)
+        query["oldest_time"] = oldest_time
+        query["newest_time"] = newest_time
+
+    path = f"/v2.1/merchants/{urllib.parse.quote(merchant_code, safe='')}/transactions/history"
+    items = []
+    seen_next = set()
+
+    # Safety cap only protects against a broken/cyclic API pagination response.
+    # 100 pages x 100 items = 10,000 transactions for one requested period.
+    for _page in range(100):
+        try:
+            data = sumup_request("GET", path, query=query)
+        except Exception as exc:
+            # A malformed `links.next` must not make the whole read-only page
+            # fail after the first valid page. Keep the transactions already
+            # retrieved and stop pagination; the current page remains usable.
+            message = str(exc).lower()
+            if _page > 0 and any(
+                marker in message
+                for marker in ("nonnumeric port", "label too long", "invalid url")
+            ):
+                break
+            raise
+        if not isinstance(data, dict):
+            break
+
+        page_items = data.get("items", [])
+        if isinstance(page_items, list):
+            items.extend(page_items)
+
+        next_href = ""
+        for link in data.get("links", []) or []:
+            if isinstance(link, dict) and str(link.get("rel") or "").lower() == "next":
+                next_href = str(link.get("href") or "").strip()
+                break
+
+        if not next_href or next_href in seen_next:
+            break
+        seen_next.add(next_href)
+
+        # Certaines réponses SumUp renvoient occasionnellement le premier
+        # séparateur de query manquant : ``...newest_time=...00Z&order=...``.
+        # Sans normalisation, urllib.parse peut interpréter ``00Z&order=...``
+        # comme un port réseau et lever « nonnumeric port ».
+        raw_next_href = next_href
+        if "?" not in raw_next_href:
+            query_markers = (
+                "oldest_time=", "newest_time=", "order=", "limit=",
+                "skip_tx_result=", "cursor=",
+            )
+            marker_positions = [
+                raw_next_href.find(marker)
+                for marker in query_markers
+                if raw_next_href.find(marker) > 0
+            ]
+            if marker_positions:
+                query_start = min(marker_positions)
+                raw_next_href = (
+                    raw_next_href[:query_start]
+                    + "?"
+                    + raw_next_href[query_start:]
+                )
+
+        try:
+            parsed = urllib.parse.urlparse(raw_next_href)
+        except ValueError:
+            break
+        if parsed.netloc and parsed.netloc.lower() not in {
+            "api.sumup.com", "api.sumup.eu"
+        }:
+            break
+        if not parsed.query:
+            break
+        # SumUp commonly returns a query-only relative href. Preserve our path.
+        if parsed.path and parsed.path != "/":
+            path = parsed.path
+        query = {
+            key: values if len(values) > 1 else values[0]
+            for key, values in urllib.parse.parse_qs(parsed.query, keep_blank_values=True).items()
+        }
+
+    return items
+
+
+def _sumup_local_datetime(raw_timestamp):
+    raw = str(raw_timestamp or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone(ZoneInfo("Europe/Paris"))
+        return local_dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return raw[:19].replace("T", " ")
+
+
+
+
+def sumup_get_transaction(transaction_id):
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    if not merchant_code:
+        raise RuntimeError("Merchant code SumUp absent.")
+    return sumup_request(
+        "GET",
+        f"/v2.1/merchants/{urllib.parse.quote(merchant_code, safe='')}/transactions",
+        query={"id": str(transaction_id)}
+    )
+
+
+def sumup_get_receipt(transaction_id):
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    if not merchant_code:
+        raise RuntimeError("Merchant code SumUp absent.")
+    return sumup_request(
+        "GET",
+        f"/v1.1/receipts/{urllib.parse.quote(str(transaction_id), safe='')}",
+        query={"mid": merchant_code}
+    )
+
+
+def valid_payment_link(url):
+    value = str(url or "").strip()
+    if not value:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except Exception:
+        return False
+    return parsed.scheme.lower() == "https" and bool(parsed.netloc)
+
+
+def abby_request(method, path, *, query=None, body=None, timeout=25):
+    """Appel serveur -> Abby. La clé n'est jamais envoyée au navigateur."""
+    settings = read_abby_settings()
+    api_key = str(settings.get("api_key") or "").strip()
+    if not settings.get("enabled"):
+        raise RuntimeError("Intégration Abby non activée.")
+    if not api_key:
+        raise RuntimeError("Clé API Abby absente.")
+
+    base_url = str(settings.get("base_url") or ABBY_API_BASE).strip().rstrip("/")
+    url = base_url + "/" + str(path or "").lstrip("/")
+    if query:
+        clean_query = {k: v for k, v in query.items() if v is not None}
+        url += "?" + urllib.parse.urlencode(clean_query)
+
+    payload = None
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": f"WOPR/{APP_VERSION}",
+    }
+    if body is not None:
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers=headers,
+        method=str(method or "GET").upper()
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read()
+            if not raw:
+                return {}
+            text = raw.decode("utf-8", errors="replace")
+            return json.loads(text)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            detail = ""
+        if len(detail) > 500:
+            detail = detail[:500] + "…"
+        message = f"Abby HTTP {exc.code}"
+        if detail:
+            message += f" — {detail}"
+        raise RuntimeError(message) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Connexion Abby impossible — {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("Connexion Abby expirée (timeout).") from exc
+
+
+def abby_paginated(path, *, limit=100):
+    """Récupère toutes les pages Abby d'un endpoint docs/docs paginé."""
+    docs = []
+    page = 1
+    while page <= 100:
+        data = abby_request(
+            "GET",
+            path,
+            query={"page": page, "limit": limit, "archived": "false"}
+        )
+        page_docs = data.get("docs") if isinstance(data, dict) else None
+        if not isinstance(page_docs, list):
+            break
+        docs.extend(page_docs)
+        if not data.get("hasNextPage"):
+            break
+        next_page = data.get("nextPage")
+        try:
+            page = int(next_page) if next_page else page + 1
+        except Exception:
+            page += 1
+    return docs
+
+
+def abby_address_payload(client_row):
+    street = " ".join(str(client_row["address_street"] or "").split()).strip()
+    postal = str(client_row["postal_code"] or "").strip()
+    city = " ".join(str(client_row["city"] or "").split()).strip()
+    if not (street and postal and city):
+        return None
+    return {
+        "address": street,
+        "complement": None,
+        "city": city,
+        "zipCode": postal,
+        "state": "",
+        "country": "FR",
+    }
+
+
+def abby_contact_payload(client_row):
+    first = " ".join(str(client_row["first_name"] or "").split()).strip()
+    last = " ".join(str(client_row["last_name"] or "").split()).strip()
+    legacy = " ".join(str(client_row["name"] or "").split()).strip()
+
+    if not first or not last:
+        legacy_last, legacy_first = split_legacy_client_name(legacy)
+        first = first or legacy_first
+        last = last or legacy_last
+
+    # Abby demande firstname + lastname. On évite de bloquer un ancien client
+    # dont une seule partie du nom est connue.
+    if not first:
+        first = "Client"
+    if not last:
+        last = legacy or "Client"
+
+    payload = {
+        "firstname": first,
+        "lastname": last,
+    }
+    phone = str(client_row["phone"] or "").strip()
+    email = str(client_row["email"] or "").strip()
+    if phone:
+        payload["phone"] = phone
+    if email:
+        payload["emails"] = [email]
+    address = abby_address_payload(client_row)
+    if address:
+        payload["billingAddress"] = address
+    return payload
+
+
+def abby_organization_payload(client_row):
+    company = " ".join(str(client_row["company"] or "").split()).strip()
+    legacy = " ".join(str(client_row["name"] or "").split()).strip()
+    official_name = company or legacy or "Client"
+
+    payload = {"name": official_name}
+    if company:
+        payload["commercialName"] = company
+
+    email = str(client_row["email"] or "").strip()
+    if email:
+        payload["emails"] = [email]
+    address = abby_address_payload(client_row)
+    if address:
+        payload["billingAddress"] = address
+    return payload
+
+
+def abby_remote_indexes():
+    contacts = abby_paginated("/contacts")
+    organizations = abby_paginated("/organizations")
+
+    contact_email = {}
+    contact_name = {}
+    for item in contacts:
+        iid = str(item.get("id") or "")
+        for email in item.get("emails") or []:
+            key = str(email or "").strip().casefold()
+            if key:
+                contact_email.setdefault(key, []).append(iid)
+        fullname = _contact_name_normalize(item.get("fullname") or "")
+        if fullname:
+            contact_name.setdefault(fullname, []).append(iid)
+
+    org_email = {}
+    org_name = {}
+    for item in organizations:
+        iid = str(item.get("id") or "")
+        for email in item.get("emails") or []:
+            key = str(email or "").strip().casefold()
+            if key:
+                org_email.setdefault(key, []).append(iid)
+        for value in (item.get("name"), item.get("commercialName")):
+            key = _contact_name_normalize(value or "")
+            if key:
+                org_name.setdefault(key, []).append(iid)
+
+    return {
+        "contacts": contacts,
+        "organizations": organizations,
+        "contact_email": contact_email,
+        "contact_name": contact_name,
+        "org_email": org_email,
+        "org_name": org_name,
+    }
+
+
+def abby_unique(index, key):
+    values = [x for x in index.get(key, []) if x]
+    values = list(dict.fromkeys(values))
+    return values[0] if len(values) == 1 else ""
+
+
+def delete_client_from_abby(client_row):
+    """Supprime le client Abby lié avant toute suppression/archivage WOPR.
+
+    Retourne True si aucun lien Abby n'existe, si la ressource était déjà absente
+    (404) ou si la suppression distante a réussi. Toute autre erreur est propagée
+    pour empêcher WOPR de perdre le lien local vers un client encore présent chez Abby.
+    """
+    abby_id = str(client_row["abby_id"] or "").strip()
+    abby_type = str(client_row["abby_type"] or "").strip().lower()
+    if not abby_id:
+        return True
+
+    if abby_type == "organization":
+        path = f"/organization/{urllib.parse.quote(abby_id, safe='')}"
+    elif abby_type == "contact":
+        path = f"/contact/{urllib.parse.quote(abby_id, safe='')}"
+    else:
+        raise RuntimeError("Type de client Abby inconnu : suppression annulée.")
+
+    try:
+        abby_request("DELETE", path)
+        return True
+    except RuntimeError as exc:
+        # Une ressource déjà supprimée chez Abby équivaut à un succès.
+        if "Abby HTTP 404" in str(exc):
+            return True
+        raise
+
+
+def sync_clients_to_abby():
+    """
+    Première synchronisation volontairement prudente :
+    - WOPR reste la source.
+    - si le client existe déjà chez Abby, on le rattache sans l'écraser ;
+    - sinon on le crée.
+    """
+    remote = abby_remote_indexes()
+    con = db()
+    clients = con.execute("""
+        SELECT *
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+        ORDER BY id
+    """).fetchall()
+
+    summary = {
+        "total": len(clients),
+        "linked": 0,
+        "created": 0,
+        "already": 0,
+        "skipped": 0,
+        "errors": 0,
+        "contacts_remote": len(remote["contacts"]),
+        "organizations_remote": len(remote["organizations"]),
+    }
+
+    for row in clients:
+        cid = int(row["id"])
+        company = " ".join(str(row["company"] or "").split()).strip()
+        local_type = "organization" if company else "contact"
+        existing_id = str(row["abby_id"] or "").strip()
+        existing_type = str(row["abby_type"] or "").strip()
+
+        if existing_id and existing_type in {"contact", "organization"}:
+            summary["already"] += 1
+            continue
+
+        email_key = str(row["email"] or "").strip().casefold()
+        name_candidates = _contact_name_variants(
+            row["first_name"], row["last_name"], row["name"], company
+        )
+
+        remote_id = ""
+        try:
+            if local_type == "organization":
+                if email_key:
+                    remote_id = abby_unique(remote["org_email"], email_key)
+                if not remote_id:
+                    matches = []
+                    for key in name_candidates:
+                        matches.extend(remote["org_name"].get(key, []))
+                    matches = list(dict.fromkeys(x for x in matches if x))
+                    remote_id = matches[0] if len(matches) == 1 else ""
+            else:
+                if email_key:
+                    remote_id = abby_unique(remote["contact_email"], email_key)
+                if not remote_id:
+                    matches = []
+                    for key in name_candidates:
+                        matches.extend(remote["contact_name"].get(key, []))
+                    matches = list(dict.fromkeys(x for x in matches if x))
+                    remote_id = matches[0] if len(matches) == 1 else ""
+
+            if remote_id:
+                con.execute("""
+                    UPDATE clients SET
+                        abby_id=?, abby_type=?,
+                        abby_sync_status='lié',
+                        abby_sync_error='',
+                        abby_synced_at=?
+                    WHERE id=?
+                """, (
+                    remote_id, local_type,
+                    now().isoformat(timespec="seconds"), cid
+                ))
+                con.commit()
+                summary["linked"] += 1
+                continue
+
+            # Ne crée pas les fiches totalement anonymes.
+            meaningful = any([
+                str(row["email"] or "").strip(),
+                str(row["phone"] or "").strip(),
+                company,
+                str(row["first_name"] or "").strip(),
+                str(row["last_name"] or "").strip(),
+            ])
+            if not meaningful or str(row["name"] or "").strip().casefold() == "client de passage":
+                summary["skipped"] += 1
+                continue
+
+            if local_type == "organization":
+                created = abby_request(
+                    "POST", "/organization",
+                    body=abby_organization_payload(row)
+                )
+            else:
+                created = abby_request(
+                    "POST", "/contact",
+                    body=abby_contact_payload(row)
+                )
+
+            new_id = str(created.get("id") or "").strip() if isinstance(created, dict) else ""
+            if not new_id:
+                raise RuntimeError("Abby n'a pas renvoyé d'identifiant client.")
+
+            con.execute("""
+                UPDATE clients SET
+                    abby_id=?, abby_type=?,
+                    abby_sync_status='créé',
+                    abby_sync_error='',
+                    abby_synced_at=?
+                WHERE id=?
+            """, (
+                new_id, local_type,
+                now().isoformat(timespec="seconds"), cid
+            ))
+            con.commit()
+            summary["created"] += 1
+
+            # Enrichit les index pour éviter les doublons pendant le même run.
+            if email_key:
+                target = remote["org_email"] if local_type == "organization" else remote["contact_email"]
+                target.setdefault(email_key, []).append(new_id)
+            target_name = remote["org_name"] if local_type == "organization" else remote["contact_name"]
+            for key in name_candidates:
+                target_name.setdefault(key, []).append(new_id)
+
+        except Exception as exc:
+            con.execute("""
+                UPDATE clients SET
+                    abby_sync_status='erreur',
+                    abby_sync_error=?,
+                    abby_synced_at=?
+                WHERE id=?
+            """, (
+                str(exc)[:500],
+                now().isoformat(timespec="seconds"), cid
+            ))
+            con.commit()
+            summary["errors"] += 1
+
+    con.close()
+    return summary
+
+
+def normalize_global_search(value):
+    """Texte canonique pour la recherche globale : accents, casse et ponctuation ignorés."""
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.casefold()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
+def db():
+    con = _open_database(DB, row_factory=True)
+    # Fonction SQLite locale utilisée uniquement dans les recherches.
+    con.create_function("WOPR_NORM", 1, normalize_global_search, deterministic=True)
+    return con
+
+
+def accounting_monthly_totals(con, year=None):
+    """
+    Source unique des totaux de CA encaissé WOPR.
+
+    Tous les écrans comptables doivent passer par cette fonction afin que
+    Suivi, Atelier, Achats/Ventes et CA/Déclarations affichent strictement
+    les mêmes montants. Les champs accounting_* restent la source de vérité.
+
+    Garanties comptables :
+    - seules les lignes réellement encaissées (`paid=1`) sont retenues ;
+    - la date d'encaissement gagne sur la date de facture ;
+    - plusieurs lignes historiques portant la même facture ne la comptent
+      qu'une fois ;
+    - une facture historique disparue du Suivi peut être conservée dans les
+      archives comptables et n'est ajoutée qu'une fois ;
+    - une facture remplacée conserve son encaissement sans compter à la fois
+      l'ancienne et la nouvelle référence.
+    """
+    requested_year = int(year) if year is not None else None
+
+    repair_rows = [dict(row) for row in con.execute("""
+        SELECT id, client_id, invoice_no, paid,
+               accounting_year, accounting_month, accounting_date,
+               accounting_service_amount, accounting_goods_amount,
+               service_amount, goods_amount, legacy_imported,
+               deposit_amount, deposit_date, deposit_accounting_year,
+               deposit_accounting_month, deposit_service_amount,
+               deposit_goods_amount
+        FROM repairs
+        ORDER BY id
+    """).fetchall()]
+
+    archived_rows = [dict(row) for row in con.execute("""
+        SELECT invoice_no, invoice_total, accounting_date, paid,
+               supersedes_invoice_no
+        FROM archived_invoices
+        ORDER BY invoice_no
+    """).fetchall()]
+
+    superseded_invoice_nos = {
+        canonical_client_invoice_no(row.get("supersedes_invoice_no"))
+        for row in archived_rows
+        if str(row.get("supersedes_invoice_no") or "").strip()
+    }
+
+    paid_groups = {}
+    repairs_by_invoice = {}
+
+    for row in repair_rows:
+        invoice_no = canonical_client_invoice_no(row.get("invoice_no"))
+        if invoice_no:
+            repairs_by_invoice.setdefault(invoice_no, []).append(row)
+        if not bool(row.get("paid")):
+            continue
+        if invoice_no and invoice_no in superseded_invoice_nos:
+            continue
+
+        # Les factures historiques sont regroupées par client + numéro. Une
+        # ligne sans facture reste une recette indépendante et conserve son id.
+        key = (
+            ("invoice", int(row.get("client_id") or 0), invoice_no)
+            if invoice_no
+            else ("row", int(row.get("id") or 0))
+        )
+        paid_groups.setdefault(key, []).append(row)
+
+    contributions = []
+    active_invoice_nos = set()
+
+    # Les acomptes sont des encaissements distincts du solde final.
+    for row in repair_rows:
+        deposit = max(0.0, float(row.get("deposit_amount") or 0))
+        if deposit <= 0:
+            continue
+        try:
+            deposit_year = int(row.get("deposit_accounting_year") or 0)
+            deposit_month = int(row.get("deposit_accounting_month") or 0)
+        except (TypeError, ValueError):
+            deposit_year = deposit_month = 0
+        raw_date = str(row.get("deposit_date") or "").strip()[:10]
+        if not (deposit_year >= 2000 and 1 <= deposit_month <= 12):
+            try:
+                deposit_day = datetime.strptime(raw_date, "%Y-%m-%d").date()
+                deposit_year, deposit_month = deposit_day.year, deposit_day.month
+            except ValueError:
+                continue
+        if requested_year is not None and deposit_year != requested_year:
+            continue
+        service = max(0.0, float(row.get("deposit_service_amount") or 0))
+        goods = max(0.0, float(row.get("deposit_goods_amount") or 0))
+        if service + goods <= 0:
+            service, goods = allocate_payment_amount(
+                deposit, row.get("service_amount"), row.get("goods_amount")
+            )
+        contributions.append((deposit_year, deposit_month, service, goods))
+
+    def valid_period(row):
+        # accounting_year/month représentent la période comptable validée.
+        # accounting_date peut ensuite être enrichie (ex. preuve SumUp) sans
+        # jamais déplacer à elle seule une déclaration déjà figée.
+        try:
+            paid_year = int(row.get("accounting_year"))
+            paid_month = int(row.get("accounting_month"))
+        except (TypeError, ValueError):
+            paid_year = paid_month = 0
+        if paid_year >= 2000 and 1 <= paid_month <= 12:
+            raw_date = str(row.get("accounting_date") or "").strip()[:10]
+            return paid_year, paid_month, raw_date
+
+        raw_date = str(row.get("accounting_date") or "").strip()[:10]
+        if raw_date:
+            try:
+                paid_day = datetime.strptime(raw_date, "%Y-%m-%d").date()
+                return paid_day.year, paid_day.month, raw_date
+            except ValueError:
+                pass
+        return None
+
+    def accounting_split(row, *, fallback_to_invoice=False):
+        service = max(0.0, float(row.get("accounting_service_amount") or 0))
+        goods = max(0.0, float(row.get("accounting_goods_amount") or 0))
+
+        # Compatibilité encaissements historiques : si accounting_* est à 0
+        # et qu'il n'y a pas d'acompte, reprendre les montants de la facture.
+        deposit = max(0.0, float(row.get("deposit_amount") or 0))
+        if service + goods <= 0 and (fallback_to_invoice or deposit <= 0):
+            service = max(0.0, float(row.get("service_amount") or 0))
+            goods = max(0.0, float(row.get("goods_amount") or 0))
+        return service, goods
+
+    for key, members in paid_groups.items():
+        dated_members = [
+            (valid_period(row), row)
+            for row in members
+            if valid_period(row) is not None
+        ]
+        if not dated_members:
+            continue
+
+        # La date la plus récente du groupe correspond à la ligne historique
+        # d'encaissement lorsqu'elle existe. Les montants viennent de la ligne
+        # comptable la plus complète, jamais de la somme des doublons.
+        period, _ = max(
+            dated_members,
+            key=lambda item: (item[0][2], int(item[1].get("id") or 0)),
+        )
+        amount_row = max(
+            members,
+            key=lambda row: (
+                sum(accounting_split(row)),
+                bool(valid_period(row)),
+                int(row.get("id") or 0),
+            ),
+        )
+        service, goods = accounting_split(amount_row)
+        if service + goods <= 0:
+            continue
+
+        if key[0] == "invoice":
+            active_invoice_nos.add(key[2])
+        contributions.append((period[0], period[1], service, goods))
+
+    for row in archived_rows:
+        if not bool(row.get("paid")):
+            continue
+        invoice_no = canonical_client_invoice_no(row.get("invoice_no"))
+        if not invoice_no or invoice_no in active_invoice_nos:
+            continue
+
+        period = valid_period(row)
+        if not period:
+            continue
+
+        total = max(0.0, float(row.get("invoice_total") or 0))
+        if total <= 0:
+            continue
+
+        source_no = canonical_client_invoice_no(row.get("supersedes_invoice_no"))
+        source_rows = repairs_by_invoice.get(source_no, []) if source_no else []
+        source_row = max(
+            source_rows,
+            key=lambda item: (
+                sum(accounting_split(item, fallback_to_invoice=True)),
+                int(item.get("id") or 0),
+            ),
+            default=None,
+        )
+
+        if source_row:
+            source_service, source_goods = accounting_split(
+                source_row,
+                fallback_to_invoice=True,
+            )
+        else:
+            source_service, source_goods = 0.0, 0.0
+
+        source_total = source_service + source_goods
+        if source_total > 0:
+            service = round(total * source_service / source_total, 2)
+            goods = round(total - service, 2)
+        else:
+            service, goods = total, 0.0
+
+        contributions.append((period[0], period[1], service, goods))
+        active_invoice_nos.add(invoice_no)
+
+    totals = {}
+    for paid_year, paid_month, service, goods in contributions:
+        if requested_year is not None and paid_year != requested_year:
+            continue
+        bucket = totals.setdefault(
+            (paid_year, paid_month),
+            {"service_total": 0.0, "goods_total": 0.0},
+        )
+        bucket["service_total"] += service
+        bucket["goods_total"] += goods
+
+    return [
+        {
+            "y": paid_year,
+            "m": paid_month,
+            "service_total": round(values["service_total"], 2),
+            "goods_total": round(values["goods_total"], 2),
+        }
+        for (paid_year, paid_month), values in sorted(totals.items())
+    ]
+
+def pin_is_configured():
+    if not ADMIN_PIN_FILE.exists():
+        return False
+    try:
+        data = json.loads(ADMIN_PIN_FILE.read_text(encoding="utf-8"))
+        return bool(data.get("pin_hash"))
+    except Exception:
+        return False
+
+
+def read_pin_hash():
+    try:
+        return json.loads(ADMIN_PIN_FILE.read_text(encoding="utf-8")).get("pin_hash", "")
+    except Exception:
+        return ""
+
+
+def write_pin(pin):
+    payload = {
+        "pin_hash": generate_password_hash(pin, method="scrypt"),
+        "updated_at": now().isoformat(timespec="seconds"),
+    }
+    ADMIN_PIN_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(ADMIN_PIN_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def valid_pin_format(pin):
+    return pin.isdigit() and PIN_MIN_LENGTH <= len(pin) <= PIN_MAX_LENGTH
+
+
+def _sqlcipher_settings_read():
+    try:
+        data = json.loads(SQLCIPHER_SETTINGS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sqlcipher_settings_write(data):
+    SQLCIPHER_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SQLCIPHER_SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, SQLCIPHER_SETTINGS_FILE)
+    try:
+        os.chmod(SQLCIPHER_SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def _database_is_plaintext(path):
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size < 16:
+        return False
+    try:
+        with path.open("rb") as fh:
+            return fh.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return False
+
+
+def _database_encryption_enabled():
+    data = _sqlcipher_settings_read()
+    return bool(data.get("enabled") and data.get("wrapped_db_key") and data.get("salt"))
+
+
+def _require_sqlcipher():
+    if sqlcipher3 is None:
+        raise RuntimeError(
+            "SQLCipher Python est absent. Relance WOPR avec le launcher afin d'installer sqlcipher3-binary."
+        )
+    return sqlcipher3
+
+
+def _pin_wrap_fernet(pin, salt):
+    """Dérive une clé d'enveloppe depuis PIN + master.key sans stocker le PIN."""
+    pin = str(pin or "")
+    if not valid_pin_format(pin):
+        raise RuntimeError("PIN WOPR invalide pour déverrouiller la base chiffrée.")
+    master = load_or_create_master_secret()
+    stretched = hashlib.scrypt(
+        pin.encode("utf-8"),
+        salt=salt,
+        n=2**15,
+        r=8,
+        p=1,
+        dklen=32,
+        maxmem=64 * 1024 * 1024,
+    )
+    wrapping = __import__("hmac").new(
+        master, b"WOPR-SQLCipher-wrap-v1\x00" + stretched, hashlib.sha256
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(wrapping))
+
+
+def _unwrap_database_key(pin=None, settings=None):
+    settings = settings or _sqlcipher_settings_read()
+    if not settings.get("wrapped_db_key") or not settings.get("salt"):
+        raise RuntimeError("Configuration SQLCipher WOPR incomplète.")
+    pin = str(pin if pin is not None else _RUNTIME_DB_PIN or os.environ.get("WOPR_DB_PIN", ""))
+    try:
+        salt = base64.urlsafe_b64decode(str(settings["salt"]).encode("ascii"))
+        wrapped = str(settings["wrapped_db_key"]).encode("ascii")
+        key = _pin_wrap_fernet(pin, salt).decrypt(wrapped)
+    except InvalidToken as exc:
+        raise RuntimeError("PIN incorrect : impossible de déverrouiller la base SQLCipher.") from exc
+    except Exception as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Impossible de déverrouiller la clé SQLCipher : {exc}") from exc
+    if len(key) != 32:
+        raise RuntimeError("Clé SQLCipher WOPR invalide.")
+    return key
+
+
+def _sqlcipher_apply_key(con, key):
+    # Clé brute hexadécimale : pas de transformation supplémentaire par SQLCipher.
+    con.execute(f"PRAGMA key = \"x'{bytes(key).hex()}'\"")
+    #con.execute("PRAGMA cipher_memory_security = ON")
+
+
+def _open_database(path, row_factory=False, force_encrypted=None, key=None):
+    path = Path(path)
+    if force_encrypted is None:
+        force_encrypted = _database_encryption_enabled() and not _database_is_plaintext(path)
+    if force_encrypted:
+        cipher = _require_sqlcipher()
+        con = cipher.connect(str(path))
+        _sqlcipher_apply_key(con, key or _unwrap_database_key())
+        # Force la lecture immédiatement : un mauvais PIN échoue ici, pas plus tard.
+        con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        if row_factory:
+            con.row_factory = cipher.Row
+        return con
+    con = sqlite3.connect(str(path))
+    if row_factory:
+        con.row_factory = sqlite3.Row
+    return con
+
+
+def _plaintext_presafety_backup(source):
+    """Copie de secours unique et non gérée par la rétention WOPR."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = now().strftime("%Y%m%d_%H%M%S")
+    dest = BACKUP_DIR / f"PRE-SQLCIPHER-{stamp}-wopr.db.gz"
+    with Path(source).open("rb") as src, dest.open("wb") as raw_dst:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_dst, compresslevel=6, mtime=0) as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    return dest
+
+
+def _sqlcipher_export_copy(source, destination, destination_key):
+    """Copie fiable SQLite/SQLCipher -> SQLCipher via sqlcipher_export()."""
+    cipher = _require_sqlcipher()
+    source = Path(source)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+
+    con = cipher.connect(str(source))
+    attached = False
+    try:
+        if not _database_is_plaintext(source):
+            _sqlcipher_apply_key(con, _unwrap_database_key())
+            con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+
+        user_version = int(con.execute("PRAGMA user_version").fetchone()[0] or 0)
+        application_id = int(con.execute("PRAGMA application_id").fetchone()[0] or 0)
+        auto_vacuum = int(con.execute("PRAGMA auto_vacuum").fetchone()[0] or 0)
+        key_hex = bytes(destination_key).hex()
+        con.execute(
+            f"ATTACH DATABASE ? AS wopr_export KEY \"x'{key_hex}'\"",
+            (str(destination),),
+        )
+        attached = True
+        con.execute(f"PRAGMA wopr_export.auto_vacuum={auto_vacuum}")
+        con.execute("SELECT sqlcipher_export('wopr_export')")
+        con.execute(f"PRAGMA wopr_export.user_version={user_version}")
+        con.execute(f"PRAGMA wopr_export.application_id={application_id}")
+        con.commit()
+        con.execute("DETACH DATABASE wopr_export")
+        attached = False
+    finally:
+        if attached:
+            try:
+                con.execute("DETACH DATABASE wopr_export")
+            except Exception:
+                pass
+        con.close()
+
+
+def _migrate_plaintext_database_to_sqlcipher(pin):
+    cipher = _require_sqlcipher()
+    if not DB.exists() or not _database_is_plaintext(DB):
+        return False
+
+    # Le PIN fourni au launcher doit être le vrai PIN administrateur avant toute migration.
+    pin_hash = read_pin_hash()
+    if not pin_hash or not check_password_hash(pin_hash, str(pin or "")):
+        raise RuntimeError("PIN incorrect : migration SQLCipher refusée.")
+    load_or_create_master_secret()
+
+    safety = _plaintext_presafety_backup(DB)
+    salt = secrets.token_bytes(16)
+    db_key = secrets.token_bytes(32)
+    wrapped = _pin_wrap_fernet(pin, salt).encrypt(db_key).decode("ascii")
+    settings = {
+        "version": 1,
+        "enabled": False,
+        "state": "migrating",
+        "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
+        "wrapped_db_key": wrapped,
+        "created_at": now().isoformat(timespec="seconds"),
+        "pre_migration_backup": safety.name,
+    }
+    _sqlcipher_settings_write(settings)
+
+    tmp = DB.parent / f".wopr_sqlcipher_{secrets.token_hex(5)}.db"
+    tmp.unlink(missing_ok=True)
+    try:
+        _sqlcipher_export_copy(DB, tmp, db_key)
+
+        test = cipher.connect(str(tmp))
+        try:
+            _sqlcipher_apply_key(test, db_key)
+            tables = {str(r[0]) for r in test.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            integrity = str(test.execute("PRAGMA integrity_check").fetchone()[0])
+            if not {"clients", "repairs"}.issubset(tables) or integrity.casefold() != "ok":
+                raise RuntimeError("La copie SQLCipher de contrôle n'est pas une base WOPR valide.")
+        finally:
+            test.close()
+
+        for suffix in ("-wal", "-shm"):
+            Path(str(DB) + suffix).unlink(missing_ok=True)
+        os.replace(tmp, DB)
+        settings["enabled"] = True
+        settings["state"] = "ready"
+        settings["migrated_at"] = now().isoformat(timespec="seconds")
+        _sqlcipher_settings_write(settings)
+        return True
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        # Si la base active est toujours claire, la migration n'a rien détruit.
+        settings["state"] = "failed"
+        settings["enabled"] = False
+        _sqlcipher_settings_write(settings)
+        raise
+
+
+def initialize_database_security(pin_override=None):
+    """Active SQLCipher sur une installation existante sans migration destructive."""
+    global _RUNTIME_DB_PIN
+    env_pin = os.environ.pop("WOPR_DB_PIN", "")
+    pin = str(pin_override if pin_override is not None else env_pin or "")
+    settings = _sqlcipher_settings_read()
+
+    if settings.get("enabled"):
+        if not pin:
+            _RUNTIME_DB_PIN = None
+            return "locked"
+        _RUNTIME_DB_PIN = pin
+        con = _open_database(DB, force_encrypted=True)
+        try:
+            ok = str(con.execute("PRAGMA integrity_check").fetchone()[0]).casefold() == "ok"
+            if not ok:
+                raise RuntimeError("Contrôle d'intégrité SQLCipher en échec.")
+        finally:
+            con.close()
+        return "encrypted"
+
+    # Migration seulement si PIN + master.key + PIN administrateur existent.
+    # Une nouvelle installation peut donc terminer sa configuration normalement,
+    # puis sera chiffrée au redémarrage suivant.
+    if DB.exists() and _database_is_plaintext(DB) and pin and pin_is_configured() and MASTER_SECRET_FILE.exists():
+        _RUNTIME_DB_PIN = pin
+        _migrate_plaintext_database_to_sqlcipher(pin)
+        return "migrated"
+
+    _RUNTIME_DB_PIN = pin or None
+    return "plaintext"
+
+
+def rewrap_database_key_for_new_pin(current_pin, new_pin):
+    """Change le PIN protecteur sans rechiffrer les pages de la base SQLCipher."""
+    global _RUNTIME_DB_PIN
+    if not _database_encryption_enabled():
+        return
+    settings = _sqlcipher_settings_read()
+    key = _unwrap_database_key(current_pin, settings)
+    salt = secrets.token_bytes(16)
+    settings["salt"] = base64.urlsafe_b64encode(salt).decode("ascii")
+    settings["wrapped_db_key"] = _pin_wrap_fernet(new_pin, salt).encrypt(key).decode("ascii")
+    settings["pin_rewrapped_at"] = now().isoformat(timespec="seconds")
+    _sqlcipher_settings_write(settings)
+    _RUNTIME_DB_PIN = str(new_pin)
+
+
+_RUNTIME_DB_PIN = None
+
+
+def database_security_requires_unlock():
+    if _database_encryption_enabled():
+        return not bool(_RUNTIME_DB_PIN)
+    return bool(
+        DB.exists()
+        and _database_is_plaintext(DB)
+        and pin_is_configured()
+        and MASTER_SECRET_FILE.exists()
+        and sqlcipher3 is not None
+    )
+
+
+def csrf_token():
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+def safe_next_url(value):
+    value = (value or "").strip()
+    if value.startswith("/") and not value.startswith("//"):
+        return value
+    return url_for("index")
+
+
+def audit_event(action, details="", ip=None):
+    try:
+        con = db()
+        con.execute(
+            "INSERT INTO audit_log(created_at,action,details,ip) VALUES(?,?,?,?)",
+            (now().isoformat(timespec="seconds"), action, details[:1000], ip or "")
+        )
+        con.commit(); con.close()
+    except Exception:
+        pass
+
+
+def _backup_stamp():
+    return now().strftime("%Y-%m-%d_%Hh%Mm%Ss")
+
+
+def _backup_marker_write(path, tag="backup"):
+    """Ajoute un marqueur interne à la COPIE de sauvegarde, jamais à la base active."""
+    con = _open_database(path)
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS wopr_backup_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        values = {
+            "signature": "WOPR_BACKUP_V1",
+            "app_version": APP_VERSION,
+            "created_at": now().isoformat(timespec="seconds"),
+            "tag": str(tag or "backup"),
+        }
+        con.executemany(
+            "INSERT OR REPLACE INTO wopr_backup_meta(key,value) VALUES(?,?)",
+            values.items()
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _validate_wopr_database(path):
+    """Valide le SQLite et vérifie qu'il ressemble bien à une base WOPR.
+
+    Les sauvegardes récentes portent WOPR_BACKUP_V1. Les anciennes restent
+    acceptées si leur structure WOPR essentielle est présente.
+    """
+    ok, detail = database_integrity_check(path)
+    if not ok:
+        return False, f"Contrôle SQLite = {detail}", {}
+    con = None
+    try:
+        con = _open_database(path)
+        tables = {str(r[0]) for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        if not {"clients", "repairs"}.issubset(tables):
+            return False, "Le fichier est un SQLite valide mais pas une base WOPR reconnue.", {}
+        meta = {}
+        if "wopr_backup_meta" in tables:
+            try:
+                meta = {str(k): str(v) for k, v in con.execute(
+                    "SELECT key,value FROM wopr_backup_meta"
+                ).fetchall()}
+            except Exception:
+                meta = {}
+            signature = meta.get("signature", "")
+            if signature and signature != "WOPR_BACKUP_V1":
+                return False, "Marqueur de sauvegarde WOPR inconnu.", meta
+        return True, "OK", meta
+    except Exception as exc:
+        return False, str(exc), {}
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _extract_backup_to_sqlite(source, destination):
+    """Matérialise une sauvegarde en SQLite brut d'après son CONTENU, pas son nom."""
+    source = Path(source)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    with source.open("rb") as f:
+        magic = f.read(16)
+    if magic.startswith(b"\x1f\x8b"):
+        try:
+            with gzip.open(source, "rb") as src, destination.open("wb") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            raise ValueError(f"Archive GZIP invalide : {exc}") from exc
+    else:
+        # SQLite clair historique OU SQLCipher chiffré : la validation ci-dessous
+        # décide selon le contenu et la configuration courante.
+        shutil.copyfile(source, destination)
+
+    ok, detail, meta = _validate_wopr_database(destination)
+    if not ok:
+        destination.unlink(missing_ok=True)
+        raise ValueError(detail)
+    return meta
+
+
+def _backup_encrypted_raw_without_key(tag="arret", only_if_changed=True):
+    """Sauvegarde post-arrêt sans PIN : copie binaire d'une DB SQLCipher fermée."""
+    if not DB.is_file() or not _database_encryption_enabled():
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if only_if_changed:
+        latest = 0
+        for candidate in BACKUP_DIR.glob("*.db*"):
+            try:
+                if candidate.is_file():
+                    latest = max(latest, candidate.stat().st_mtime_ns)
+            except OSError:
+                pass
+        if latest and DB.stat().st_mtime_ns <= latest:
+            return None
+    safe_tag = re.sub(r"[^A-Za-z0-9_-]+", "_", tag)[:30] or "backup"
+    dest = BACKUP_DIR / f"wopr_{_backup_stamp()}_{safe_tag}.db.gz"
+    with DB.open("rb") as src, dest.open("wb") as raw_dst:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_dst, compresslevel=6, mtime=0) as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+    # Vérifie au minimum l'intégrité de l'archive GZIP sans déchiffrer la base.
+    with gzip.open(dest, "rb") as check:
+        if not check.read(32):
+            raise RuntimeError("Sauvegarde SQLCipher vide après compression.")
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    return dest
+
+
+def backup_database(force=False, tag="auto", only_if_changed=False):
+    if not DB.exists():
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+    # V2.3.243 — deux stratégies :
+    # - démarrage : au maximum une sauvegarde automatique par jour ;
+    # - fermeture : sauvegarder seulement si la base a réellement été modifiée
+    #   depuis la dernière sauvegarde WOPR.
+    if not force and only_if_changed:
+        latest_backup_mtime_ns = 0
+        for candidate in BACKUP_DIR.glob("*.db*"):
+            try:
+                if candidate.is_file():
+                    latest_backup_mtime_ns = max(
+                        latest_backup_mtime_ns,
+                        candidate.stat().st_mtime_ns
+                    )
+            except OSError:
+                pass
+
+        try:
+            db_mtime_ns = DB.stat().st_mtime_ns
+        except OSError:
+            db_mtime_ns = 0
+
+        if latest_backup_mtime_ns and db_mtime_ns <= latest_backup_mtime_ns:
+            return None
+
+    elif not force:
+        # La sauvegarde quotidienne ne dépend plus du nom : on regarde la date réelle
+        # des sauvegardes WOPR déjà générées.
+        today = now().date()
+        for candidate in BACKUP_DIR.glob("*.db*"):
+            try:
+                if candidate.is_file() and datetime.fromtimestamp(candidate.stat().st_mtime).date() == today:
+                    return None
+            except OSError:
+                pass
+
+    safe_tag = re.sub(r"[^A-Za-z0-9_-]+", "_", tag)[:30] or "backup"
+    dest = BACKUP_DIR / f"wopr_{_backup_stamp()}_{safe_tag}.db.gz"
+    temp_db = BACKUP_DIR / f".wopr_backup_{secrets.token_hex(5)}.db"
+
+    try:
+        _sqlite_backup_copy(DB, temp_db)
+        _backup_marker_write(temp_db, safe_tag)
+        ok, detail, _ = _validate_wopr_database(temp_db)
+        if not ok:
+            raise RuntimeError(f"Sauvegarde SQLite invalide avant compression : {detail}")
+        with temp_db.open("rb") as src, dest.open("wb") as raw_dst:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw_dst, compresslevel=6, mtime=0) as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+        # Contrôle du GZIP final, indépendamment de son extension.
+        verify_tmp = BACKUP_DIR / f".wopr_verify_{secrets.token_hex(5)}.db"
+        try:
+            _extract_backup_to_sqlite(dest, verify_tmp)
+        finally:
+            verify_tmp.unlink(missing_ok=True)
+        try:
+            os.chmod(dest, 0o600)
+        except OSError:
+            pass
+    finally:
+        temp_db.unlink(missing_ok=True)
+
+    # Rétention uniquement sur les sauvegardes générées par WOPR. Un fichier
+    # renommé/importé manuellement n'est pas supprimé juste à cause de sa présence.
+    managed_pattern = re.compile(
+        r"^[A-Za-z0-9_-]+_(?:\d{8}_\d{6}|\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s)_[A-Za-z0-9_-]+\.db(?:\.gz)?$"
+    )
+    backups = []
+    for candidate in BACKUP_DIR.iterdir():
+        try:
+            if candidate.is_file() and managed_pattern.fullmatch(candidate.name):
+                backups.append(candidate)
+        except OSError:
+            pass
+    backups.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in backups[30:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return dest
+
+
+def database_integrity_check(path):
+    """Vérifie qu'un fichier SQLite BRUT est lisible et intègre."""
+    path = Path(path)
+    if not path.is_file():
+        return False, "Fichier introuvable."
+    con = None
+    try:
+        con = _open_database(path)
+        con.execute("PRAGMA query_only=ON")
+        row = con.execute("PRAGMA integrity_check").fetchone()
+        result = str(row[0] if row else "").strip()
+        return result.casefold() == "ok", result or "Contrôle SQLite sans résultat."
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _sqlite_backup_copy(source, destination):
+    """Copie cohérente de la base ; chiffrée dès que SQLCipher est actif."""
+    source = Path(source)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    if _database_encryption_enabled():
+        _sqlcipher_export_copy(source, destination, _unwrap_database_key())
+        return
+    src_con = sqlite3.connect(str(source))
+    dst_con = sqlite3.connect(str(destination))
+    try:
+        src_con.backup(dst_con)
+        dst_con.commit()
+    finally:
+        dst_con.close()
+        src_con.close()
+
+
+def restore_database_backup(backup_name):
+    """Rend une sauvegarde WOPR active après validation de son contenu."""
+    backup_name = str(backup_name or "").strip()
+    if not backup_name or Path(backup_name).name != backup_name:
+        raise ValueError("Nom de sauvegarde invalide.")
+
+    backup_root = BACKUP_DIR.resolve()
+    source = (BACKUP_DIR / backup_name).resolve()
+    if source.parent != backup_root or not source.is_file():
+        raise ValueError("Sauvegarde introuvable.")
+
+    stamp = now().strftime("%Y%m%d_%H%M%S")
+    restore_tmp = DB.parent / f".wopr_restore_{stamp}_{secrets.token_hex(3)}.db"
+    rollback_tmp = DB.parent / f".wopr_rollback_{stamp}_{secrets.token_hex(3)}.db"
+    safety_tmp = DB.parent / f".wopr_safety_{stamp}_{secrets.token_hex(3)}.db"
+
+    # Reconnaissance par signature binaire + contenu SQLite. Le fichier peut donc
+    # être renommé librement, avec ou sans extension.
+    _extract_backup_to_sqlite(source, restore_tmp)
+
+    # On conserve toujours l'état courant avant de basculer sur l'ancienne base.
+    safety = backup_database(force=True, tag="avant_restauration")
+    if not safety:
+        restore_tmp.unlink(missing_ok=True)
+        raise RuntimeError("Impossible de sauvegarder la base actuelle avant restauration.")
+
+    try:
+        # Le marqueur appartient à l'archive de sauvegarde, pas à la base active.
+        try:
+            marker_con = _open_database(restore_tmp)
+            marker_con.execute("DROP TABLE IF EXISTS wopr_backup_meta")
+            marker_con.commit()
+            marker_con.close()
+        except Exception:
+            pass
+
+        ok, detail, _ = _validate_wopr_database(restore_tmp)
+        if not ok:
+            raise RuntimeError(f"Copie de restauration invalide : {detail}")
+
+        # Une ancienne sauvegarde SQLite claire reste restaurable, mais elle est
+        # rechiffrée AVANT de redevenir la base active.
+        if _database_encryption_enabled() and _database_is_plaintext(restore_tmp):
+            encrypted_restore = DB.parent / f".wopr_restore_cipher_{stamp}_{secrets.token_hex(3)}.db"
+            try:
+                _sqlite_backup_copy(restore_tmp, encrypted_restore)
+                ok, detail, _ = _validate_wopr_database(encrypted_restore)
+                if not ok:
+                    raise RuntimeError(f"Rechiffrement de la sauvegarde invalide : {detail}")
+                os.replace(encrypted_restore, restore_tmp)
+            finally:
+                encrypted_restore.unlink(missing_ok=True)
+
+        for suffix in ("-wal", "-shm"):
+            try:
+                Path(str(DB) + suffix).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        os.replace(restore_tmp, DB)
+        try:
+            init_db()
+            ok, detail, _ = _validate_wopr_database(DB)
+            if not ok:
+                raise RuntimeError(f"Base restaurée invalide après migration : {detail}")
+            harden_local_permissions()
+        except Exception as exc:
+            _extract_backup_to_sqlite(safety, safety_tmp)
+            try:
+                c = _open_database(safety_tmp)
+                c.execute("DROP TABLE IF EXISTS wopr_backup_meta")
+                c.commit(); c.close()
+            except Exception:
+                pass
+            _sqlite_backup_copy(safety_tmp, rollback_tmp)
+            for suffix in ("-wal", "-shm"):
+                try:
+                    Path(str(DB) + suffix).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            os.replace(rollback_tmp, DB)
+            harden_local_permissions()
+            raise RuntimeError(
+                f"Restauration annulée ; la base précédente a été remise automatiquement. Détail : {exc}"
+            ) from exc
+    finally:
+        for tmp in (restore_tmp, rollback_tmp, safety_tmp):
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    return source, safety
+
+
+def harden_local_permissions():
+    for directory in (DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR):
+        try: os.chmod(directory, 0o700)
+        except OSError: pass
+    for file_path in (DB, ADMIN_PIN_FILE, APP_SECRET_FILE, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE, ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, SQLCIPHER_SETTINGS_FILE, MASTER_SECRET_FILE):
+        if file_path.exists():
+            try: os.chmod(file_path, 0o600)
+            except OSError: pass
+
+
+def resolve_signature_path(stored_value):
+    """Résout une signature sans dépendre de l'ancien emplacement absolu de WOPR."""
+    value = str(stored_value or "").strip()
+    if not value:
+        return None
+    raw = Path(value)
+    # Nouveau format portable : le nom du fichier uniquement.
+    if not raw.is_absolute():
+        candidate = SIGNATURES / raw.name
+        return candidate if candidate.exists() else None
+    # Compatibilité : ancienne base contenant /home/.../WOPR/private/signatures/x.png.
+    if raw.exists():
+        return raw
+    moved = SIGNATURES / raw.name
+    return moved if moved.exists() else None
+
+
+def _portability_diagnostics_impl():
+    """Diagnostic local volontairement non sensible : aucun chemin secret n'est exposé."""
+    checks = []
+
+    def add(label, ok, detail_ok, detail_bad, required=True):
+        checks.append({
+            "label": label,
+            "ok": bool(ok),
+            "detail": detail_ok if ok else detail_bad,
+            "required": bool(required),
+        })
+
+    # Tous les emplacements persistants, sauf la clé maître volontairement locale à la machine,
+    # doivent être contenus dans WOPR/private.
+    managed = (
+        DB, CONFIG_PATH, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN, SMTP_SETTINGS_FILE,
+        ABBY_SETTINGS_FILE, SUMUP_SETTINGS_FILE, ADMIN_PIN_FILE, APP_SECRET_FILE, SQLCIPHER_SETTINGS_FILE, BACKUP_DIR, IMPORT_DIR,
+        SIGNATURES, PRIVATE_ASSETS, PRIVATE_SEEDS, DEVIS_ROOT, FACTURES_ROOT,
+        SUIVI_REPARATIONS_ROOT,
+    )
+    private_resolved = PRIVATE_ROOT.resolve()
+    inside_private = True
+    for item in managed:
+        try:
+            item.resolve().relative_to(private_resolved)
+        except Exception:
+            inside_private = False
+            break
+    add(
+        "Données et documents internes",
+        inside_private,
+        "Les fichiers persistants gérés par WOPR restent dans private/.",
+        "Au moins un fichier persistant pointe encore hors de private/.",
+    )
+
+    required_dirs = (DB.parent, SIGNATURES, BACKUP_DIR, IMPORT_DIR, FACTURES_ROOT, DEVIS_ROOT, SUIVI_REPARATIONS_ROOT)
+    dirs_ok = all(p.is_dir() for p in required_dirs)
+    add(
+        "Structure privée",
+        dirs_ok,
+        "Base, sauvegardes, imports, signatures, Factures, Devis et Suivi sont prêts.",
+        "Un ou plusieurs dossiers privés nécessaires sont absents.",
+    )
+
+    # Test réel d'écriture, puis suppression immédiate.
+    write_ok = False
+    probe = DB.parent / f".portability_{secrets.token_hex(4)}.tmp"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        write_ok = probe.read_text(encoding="utf-8") == "ok"
+    except Exception:
+        write_ok = False
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except Exception:
+            pass
+    add(
+        "Écriture sur le support",
+        write_ok,
+        "WOPR peut écrire dans son espace privé.",
+        "Le support ou le dossier WOPR n'est pas inscriptible.",
+    )
+
+    add(
+        "Base de données",
+        DB.exists() and DB.is_file(),
+        "La base locale est présente.",
+        "Aucune base locale n'est présente (normal uniquement pour une installation neuve).",
+    )
+
+    public_required = (
+        BASE / "app.py", BASE / "requirements.txt", BASE / "templates", BASE / "static",
+    )
+    add(
+        "Cœur public",
+        all(p.exists() for p in public_required),
+        "Code, dépendances, modèles et ressources publiques sont présents.",
+        "Un élément du cœur public de WOPR manque.",
+    )
+
+    # Traque ciblée des chemins personnels codés en dur. Les chemins système génériques
+    # (/usr/share/fonts, APPDATA, XDG_CONFIG_HOME...) ne sont pas des dépendances à ce PC.
+    forbidden = (
+        "/home/" + "foul/",
+        "GDrive" + "/Web/",
+        "/mnt/" + "data/",
+        "C:\\Users\\" + "foul\\",
+    )
+    scan_files = [BASE / "app.py"] + sorted((BASE / "scripts").glob("*"))
+    hardcoded = []
+    for source in scan_files:
+        if not source.is_file():
+            continue
+        try:
+            body = source.read_text(encoding="utf-8-sig", errors="ignore")
+        except Exception:
+            continue
+        if any(token.casefold() in body.casefold() for token in forbidden):
+            hardcoded.append(source.name)
+    add(
+        "Chemins propres à ce PC",
+        not hardcoded,
+        "Aucun chemin personnel propre à cette machine n'est codé en dur dans le cœur ou les lanceurs.",
+        "Des chemins personnels codés en dur subsistent : " + ", ".join(hardcoded),
+    )
+
+    # V2.3.221 : anciens .desktop/.vbs supprimés.
+    # Le launcher unifié est public/launcher/wopr_launcher.py et les binaires
+    # officiels sont WOPR (Linux) et WOPR.exe (Windows) à la racine.
+    launcher_source = WOPR_ROOT / "public" / "launcher" / "wopr_launcher.py"
+    linux_launcher = WOPR_ROOT / "WOPR"
+    windows_launcher = WOPR_ROOT / "WOPR.exe"
+
+    missing_launchers = []
+    if not launcher_source.is_file():
+        missing_launchers.append("public/launcher/wopr_launcher.py")
+    if not linux_launcher.is_file():
+        missing_launchers.append("WOPR")
+    if not windows_launcher.is_file():
+        missing_launchers.append("WOPR.exe")
+
+    if missing_launchers:
+        launcher_error = "Élément(s) du launcher absent(s) : " + ", ".join(missing_launchers)
+    else:
+        launcher_error = ""
+
+    add(
+        "Lanceurs portables",
+        not missing_launchers,
+        "Source du launcher présente ; binaires Linux WOPR et Windows WOPR.exe présents.",
+        launcher_error,
+    )
+
+    # Les bibliothèques principales sont déjà importées si cette page s'affiche.
+    deps_ok = bool(qrcode and canvas and Flask)
+    add(
+        "Dépendances Python actives",
+        deps_ok,
+        "Les dépendances principales chargées par WOPR sont disponibles.",
+        "Une dépendance Python principale est indisponible.",
+    )
+
+    # Fonction utile mais non requise pour que WOPR soit portable.
+    kde_ok = kdeconnect_cli_path() is not None
+    add(
+        "SMS KDE Connect",
+        kde_ok,
+        "kdeconnect-cli est disponible sur cette machine.",
+        "Optionnel : kdeconnect-cli n'est pas disponible sur cette machine.",
+        required=False,
+    )
+
+    ready = all(c["ok"] for c in checks if c["required"])
+    return {"ready": ready, "checks": checks}
+
+
+
+def portability_diagnostics():
+    """
+    Diagnostic de portabilité non bloquant.
+    La page Sécurité doit rester accessible même si une vérification locale
+    échoue sur une machine, un support USB ou un OS particulier.
+    """
+    try:
+        result = _portability_diagnostics_impl()
+        if not isinstance(result, dict):
+            raise TypeError("résultat de diagnostic invalide")
+        result.setdefault("ready", False)
+        result.setdefault("checks", [])
+        return result
+    except Exception as exc:
+        # On n'expose ni chemin local ni secret dans l'interface.
+        try:
+            audit_event(
+                "PORTABILITY_DIAGNOSTIC_ERROR",
+                f"{type(exc).__name__}: diagnostic indisponible",
+                request.remote_addr if request else "",
+            )
+        except Exception:
+            pass
+        return {
+            "ready": False,
+            "checks": [
+                {
+                    "label": "Diagnostic de portabilité",
+                    "ok": False,
+                    "required": True,
+                    "detail": "Le diagnostic n'a pas pu s'exécuter sur cette machine. WOPR reste utilisable.",
+                }
+            ],
+        }
+
+
+def compose_client_name(last_name, first_name):
+    """Champ historique `name` conservé pour compatibilité : Prénom Nom."""
+    last_name = " ".join(str(last_name or "").split())
+    first_name = " ".join(str(first_name or "").split())
+    return " ".join(x for x in [first_name, last_name] if x).strip()
+
+
+def split_legacy_client_name(name):
+    """
+    Répartition initiale prudente des anciennes fiches.
+    L'ancien fichier est le plus souvent NOM Prénom : on garde donc cette convention.
+    Les sociétés restent entièrement dans Nom.
+    Rien n'est jamais écrasé après correction manuelle.
+    """
+    value = " ".join(str(name or "").split()).strip()
+    if not value:
+        return "", ""
+
+    company_markers = (
+        "sarl", "sci ", "sas ", "eurl", "suez", "repair lab", "pc-media",
+        "pc media", "parvenir formations", "lydelec", "association",
+        "cliente de passage", "client de passage", "entreprise "
+    )
+    low = value.casefold()
+    if any(marker in low for marker in company_markers):
+        return value, ""
+
+    if "," in value:
+        left, right = value.split(",", 1)
+        return left.strip(), right.strip()
+
+    parts = value.split()
+    if len(parts) == 1:
+        return value, ""
+
+    # Convention majoritaire de l'historique WOPR : NOM puis prénom(s).
+    return parts[0], " ".join(parts[1:])
+
+
+def ensure_column(con, table_name, column_name, sql_type):
+    cols = [row["name"] for row in con.execute(f"PRAGMA table_info({table_name})").fetchall()]
+    if column_name not in cols:
+        con.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {sql_type}")
+
+def record_repair_status_change(con, repair_id, old_status, new_status, note=""):
+    """Journalise uniquement les vrais changements d'état d'un dossier."""
+    old_status = str(old_status or "").strip()
+    new_status = str(new_status or "").strip() or "Reçu"
+    if old_status == new_status:
+        return False
+    con.execute("""
+        INSERT INTO repair_status_history(repair_id,status,changed_at,note)
+        VALUES(?,?,?,?)
+    """, (repair_id, new_status, now().isoformat(timespec="seconds"), str(note or "").strip()))
+    return True
+
+def init_db():
+    con = db()
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        address TEXT,
+        phone TEXT,
+        email TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS app_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ledger_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operation TEXT NOT NULL,
+        party TEXT,
+        entry_date TEXT NOT NULL,
+        description TEXT,
+        amount_ttc REAL NOT NULL DEFAULT 0,
+        payment_type TEXT,
+        invoice_no TEXT,
+        remarks TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS archived_invoices (
+        invoice_no TEXT PRIMARY KEY,
+        client_name TEXT NOT NULL,
+        invoice_date TEXT NOT NULL,
+        invoice_total REAL NOT NULL DEFAULT 0,
+        payment_mode TEXT,
+        accounting_date TEXT,
+        paid INTEGER NOT NULL DEFAULT 0,
+        supersedes_invoice_no TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS antivirus_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_name TEXT NOT NULL,
+        setup_date TEXT,
+        antivirus_name TEXT,
+        expiration_date TEXT,
+        invoice_no TEXT,
+        info TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS quotes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quote_no TEXT NOT NULL UNIQUE,
+        quote_date TEXT NOT NULL,
+        client_id INTEGER,
+        client_name TEXT NOT NULL,
+        client_company TEXT,
+        client_address_street TEXT,
+        client_postal_code TEXT,
+        client_city TEXT,
+        contact_name TEXT,
+        status TEXT NOT NULL DEFAULT 'Brouillon',
+        notes TEXT,
+        edited_in_app INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(client_id) REFERENCES clients(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS quote_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quote_id INTEGER NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        line_type TEXT NOT NULL DEFAULT 'service',
+        quantity REAL NOT NULL DEFAULT 1,
+        description TEXT NOT NULL,
+        unit_price REAL NOT NULL DEFAULT 0,
+        FOREIGN KEY(quote_id) REFERENCES quotes(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ca_overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        amount REAL NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(year, month, category)
+    );
+
+    CREATE TABLE IF NOT EXISTS quote_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quote_id INTEGER NOT NULL,
+        filename TEXT NOT NULL,
+        label TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(quote_id, filename),
+        FOREIGN KEY(quote_id) REFERENCES quotes(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        details TEXT,
+        ip TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS repairs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        dossier_no TEXT NOT NULL UNIQUE,
+        client_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        received_date TEXT NOT NULL,
+        device_type TEXT,
+        brand_model TEXT,
+        serial_no TEXT,
+        system_password TEXT,
+        accessories TEXT,
+        device_state TEXT,
+        problem TEXT,
+        diagnosis TEXT,
+        work_done TEXT,
+        tests_validation TEXT,
+        remarks TEXT,
+        status TEXT NOT NULL DEFAULT 'Reçu',
+        signature_token TEXT UNIQUE,
+        signature_path TEXT,
+        signature_at TEXT,
+        finished_at TEXT,
+        invoice_no TEXT,
+        service_amount REAL DEFAULT 0,
+        goods_amount REAL DEFAULT 0,
+        payment_method TEXT,
+        paid INTEGER DEFAULT 0,
+        sent_via TEXT,
+        service_description TEXT,
+        goods_description TEXT,
+        FOREIGN KEY(client_id) REFERENCES clients(id)
+    );
+    """)
+    # Facture historique autonome vérifiée sur PDF + justificatif de virement.
+    # INSERT OR IGNORE : une modification faite ensuite dans WOPR n'est jamais écrasée.
+    stamp_archived_invoice = now().isoformat(timespec="seconds")
+    con.execute("""
+        INSERT OR IGNORE INTO archived_invoices(
+            invoice_no, client_name, invoice_date, invoice_total,
+            payment_mode, accounting_date, paid,
+            supersedes_invoice_no, notes, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        "120220261600",
+        "SUEZ RV SUD OUEST - IMM. TO’",
+        "2026-02-12",
+        765.00,
+        "VIR",
+        "2026-04-20",
+        1,
+        "231220251630",
+        "Facture définitive refaite à la demande de l’entreprise. Bon de commande PO01653157.",
+        stamp_archived_invoice,
+        stamp_archived_invoice,
+    ))
+
+    # Facture historique présente dans le classeur déclaré puis perdue lors
+    # du nettoyage d'une ancienne fiche client. Elle reste une recette de
+    # janvier 2026 même si aucun dossier actif ne la porte désormais.
+    con.execute("""
+        INSERT OR IGNORE INTO archived_invoices(
+            invoice_no, client_name, invoice_date, invoice_total,
+            payment_mode, accounting_date, paid,
+            supersedes_invoice_no, notes, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        "290120261400",
+        "Facture historique",
+        "2026-01-29",
+        39.00,
+        "",
+        "2026-01-29",
+        1,
+        None,
+        "Recette historique restaurée depuis la base Foul-Fix de référence.",
+        stamp_archived_invoice,
+        stamp_archived_invoice,
+    ))
+
+    # migration douce pour les anciennes bases
+    ensure_column(con, "quotes", "client_company", "TEXT")
+    ensure_column(con, "quotes", "edited_in_app", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "service_description", "TEXT")
+    ensure_column(con, "repairs", "goods_description", "TEXT")
+    ensure_column(con, "repairs", "quote_no", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "order_no", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "payment_mode", "TEXT")
+    ensure_column(con, "repairs", "payment_detail", "TEXT")
+    ensure_column(con, "repairs", "system_name", "TEXT")
+    ensure_column(con, "repairs", "legacy_call_note", "TEXT")
+    ensure_column(con, "repairs", "legacy_invoice_text", "TEXT")
+    ensure_column(con, "repairs", "legacy_source_year", "INTEGER")
+    ensure_column(con, "repairs", "legacy_source_row", "INTEGER")
+    ensure_column(con, "repairs", "legacy_imported", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "followup_year", "INTEGER")
+    ensure_column(con, "repairs", "followup_month", "INTEGER")
+    ensure_column(con, "repairs", "accounting_year", "INTEGER")
+    ensure_column(con, "repairs", "accounting_month", "INTEGER")
+    ensure_column(con, "repairs", "accounting_date", "TEXT")
+    ensure_column(con, "repairs", "accounting_status", "TEXT DEFAULT 'normal'")
+    ensure_column(con, "repairs", "accounting_service_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "accounting_goods_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "simple_invoice", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "returned_at", "TEXT")
+    ensure_column(con, "repairs", "sumup_payment_url", "TEXT")
+    ensure_column(con, "repairs", "sumup_transaction_id", "TEXT")
+    ensure_column(con, "repairs", "sumup_transaction_code", "TEXT")
+    ensure_column(con, "repairs", "sumup_transaction_at", "TEXT")
+    ensure_column(con, "repairs", "sumup_payment_type", "TEXT")
+    ensure_column(con, "repairs", "sumup_external_refund_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "sumup_external_refund_date", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "sumup_external_refund_note", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "public_tracking_code", "TEXT")
+    ensure_column(con, "repairs", "tracking_notification_channel", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "tracking_initial_notification_sent", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "tracking_initial_notification_error", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "tracking_completion_notification_sent", "INTEGER DEFAULT 0")
+    ensure_column(con, "repairs", "tracking_completion_notification_error", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "tracking_completion_sms_sent", "INTEGER DEFAULT 0")
+    # Paiement partiel / acompte : l'acompte reste séparé du solde final
+    # afin de comptabiliser chaque encaissement dans son propre mois.
+    ensure_column(con, "repairs", "deposit_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "deposit_payment_mode", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "deposit_payment_detail", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "deposit_date", "TEXT DEFAULT ''")
+    ensure_column(con, "repairs", "deposit_accounting_year", "INTEGER")
+    ensure_column(con, "repairs", "deposit_accounting_month", "INTEGER")
+    ensure_column(con, "repairs", "deposit_service_amount", "REAL DEFAULT 0")
+    ensure_column(con, "repairs", "deposit_goods_amount", "REAL DEFAULT 0")
+    con.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_public_tracking_code
+        ON repairs(public_tracking_code)
+        WHERE public_tracking_code IS NOT NULL AND TRIM(public_tracking_code) <> ''
+    """)
+
+    # Les dossiers existants reçoivent aussi un code client afin que le futur
+    # portail de suivi puisse fonctionner sans modifier l'historique métier.
+    missing_tracking_rows = con.execute("""
+        SELECT id FROM repairs
+        WHERE public_tracking_code IS NULL OR TRIM(public_tracking_code)=''
+        ORDER BY id
+    """).fetchall()
+    for missing_row in missing_tracking_rows:
+        con.execute(
+            "UPDATE repairs SET public_tracking_code=? WHERE id=?",
+            (make_public_tracking_code(con), int(missing_row["id"])),
+        )
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sumup_transaction_classifications (
+            transaction_id TEXT PRIMARY KEY,
+            transaction_code TEXT,
+            classification TEXT NOT NULL,
+            note TEXT,
+            classified_at TEXT NOT NULL
+        )
+    """)
+
+    # V2.3.165 — les anciennes versions stockaient le chemin ABSOLU des signatures.
+    # Dès que le fichier est retrouvé dans private/signatures, on ne conserve plus que
+    # son nom afin que la base survive à un déplacement complet du dossier WOPR.
+    try:
+        for _sig_row in con.execute("SELECT id, signature_path FROM repairs WHERE signature_path IS NOT NULL AND signature_path <> ''").fetchall():
+            _stored = str(_sig_row["signature_path"] or "").strip()
+            if not _stored:
+                continue
+            _name = Path(_stored).name
+            if _name and (SIGNATURES / _name).exists() and _stored != _name:
+                con.execute("UPDATE repairs SET signature_path=? WHERE id=?", (_name, _sig_row["id"]))
+    except Exception:
+        pass
+    ensure_column(con, "clients", "first_name", "TEXT")
+    ensure_column(con, "clients", "last_name", "TEXT")
+    ensure_column(con, "clients", "company", "TEXT")
+    ensure_column(con, "clients", "archived", "INTEGER DEFAULT 0")
+    ensure_column(con, "clients", "archived_at", "TEXT")
+    ensure_column(con, "clients", "address_street", "TEXT")
+    ensure_column(con, "clients", "postal_code", "TEXT")
+    ensure_column(con, "clients", "city", "TEXT")
+    ensure_column(con, "clients", "google_resource_name", "TEXT")
+    ensure_column(con, "clients", "google_sync_status", "TEXT")
+    ensure_column(con, "clients", "google_sync_error", "TEXT")
+    ensure_column(con, "clients", "google_synced_at", "TEXT")
+    ensure_column(con, "clients", "google_sync_hash", "TEXT")
+    ensure_column(con, "clients", "notes", "TEXT")
+    # V2.4.1 — second contact number (kept separate from the historical primary phone).
+    ensure_column(con, "clients", "phone_secondary", "TEXT")
+    ensure_column(con, "clients", "email_secondary", "TEXT")
+    ensure_column(con, "clients", "proton_uid", "TEXT")
+    ensure_column(con, "clients", "proton_imported_at", "TEXT")
+    ensure_column(con, "clients", "abby_id", "TEXT")
+    ensure_column(con, "clients", "abby_type", "TEXT")
+    ensure_column(con, "clients", "abby_sync_status", "TEXT")
+    ensure_column(con, "clients", "abby_sync_error", "TEXT")
+    ensure_column(con, "clients", "abby_synced_at", "TEXT")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_clients_proton_uid ON clients(proton_uid)")
+    # V2.3.91 : pièce justificative liée aux achats / ventes.
+    # Le fichier reste physiquement dans Fournisseurs/AAAA/MM - Mois,
+    # seule sa référence relative est conservée en base.
+    ensure_column(con, "ledger_entries", "document_path", "TEXT")
+    ensure_column(con, "ledger_entries", "document_original_name", "TEXT")
+
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entry_date ON ledger_entries(entry_date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_operation ON ledger_entries(operation)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_invoice_no ON ledger_entries(invoice_no)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_antivirus_expiration ON antivirus_entries(expiration_date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_quotes_date ON quotes(quote_date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_quotes_client_id ON quotes(client_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repairs_client_id ON repairs(client_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repairs_invoice_no ON repairs(invoice_no)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_quote_lines_quote ON quote_lines(quote_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_quote_documents_quote ON quote_documents(quote_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_repairs_legacy_source ON repairs(legacy_source_year, legacy_source_row) WHERE legacy_source_year IS NOT NULL")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repairs_followup_period ON repairs(followup_year, followup_month)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repairs_accounting_period ON repairs(accounting_year, accounting_month)")
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS repair_status_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repair_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            note TEXT,
+            FOREIGN KEY(repair_id) REFERENCES repairs(id)
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_repair_status_history_repair ON repair_status_history(repair_id, changed_at)")
+
+    # V2.3.83 : point de départ de l'historique pour les dossiers existants.
+    # On ne fabrique pas de fausses anciennes dates : on note simplement l'état
+    # trouvé au moment où l'historique est activé.
+    history_seed_rows = con.execute("""
+        SELECT r.id, r.status
+        FROM repairs r
+        WHERE NOT EXISTS (
+            SELECT 1 FROM repair_status_history h WHERE h.repair_id=r.id
+        )
+    """).fetchall()
+    history_seed_stamp = now().isoformat(timespec="seconds")
+    for history_seed in history_seed_rows:
+        con.execute("""
+            INSERT INTO repair_status_history(repair_id,status,changed_at,note)
+            VALUES(?,?,?,?)
+        """, (history_seed["id"], history_seed["status"] or "Reçu", history_seed_stamp,
+              "État initial lors de l’activation de l’historique"))
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repair_id INTEGER NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            line_type TEXT NOT NULL DEFAULT 'service',
+            quantity REAL NOT NULL DEFAULT 1,
+            description TEXT NOT NULL,
+            unit_price REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY(repair_id) REFERENCES repairs(id)
+        )
+    """)
+    # Règlements fractionnés : plusieurs acomptes peuvent être associés à
+    # une même facture, chacun avec sa date, son mode et sa référence.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repair_id INTEGER NOT NULL,
+            amount REAL NOT NULL DEFAULT 0,
+            payment_date TEXT NOT NULL,
+            payment_mode TEXT NOT NULL DEFAULT '',
+            payment_detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(repair_id) REFERENCES repairs(id)
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_invoice_payments_repair ON invoice_payments(repair_id, payment_date, id)")
+    # V2.3.223 — Nom / prénom séparés : migration UNIQUEMENT des anciennes
+    # fiches personnelles encore vierges.
+    #
+    # Une entreprise pure peut légitimement avoir :
+    #   first_name = ''
+    #   last_name  = ''
+    #   company    = 'Microrecup'
+    #   name       = 'Microrecup'
+    #
+    # Les anciennes versions remettaient alors "Microrecup" dans last_name
+    # à chaque redémarrage. On exclut donc explicitement les fiches ayant une
+    # raison sociale : une correction manuelle reste enfin corrigée.
+    rows_to_split = con.execute("""
+        SELECT id,name FROM clients
+        WHERE COALESCE(trim(last_name),'')='' AND COALESCE(trim(first_name),'')=''
+          AND COALESCE(trim(company),'')=''
+          AND COALESCE(trim(name),'')<>''
+    """).fetchall()
+    for old_client in rows_to_split:
+        last_name, first_name = split_legacy_client_name(old_client["name"])
+        con.execute("""
+            UPDATE clients SET last_name=?, first_name=? WHERE id=?
+        """, (last_name, first_name, old_client["id"]))
+
+    # V2.3.29 : ne plus recopier `address` dans `address_street`.
+    # Une rue volontairement vide doit rester vide après redémarrage.
+
+    # Ancien champ unique "Système / Mot de passe" :
+    # on déplace uniquement les valeurs qui ressemblent clairement à un système
+    # et on laisse les autres intactes pour ne jamais perdre un vrai mot de passe.
+    old_system_rows = con.execute("""
+        SELECT id,system_password
+        FROM repairs
+        WHERE COALESCE(trim(system_name),'')=''
+          AND COALESCE(trim(system_password),'')<>''
+    """).fetchall()
+    system_prefixes = (
+        "windows", "macos", "mac os", "linux", "ubuntu", "debian",
+        "fedora", "mint", "chromeos", "chrome os", "android", "ios"
+    )
+    for old_system_row in old_system_rows:
+        old_value = str(old_system_row["system_password"] or "").strip()
+        low_value = old_value.casefold()
+        if any(low_value.startswith(prefix) for prefix in system_prefixes):
+            con.execute("""
+                UPDATE repairs
+                SET system_name=?, system_password=''
+                WHERE id=?
+            """, (old_value, old_system_row["id"]))
+
+    # V2.3.80 : chiffrement des mots de passe appareils déjà présents en base.
+    # La migration est idempotente : les valeurs enc:v1: ne sont jamais rechiffrées.
+    password_rows = con.execute("""
+        SELECT id,system_password FROM repairs
+        WHERE COALESCE(trim(system_password),'')<>''
+    """).fetchall()
+    migrated_passwords = 0
+    for pw_row in password_rows:
+        raw_pw = str(pw_row["system_password"] or "")
+        if raw_pw and not raw_pw.startswith(SECRET_PREFIX):
+            con.execute(
+                "UPDATE repairs SET system_password=? WHERE id=?",
+                (encrypt_repair_password(raw_pw), pw_row["id"])
+            )
+            migrated_passwords += 1
+    if migrated_passwords:
+        try:
+            audit_event("MIGRATION_PASSWORDS", f"{migrated_passwords} mot(s) de passe appareil chiffré(s)")
+        except Exception:
+            pass
+
+    # V2.3.15 : reconstruction des dates d'encaissement historiques.
+    # On remplit la date sans modifier accounting_year/accounting_month ni les montants CA.
+    accounting_date_rows = con.execute("""
+        SELECT
+            id,client_id,payment_method,invoice_no,received_date,paid,
+            accounting_year,accounting_month,legacy_source_year
+        FROM repairs
+        WHERE COALESCE(trim(accounting_date),'')=''
+          AND COALESCE(trim(invoice_no),'')<>''
+    """).fetchall()
+
+    for accounting_row in accounting_date_rows:
+        parsed_date = resolve_accounting_date(
+            accounting_row["payment_method"],
+            accounting_row["invoice_no"],
+            accounting_row["received_date"],
+            accounting_row["accounting_year"],
+            accounting_row["accounting_month"],
+            bool(accounting_row["paid"])
+        )
+        if parsed_date:
+            con.execute(
+                "UPDATE repairs SET accounting_date=? WHERE id=?",
+                (parsed_date, accounting_row["id"])
+            )
+
+    # Une facture ancienne peut avoir une ligne de facture en juillet et une ligne
+    # de paiement en août. Propager uniquement la DATE à la ligne d'origine rend
+    # le Suivi lisible sans doubler le CA (année/mois/montants restent inchangés).
+    invoice_date_groups = con.execute("""
+        SELECT
+            client_id, invoice_no,
+            MAX(CASE
+                WHEN accounting_year IS NOT NULL AND accounting_month IS NOT NULL
+                     AND COALESCE(trim(accounting_date),'')<>''
+                THEN accounting_date
+                ELSE NULL
+            END) authoritative_date
+        FROM repairs
+        WHERE COALESCE(trim(invoice_no),'')<>''
+        GROUP BY client_id,invoice_no
+        HAVING authoritative_date IS NOT NULL
+    """).fetchall()
+
+    for date_group in invoice_date_groups:
+        # Si une vraie ligne comptable existe (ex. paiement reporté au mois suivant),
+        # sa date gagne sur la date estimée de la ligne de facture d'origine.
+        con.execute("""
+            UPDATE repairs
+            SET accounting_date=?
+            WHERE client_id=? AND invoice_no=?
+        """, (
+            date_group["authoritative_date"],
+            date_group["client_id"],
+            date_group["invoice_no"]
+        ))
+
+    # V2.3.19 : correction ciblée de la répartition CA d'août 2026.
+    # Source : dernier jeu historique importé avant la migration WOPR.
+    ca_aug_fix_key = "v2319_ca_august_2026_repartition_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (ca_aug_fix_key,)).fetchone():
+        fixed_notes = []
+
+        # Bellebna Mustapha - 310820261000
+        # ODS : 69 € Presta + 40 € March. = 109 €.
+        bellebna = con.execute("""
+            SELECT id,service_amount,goods_amount,
+                   accounting_service_amount,accounting_goods_amount,
+                   accounting_year,accounting_month
+            FROM repairs
+            WHERE invoice_no='310820261000'
+              AND received_date='2026-08-27'
+            ORDER BY id DESC
+            LIMIT 1
+        """).fetchone()
+
+        if bellebna:
+            svc = float(bellebna["service_amount"] or 0)
+            goods = float(bellebna["goods_amount"] or 0)
+
+            if abs(svc - 69.0) < 0.01 and abs(goods - 40.0) >= 0.01:
+                con.execute(
+                    "UPDATE repairs SET goods_amount=40.0 WHERE id=?",
+                    (bellebna["id"],)
+                )
+                fixed_notes.append("Bellebna: marchandises=40")
+
+            if int(bellebna["accounting_year"] or 0) == 2026 and int(bellebna["accounting_month"] or 0) == 8:
+                asvc = float(bellebna["accounting_service_amount"] or 0)
+                agoods = float(bellebna["accounting_goods_amount"] or 0)
+                if abs(asvc - 69.0) < 0.01 and abs(agoods - 40.0) >= 0.01:
+                    con.execute(
+                        "UPDATE repairs SET accounting_goods_amount=40.0 WHERE id=?",
+                        (bellebna["id"],)
+                    )
+                    fixed_notes.append("Bellebna CA: marchandises=40")
+
+            # Si la facture contient exactement 69 € service + 20 € marchandise,
+            # corriger uniquement cette ligne marchandise à 40 €.
+            line_rows = con.execute("""
+                SELECT id,line_type,quantity,unit_price
+                FROM invoice_lines
+                WHERE repair_id=?
+                ORDER BY position,id
+            """, (bellebna["id"],)).fetchall()
+
+            line_total = sum(float(x["quantity"] or 0) * float(x["unit_price"] or 0) for x in line_rows)
+            service_line_total = sum(
+                float(x["quantity"] or 0) * float(x["unit_price"] or 0)
+                for x in line_rows if x["line_type"] == "service"
+            )
+            goods_20 = [
+                x for x in line_rows
+                if x["line_type"] == "goods"
+                and abs(float(x["quantity"] or 0) * float(x["unit_price"] or 0) - 20.0) < 0.01
+                and abs(float(x["quantity"] or 0) - 1.0) < 0.01
+            ]
+            if (
+                line_rows
+                and abs(line_total - 89.0) < 0.01
+                and abs(service_line_total - 69.0) < 0.01
+                and len(goods_20) == 1
+            ):
+                con.execute(
+                    "UPDATE invoice_lines SET unit_price=40.0 WHERE id=?",
+                    (goods_20[0]["id"],)
+                )
+                fixed_notes.append("Bellebna facture: 20→40 marchandise")
+
+        # Favard Michel - 310820261400
+        # ODS : 69 € Presta + 50 € March. = 119 €.
+        favard = con.execute("""
+            SELECT id,service_amount,goods_amount,
+                   accounting_service_amount,accounting_goods_amount,
+                   accounting_year,accounting_month
+            FROM repairs
+            WHERE invoice_no='310820261400'
+              AND received_date='2026-08-31'
+            ORDER BY id DESC
+            LIMIT 1
+        """).fetchone()
+
+        if favard:
+            svc = float(favard["service_amount"] or 0)
+            goods = float(favard["goods_amount"] or 0)
+
+            if abs((svc + goods) - 119.0) < 0.01 and (
+                abs(svc - 69.0) >= 0.01 or abs(goods - 50.0) >= 0.01
+            ):
+                con.execute("""
+                    UPDATE repairs
+                    SET service_amount=69.0, goods_amount=50.0
+                    WHERE id=?
+                """, (favard["id"],))
+                fixed_notes.append("Favard: 69 presta + 50 march.")
+
+            if int(favard["accounting_year"] or 0) == 2026 and int(favard["accounting_month"] or 0) == 8:
+                asvc = float(favard["accounting_service_amount"] or 0)
+                agoods = float(favard["accounting_goods_amount"] or 0)
+                if abs((asvc + agoods) - 119.0) < 0.01 and (
+                    abs(asvc - 69.0) >= 0.01 or abs(agoods - 50.0) >= 0.01
+                ):
+                    con.execute("""
+                        UPDATE repairs
+                        SET accounting_service_amount=69.0,
+                            accounting_goods_amount=50.0
+                        WHERE id=?
+                    """, (favard["id"],))
+                    fixed_notes.append("Favard CA: 69 presta + 50 march.")
+
+            # Si la facture possède déjà deux lignes 69 + 50 toutes deux en service,
+            # reclasser uniquement celle à 50 € en marchandise.
+            line_rows = con.execute("""
+                SELECT id,line_type,quantity,unit_price
+                FROM invoice_lines
+                WHERE repair_id=?
+                ORDER BY position,id
+            """, (favard["id"],)).fetchall()
+
+            line_total = sum(float(x["quantity"] or 0) * float(x["unit_price"] or 0) for x in line_rows)
+            service_50 = [
+                x for x in line_rows
+                if x["line_type"] == "service"
+                and abs(float(x["quantity"] or 0) * float(x["unit_price"] or 0) - 50.0) < 0.01
+            ]
+            service_69 = [
+                x for x in line_rows
+                if x["line_type"] == "service"
+                and abs(float(x["quantity"] or 0) * float(x["unit_price"] or 0) - 69.0) < 0.01
+            ]
+            if (
+                line_rows
+                and abs(line_total - 119.0) < 0.01
+                and len(service_50) == 1
+                and len(service_69) >= 1
+            ):
+                con.execute(
+                    "UPDATE invoice_lines SET line_type='goods' WHERE id=?",
+                    (service_50[0]["id"],)
+                )
+                fixed_notes.append("Favard facture: ligne 50 reclassée march.")
+
+        # Si 2049 / 1239 avaient été enregistrés comme overrides manuels,
+        # supprimer uniquement ces deux valeurs précises pour repasser en auto.
+        override_service = con.execute("""
+            SELECT amount FROM ca_overrides
+            WHERE year=2026 AND month=8 AND category='service'
+        """).fetchone()
+        if override_service and abs(float(override_service["amount"] or 0) - 2049.0) < 0.01:
+            con.execute("""
+                DELETE FROM ca_overrides
+                WHERE year=2026 AND month=8 AND category='service'
+            """)
+            fixed_notes.append("override presta août 2049 supprimé")
+
+        override_goods = con.execute("""
+            SELECT amount FROM ca_overrides
+            WHERE year=2026 AND month=8 AND category='goods'
+        """).fetchone()
+        if override_goods and abs(float(override_goods["amount"] or 0) - 1239.0) < 0.01:
+            con.execute("""
+                DELETE FROM ca_overrides
+                WHERE year=2026 AND month=8 AND category='goods'
+            """)
+            fixed_notes.append("override march. août 1239 supprimé")
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            ca_aug_fix_key,
+            "; ".join(fixed_notes) if fixed_notes else "aucune correction nécessaire",
+            now().isoformat(timespec="seconds")
+        ))
+
+    # Rapprochement comptable V2.3.287 : les rattachements SumUp historiques
+    # avaient déplacé des recettes déjà déclarées dans d'autres mois. On
+    # restaure uniquement les trois lignes identifiées par comparaison avec
+    # la base Foul-Fix d'origine et l'ODS validé.
+    accounting_reconcile_key = "v23287_sumup_declared_periods_reconcile_v1"
+    if not con.execute(
+        "SELECT 1 FROM app_meta WHERE key=?",
+        (accounting_reconcile_key,),
+    ).fetchone():
+        reconciled = 0
+        period_repairs = (
+            ("2025-08-19", 2025, 8, "HIST-2025-0085", "080920251530", 89.00),
+            ("2025-09-30", 2025, 9, "HIST-2025-0103", "290920251400", 108.00),
+            ("2026-01-20", 2026, 1, "HIST-2026-0027", "231220251600", 99.00),
+        )
+        for paid_date, paid_year, paid_month, dossier_no, invoice_no, total in period_repairs:
+            cur = con.execute("""
+                UPDATE repairs
+                SET accounting_date=?, accounting_year=?, accounting_month=?
+                WHERE dossier_no=? AND invoice_no=?
+                  AND ABS(
+                      COALESCE(accounting_service_amount,0)
+                    + COALESCE(accounting_goods_amount,0) - ?
+                  ) < 0.005
+            """, (
+                paid_date, paid_year, paid_month,
+                dossier_no, invoice_no, total,
+            ))
+            reconciled += int(cur.rowcount or 0)
+
+        # La facture 190820261000 correspond à un achat d'alimentation : les
+        # 20 € sont une vente de marchandise, pas une prestation.
+        passage_invoice = con.execute("""
+            SELECT id
+            FROM repairs
+            WHERE invoice_no='190820261000'
+              AND ABS(COALESCE(service_amount,0)
+                    + COALESCE(goods_amount,0) - 20.0) < 0.005
+            ORDER BY legacy_imported, id DESC
+            LIMIT 1
+        """).fetchone()
+        if passage_invoice:
+            passage_id = int(passage_invoice["id"])
+            con.execute("""
+                UPDATE repairs
+                SET service_amount=0, goods_amount=20,
+                    accounting_service_amount=0,
+                    accounting_goods_amount=20
+                WHERE id=?
+            """, (passage_id,))
+            con.execute("""
+                UPDATE invoice_lines
+                SET line_type='goods'
+                WHERE repair_id=?
+                  AND ABS(COALESCE(quantity,0) * COALESCE(unit_price,0) - 20.0) < 0.005
+            """, (passage_id,))
+
+        # Juin a déjà été déclaré à 2 223 € de prestations. La facture SumUp
+        # de 49 € retrouvée ensuite reste dans le calcul automatique (2 272 €)
+        # mais la page Déclarations conserve le montant effectivement déclaré
+        # et montre l'écart via « Auto ».
+        con.execute("""
+            INSERT OR IGNORE INTO ca_overrides(
+                year, month, category, amount, updated_at
+            ) VALUES(2026,6,'service',2223.0,?)
+        """, (now().isoformat(timespec="seconds"),))
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            accounting_reconcile_key,
+            f"{reconciled} période(s) restaurée(s); facture 20 € reclassée; "
+            "juin déclaré conservé à 2223 €",
+            now().isoformat(timespec="seconds"),
+        ))
+
+    # V2.3.79 : tous les suivis 2025 encore marqués « Terminé » sont
+    # considérés comme déjà restitués. Migration volontairement limitée à 2025
+    # et exécutée une seule fois pour ne jamais toucher aux statuts 2026.
+    returned_2025_key = "v2379_2025_termine_to_restitue_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (returned_2025_key,)).fetchone():
+        cur = con.execute("""
+            UPDATE repairs
+            SET status='Restitué'
+            WHERE status='Terminé'
+              AND (
+                    followup_year=2025
+                 OR legacy_source_year=2025
+                 OR received_date LIKE '2025-%'
+              )
+        """)
+        migrated_2025 = int(cur.rowcount or 0)
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            returned_2025_key,
+            f"{migrated_2025} suivi(s) 2025 passé(s) de Terminé à Restitué",
+            now().isoformat(timespec="seconds")
+        ))
+
+    # V2.3.20 : normalisation légère des anciennes adresses client.
+    # Si address_street contient uniquement "24210 Ville" et que CP/Ville sont vides,
+    # on place ces valeurs dans les bons champs. Cela permet ensuite de les effacer
+    # réellement depuis Clients.
+    addr_fix_key = "v2320_split_legacy_postal_city_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (addr_fix_key,)).fetchone():
+        addr_rows = con.execute("""
+            SELECT id,address_street,postal_code,city
+            FROM clients
+            WHERE COALESCE(trim(address_street),'')<>''
+        """).fetchall()
+
+        addr_fixed = 0
+        for ar in addr_rows:
+            street = str(ar["address_street"] or "").strip()
+            postal = str(ar["postal_code"] or "").strip()
+            city = str(ar["city"] or "").strip()
+
+            m = re.fullmatch(r"(\d{5})\s+(.+)", street)
+            if m and not postal and not city:
+                new_postal = m.group(1).strip()
+                new_city = m.group(2).strip()
+                new_address = f"{new_postal} {new_city}".strip()
+                con.execute("""
+                    UPDATE clients
+                    SET address_street='',
+                        postal_code=?,
+                        city=?,
+                        address=?
+                    WHERE id=?
+                """, (new_postal, new_city, new_address, ar["id"]))
+                addr_fixed += 1
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            addr_fix_key,
+            f"{addr_fixed} adresse(s) normalisée(s)",
+            now().isoformat(timespec="seconds")
+        ))
+
+    # V2.3.31 : les dossiers WOPR n'utilisent plus les secondes.
+    dossier_key = "v2331_dossier_numbers_without_seconds_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (dossier_key,)).fetchone():
+        changed = 0
+        rows = con.execute("SELECT id,dossier_no FROM repairs ORDER BY id").fetchall()
+        occupied = {str(x["dossier_no"] or "") for x in rows}
+
+        for rr in rows:
+            old_no = str(rr["dossier_no"] or "").strip()
+            if len(old_no) != 14 or not old_no.isdigit():
+                continue
+
+            base_no = old_no[:12]
+            new_no = base_no
+            suffix = 2
+            while new_no in occupied and new_no != old_no:
+                new_no = f"{base_no}-{suffix}"
+                suffix += 1
+
+            if new_no != old_no:
+                con.execute(
+                    "UPDATE repairs SET dossier_no=? WHERE id=?",
+                    (new_no, rr["id"])
+                )
+                occupied.discard(old_no)
+                occupied.add(new_no)
+                changed += 1
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            dossier_key,
+            f"{changed} numéro(s) de dossier raccourci(s)",
+            now().isoformat(timespec="seconds")
+        ))
+
+    # V2.3.29 : nettoyage adresses + alias "Client de passage (X)".
+    fix_key = "v2329_addresses_and_passage_aliases_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (fix_key,)).fetchone():
+        cleaned_addresses = 0
+        merged_aliases = 0
+
+        # A. Si la rue est exactement "CP Ville", elle provient de l'ancien fallback.
+        for ar in con.execute("""
+            SELECT id,address_street,postal_code,city,address
+            FROM clients
+        """).fetchall():
+            street = " ".join(str(ar["address_street"] or "").split()).strip()
+            postal = " ".join(str(ar["postal_code"] or "").split()).strip()
+            city = " ".join(str(ar["city"] or "").split()).strip()
+            postal_city = " ".join(x for x in [postal, city] if x).strip()
+
+            if street and postal_city and street.casefold() == postal_city.casefold():
+                con.execute("""
+                    UPDATE clients
+                    SET address_street='',
+                        address=?,
+                        updated_at=?
+                    WHERE id=?
+                """, (
+                    postal_city,
+                    now().isoformat(timespec="seconds"),
+                    ar["id"]
+                ))
+                cleaned_addresses += 1
+                continue
+
+            raw_address = str(ar["address"] or "").replace("\r", "")
+            lines = [" ".join(x.split()).strip() for x in raw_address.split("\n") if x.strip()]
+            if len(lines) >= 2 and len({x.casefold() for x in lines}) == 1:
+                con.execute("""
+                    UPDATE clients
+                    SET address=?, updated_at=?
+                    WHERE id=?
+                """, (
+                    lines[0],
+                    now().isoformat(timespec="seconds"),
+                    ar["id"]
+                ))
+                cleaned_addresses += 1
+
+        # B. Fusionner "Client de passage (X)" vers la vraie fiche X.
+        client_rows = [dict(x) for x in con.execute(
+            "SELECT * FROM clients ORDER BY id"
+        ).fetchall()]
+
+        def norm_alias(value):
+            text = unicodedata.normalize("NFKD", str(value or ""))
+            text = "".join(ch for ch in text if not unicodedata.combining(ch))
+            text = text.casefold()
+            text = re.sub(r"[^a-z0-9]+", " ", text)
+            return re.sub(r"\s+", " ", text).strip()
+
+        for alias in client_rows:
+            alias_text = str(alias.get("last_name") or alias.get("name") or "").strip()
+            m = re.fullmatch(
+                r"\s*client(?:e)?\s+de\s+passage\s*\(([^)]+)\)\s*",
+                alias_text,
+                flags=re.I
+            )
+            if not m:
+                continue
+
+            wanted = norm_alias(m.group(1))
+            candidates = []
+            for candidate in client_rows:
+                if candidate["id"] == alias["id"]:
+                    continue
+
+                candidate_values = [
+                    candidate.get("last_name"),
+                    candidate.get("name"),
+                    " ".join(x for x in [
+                        str(candidate.get("first_name") or "").strip(),
+                        str(candidate.get("last_name") or "").strip()
+                    ] if x),
+                ]
+                if any(
+                    norm_alias(v) == wanted
+                    for v in candidate_values
+                    if str(v or "").strip()
+                ):
+                    candidates.append(candidate)
+
+            if len(candidates) != 1:
+                continue
+
+            master = candidates[0]
+            alias_email = str(alias.get("email") or "").strip().casefold()
+            master_email = str(master.get("email") or "").strip().casefold()
+            alias_phone = re.sub(r"\D+", "", str(alias.get("phone") or ""))
+            master_phone = re.sub(r"\D+", "", str(master.get("phone") or ""))
+
+            if alias_email and master_email and alias_email != master_email:
+                continue
+            if alias_phone and master_phone and alias_phone != master_phone:
+                continue
+
+            master_id = master["id"]
+            alias_id = alias["id"]
+
+            fields = (
+                "first_name", "last_name", "company", "phone", "email",
+                "address_street", "postal_code", "city", "notes"
+            )
+            updates = {}
+            for field in fields:
+                if (
+                    not str(master.get(field) or "").strip()
+                    and str(alias.get(field) or "").strip()
+                ):
+                    updates[field] = alias[field]
+                    master[field] = alias[field]
+
+            if updates:
+                first = str(master.get("first_name") or "").strip()
+                last = str(master.get("last_name") or "").strip()
+                name_after = compose_client_name(last, first) or str(master.get("name") or "").strip()
+
+                street_after = str(master.get("address_street") or "").strip()
+                postal_after = str(master.get("postal_code") or "").strip()
+                city_after = str(master.get("city") or "").strip()
+                address_after = "\n".join(
+                    x for x in [
+                        street_after,
+                        " ".join(x for x in [postal_after, city_after] if x).strip()
+                    ] if x
+                )
+
+                updates["name"] = name_after
+                updates["address"] = address_after
+                updates["google_sync_status"] = "À synchroniser"
+                updates["google_sync_error"] = ""
+                updates["updated_at"] = now().isoformat(timespec="seconds")
+
+                sets = ", ".join(f"{k}=?" for k in updates)
+                con.execute(
+                    f"UPDATE clients SET {sets} WHERE id=?",
+                    list(updates.values()) + [master_id]
+                )
+
+            con.execute(
+                "UPDATE repairs SET client_id=? WHERE client_id=?",
+                (master_id, alias_id)
+            )
+            con.execute(
+                "UPDATE quotes SET client_id=? WHERE client_id=?",
+                (master_id, alias_id)
+            )
+            con.execute("DELETE FROM clients WHERE id=?", (alias_id,))
+            merged_aliases += 1
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            fix_key,
+            f"{cleaned_addresses} adresse(s) nettoyée(s); {merged_aliases} alias fusionné(s)",
+            now().isoformat(timespec="seconds")
+        ))
+
+    # V2.3.9 : fusion de l'ancien champ "Travaux effectués"
+    # dans "Intervention / Tests / Validation".
+    merge_key = "merge_work_done_into_tests_validation_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (merge_key,)).fetchone():
+        merge_rows = con.execute("""
+            SELECT id,work_done,tests_validation
+            FROM repairs
+            WHERE COALESCE(trim(work_done),'')<>''
+        """).fetchall()
+
+        for merge_row in merge_rows:
+            work = str(merge_row["work_done"] or "").strip()
+            validation = str(merge_row["tests_validation"] or "").strip()
+
+            if work and validation:
+                # Intervention d'abord, puis tests/validation existants.
+                if work not in validation:
+                    merged = work + "\n" + validation
+                else:
+                    merged = validation
+            elif work:
+                merged = work
+            else:
+                merged = validation
+
+            con.execute("""
+                UPDATE repairs
+                SET tests_validation=?, work_done=''
+                WHERE id=?
+            """, (merged, merge_row["id"]))
+
+        con.execute("""
+            INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+            VALUES(?,?,?)
+        """, (
+            merge_key,
+            f"{len(merge_rows)} dossier(s) fusionné(s)",
+            now().isoformat(timespec="seconds")
+        ))
+
+    # V2.3.10 : mode de paiement structuré.
+    # Le texte historique payment_method reste intact.
+    payment_mode_rows = con.execute("""
+        SELECT id,payment_method
+        FROM repairs
+        WHERE COALESCE(trim(payment_mode),'')=''
+          AND COALESCE(trim(payment_method),'')<>''
+    """).fetchall()
+
+    for payment_mode_row in payment_mode_rows:
+        detected_mode = infer_payment_mode(payment_mode_row["payment_method"])
+        if detected_mode:
+            con.execute(
+                "UPDATE repairs SET payment_mode=? WHERE id=?",
+                (detected_mode, payment_mode_row["id"])
+            )
+
+    # Les dossiers déjà créés dans WOPR doivent aussi apparaître dans le Suivi mensuel.
+    con.execute("""
+        UPDATE repairs
+        SET followup_year = CAST(substr(received_date,1,4) AS INTEGER),
+            followup_month = CAST(substr(received_date,6,2) AS INTEGER)
+        WHERE followup_year IS NULL
+          AND received_date GLOB '????-??-??'
+    """)
+
+    # Si un ancien dossier WOPR est déjà payé, il alimente automatiquement le CA.
+    con.execute("""
+        UPDATE repairs
+        SET accounting_year = CAST(substr(COALESCE(finished_at,received_date),1,4) AS INTEGER),
+            accounting_month = CAST(substr(COALESCE(finished_at,received_date),6,2) AS INTEGER),
+            accounting_service_amount = COALESCE(service_amount,0),
+            accounting_goods_amount = COALESCE(goods_amount,0),
+            accounting_status = CASE
+                WHEN substr(COALESCE(finished_at,received_date),1,7) <> substr(received_date,1,7)
+                    THEN 'yellow'
+                ELSE 'normal'
+            END
+        WHERE COALESCE(legacy_imported,0)=0
+          AND COALESCE(paid,0)=1
+          AND (COALESCE(service_amount,0)<>0 OR COALESCE(goods_amount,0)<>0)
+          AND accounting_year IS NULL
+    """)
+
+    # Facture créée mais non réglée : rouge et exclue du CA.
+    con.execute("""
+        UPDATE repairs
+        SET accounting_status='red',
+            accounting_year=NULL,
+            accounting_month=NULL,
+            accounting_service_amount=0,
+            accounting_goods_amount=0
+        WHERE COALESCE(legacy_imported,0)=0
+          AND COALESCE(paid,0)=0
+          AND COALESCE(invoice_no,'')<>''
+          AND COALESCE(accounting_status,'normal')='normal'
+    """)
+
+    # Import historique Achats/Ventes 2025 + 2026 (une seule fois, anti-doublons).
+    seed_legacy_ledger_entries(con)
+    con.commit()
+    con.close()
+
+PAYMENT_MODES = ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ", "MIXTE", "MULTI")
+
+
+def normalize_payment_mode(value):
+    raw = str(value or "").strip().upper()
+    aliases = {
+        "ESP": "ESP",
+        "ESPÈCES": "ESP",
+        "ESPECES": "ESP",
+        "CASH": "ESP",
+        "CB": "CB",
+        "CARTE": "CB",
+        "CARTE BANCAIRE": "CB",
+        "VIR": "VIR",
+        "VIREMENT": "VIR",
+        "PAY": "PAY",
+        "PAYPAL": "PAY",
+        "BTC": "BTC",
+        "BITCOIN": "BTC",
+        "CHQ": "CHQ",
+        "CHÈQUE": "CHQ",
+        "CHEQUE": "CHQ",
+        "MIXTE": "MIXTE",
+        "MIXED": "MIXTE",
+    }
+    return aliases.get(raw, raw if raw in PAYMENT_MODES else "")
+
+
+PAYMENT_MODE_LABELS = {
+    "ESP": "Espèces", "CB": "CB", "VIR": "Virement",
+    "PAY": "PayPal", "BTC": "Bitcoin", "CHQ": "Chèque",
+}
+
+
+def payment_split_from_form(total_expected=None):
+    """Lit un paiement mixte depuis le formulaire et valide sa ventilation."""
+    parts = []
+    for mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ"):
+        raw = request.form.get(f"payment_{mode}", "").strip()
+        if not raw:
+            continue
+        try:
+            amount = parse_money_input(raw)
+        except Exception:
+            return None, f"Montant {PAYMENT_MODE_LABELS[mode]} invalide."
+        if amount < 0:
+            return None, "Un montant de règlement ne peut pas être négatif."
+        if amount > 0:
+            parts.append((mode, round(float(amount), 2)))
+
+    if len(parts) < 2:
+        return None, "Un paiement mixte doit contenir au moins deux modes de règlement."
+
+    total_split = round(sum(amount for _, amount in parts), 2)
+    if total_expected is not None and abs(total_split - round(float(total_expected), 2)) > 0.009:
+        return None, (
+            f"La ventilation du paiement fait {total_split:.2f} € alors que la facture fait "
+            f"{float(total_expected):.2f} €."
+        )
+    return parts, None
+
+
+def payment_split_text(parts):
+    return " + ".join(
+        f"{amount:.2f} € {mode}".replace(".", ",")
+        for mode, amount in (parts or [])
+    )
+
+
+def payment_split_json(parts):
+    return json.dumps({mode: amount for mode, amount in (parts or [])}, ensure_ascii=False)
+
+
+def payment_split_values(detail, method_text=""):
+    """Retourne une ventilation exploitable par les formulaires, sans modifier la DB."""
+    values = {mode: "" for mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ")}
+    raw = str(detail or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for mode in values:
+                    if mode in data and data[mode] not in (None, ""):
+                        amount = float(data[mode])
+                        if amount > 0:
+                            values[mode] = f"{amount:.2f}"
+                return values
+        except Exception:
+            pass
+
+    # Compatibilité : anciennes chaînes lisibles du type "50,00 € ESP + 79,00 € CB".
+    legacy = str(method_text or "")
+    for mode in values:
+        m = re.search(rf"([0-9]+(?:[.,][0-9]{{1,2}})?)\s*€?\s*{mode}\b", legacy, re.I)
+        if m:
+            try:
+                amount = float(m.group(1).replace(",", "."))
+                if amount > 0:
+                    values[mode] = f"{amount:.2f}"
+            except Exception:
+                pass
+    return values
+
+
+
+def payment_breakdown_info(payment_mode, payment_detail, payment_method):
+    """
+    Normalize current and historical mixed-payment data.
+    Historical ODS rows may contain several modes only in payment_method text,
+    with payment_mode left blank.
+    """
+    mode = normalize_payment_mode(payment_mode or "")
+    values = payment_split_values(payment_detail or "", payment_method or "")
+
+    numeric = {}
+    for key, value in values.items():
+        try:
+            amount = float(value or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            numeric[key] = round(amount, 2)
+
+    inferred_mixed = len(numeric) >= 2
+    is_mixed = mode == "MIXTE" or inferred_mixed
+    cb_part = float(numeric.get("CB") or 0)
+
+    return {
+        "mode": "MIXTE" if is_mixed else mode,
+        "is_mixed": is_mixed,
+        "parts": numeric,
+        "cb_part": round(cb_part, 2),
+    }
+
+
+def payment_data_from_form(total_expected=None, fallback_mode="", fallback_method="", fallback_detail=""):
+    """Retourne (mode, texte lisible, détail JSON, erreur)."""
+    mode = normalize_payment_mode(request.form.get("payment_mode", ""))
+    if mode == "MIXTE":
+        parts, error = payment_split_from_form(total_expected)
+        if error:
+            return "", "", "", error
+        return "MIXTE", payment_split_text(parts), payment_split_json(parts), None
+    if mode:
+        return mode, mode, "", None
+    return (
+        normalize_payment_mode(fallback_mode),
+        str(fallback_method or ""),
+        str(fallback_detail or ""),
+        None,
+    )
+
+
+def payment_data_from_prefixed_form(prefix, total_expected=None):
+    """Même lecture qu'un paiement normal, avec des champs préfixés."""
+    raw_mode = str(request.form.get(f"{prefix}payment_mode", "") or "").strip().upper()
+    # MULTI décrit un cumul d'anciens règlements : il ne doit pas déclencher
+    # la validation d'une ventilation MIXTE à ressaisir.
+    if raw_mode == "MULTI":
+        return "MULTI", "MULTI", "", None
+    mode = normalize_payment_mode(raw_mode)
+    if mode == "MIXTE":
+        parts = []
+        for part_mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ"):
+            raw = request.form.get(f"{prefix}payment_{part_mode}", "").strip()
+            if not raw:
+                continue
+            try:
+                amount = parse_money_input(raw)
+            except Exception:
+                return "", "", "", f"Montant {PAYMENT_MODE_LABELS[part_mode]} invalide."
+            if amount < 0:
+                return "", "", "", "Un montant de règlement ne peut pas être négatif."
+            if amount > 0:
+                parts.append((part_mode, round(float(amount), 2)))
+        if len(parts) < 2:
+            return "", "", "", "Un paiement mixte doit contenir au moins deux modes de règlement."
+        total_split = round(sum(amount for _, amount in parts), 2)
+        if total_expected is not None and abs(total_split - round(float(total_expected), 2)) > 0.009:
+            return "", "", "", f"La ventilation du paiement fait {total_split:.2f} € alors que le montant attendu est {float(total_expected):.2f} €."
+        return "MIXTE", payment_split_text(parts), payment_split_json(parts), None
+    if mode:
+        return mode, mode, "", None
+    return "", "", "", None
+
+
+def allocate_payment_amount(amount, service_total, goods_total):
+    """Répartit un encaissement entre prestation et marchandise."""
+    amount = max(0.0, round(float(amount or 0), 2))
+    service_total = max(0.0, float(service_total or 0))
+    goods_total = max(0.0, float(goods_total or 0))
+    total = service_total + goods_total
+    if total <= 0 or amount <= 0:
+        return 0.0, 0.0
+    service = round(amount * service_total / total, 2)
+    return service, round(amount - service, 2)
+
+
+def payment_summary_for_repair(con, repair_id, invoice_total=None):
+    """Retourne l'acompte, le solde encaissé et le reste dû d'un dossier."""
+    row = con.execute("""
+        SELECT deposit_amount, deposit_payment_mode, deposit_payment_detail,
+               deposit_date, paid, service_amount, goods_amount
+        FROM repairs WHERE id=?
+    """, (repair_id,)).fetchone()
+    if not row:
+        return {
+            "invoice_total": 0.0, "deposit_amount": 0.0,
+            "balance_amount": 0.0, "amount_paid": 0.0,
+            "remaining_amount": 0.0, "deposit_mode": "", "deposit_date": "",
+        }
+    total = float(invoice_total if invoice_total is not None else 0.0)
+    if total <= 0:
+        total = float(row["service_amount"] or 0) + float(row["goods_amount"] or 0)
+    deposit = max(0.0, min(total, float(row["deposit_amount"] or 0)))
+    balance = max(0.0, total - deposit)
+    final_paid = bool(row["paid"])
+    amount_paid = total if final_paid else deposit
+    return {
+        "invoice_total": round(total, 2),
+        "deposit_amount": round(deposit, 2),
+        "balance_amount": round(balance, 2),
+        "amount_paid": round(amount_paid, 2),
+        "remaining_amount": round(max(0.0, total - amount_paid), 2),
+        "deposit_mode": str(row["deposit_payment_mode"] or ""),
+        "deposit_date": str(row["deposit_date"] or ""),
+        "deposit_detail": str(row["deposit_payment_detail"] or ""),
+    }
+
+
+def invoice_payment_rows(con, repair_id):
+    """Retourne l'historique des règlements fractionnés d'une facture."""
+    rows = [dict(row) for row in con.execute("""
+        SELECT id, amount, payment_date, payment_mode, payment_detail, created_at
+        FROM invoice_payments
+        WHERE repair_id=?
+        ORDER BY payment_date ASC, id ASC
+    """, (repair_id,)).fetchall()]
+    # Compatibilité : avant l'historique, le premier acompte était stocké
+    # uniquement comme montant cumulé dans repairs.deposit_amount.
+    legacy = con.execute("""
+        SELECT deposit_amount, deposit_date, deposit_payment_mode,
+               deposit_payment_detail
+        FROM repairs WHERE id=?
+    """, (repair_id,)).fetchone()
+    legacy_amount = float(legacy["deposit_amount"] or 0) if legacy else 0.0
+    recorded_amount = round(sum(float(row.get("amount") or 0) for row in rows), 2)
+    missing_amount = round(legacy_amount - recorded_amount, 2)
+    if missing_amount > 0.009:
+        mode = str(legacy["deposit_payment_mode"] or "").strip()
+        if mode not in PAYMENT_MODES or mode == "MULTI":
+            detail = str(legacy["deposit_payment_detail"] or "")
+            mode = detail if detail in PAYMENT_MODES else "—"
+        legacy_date = str(legacy["deposit_date"] or "")[:10] or now().date().isoformat()
+        legacy_detail = "Acompte existant avant l'historique"
+        con.execute("""
+            INSERT INTO invoice_payments(
+                repair_id, amount, payment_date, payment_mode, payment_detail, created_at
+            ) VALUES(?,?,?,?,?,?)
+        """, (repair_id, missing_amount, legacy_date, mode, legacy_detail,
+              now().isoformat(timespec="seconds")))
+        con.commit()
+        rows = [dict(row) for row in con.execute("""
+            SELECT id, amount, payment_date, payment_mode, payment_detail, created_at
+            FROM invoice_payments WHERE repair_id=? ORDER BY payment_date ASC, id ASC
+        """, (repair_id,)).fetchall()]
+    return rows
+
+
+def infer_payment_mode(text):
+    """
+    Détecte un mode unique dans les anciens textes ODS.
+    Si plusieurs modes sont présents (paiement mixte), retourne '' pour ne pas inventer.
+    """
+    value = str(text or "").upper()
+    found = []
+
+    patterns = (
+        ("ESP", r"\bESP(?:ÈCES|ECES)?\b"),
+        ("CB", r"\bCB\b|CARTE BANCAIRE"),
+        ("VIR", r"\bVIR\b|VIREMENT"),
+        ("PAY", r"\bPAY\b|PAYPAL"),
+        ("BTC", r"\bBTC\b|BITCOIN"),
+        ("CHQ", r"\bCHQ\b|CHÈQUE|CHEQUE"),
+    )
+
+    for mode, pattern in patterns:
+        if re.search(pattern, value, flags=re.I):
+            found.append(mode)
+
+    unique = list(dict.fromkeys(found))
+    return unique[0] if len(unique) == 1 else ""
+
+
+def extract_payment_date(text, fallback_year=None):
+    """
+    Extrait une date d'encaissement depuis les anciens textes :
+    '69€ CB le 12/08', 'ESP 22/04/25', 'VIR le 20/04/2026', etc.
+    Retourne YYYY-MM-DD ou ''.
+    """
+    value = str(text or "")
+    matches = re.findall(r"(?<!\d)(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?(?!\d)", value)
+    if not matches:
+        return ""
+
+    # La dernière date du texte est généralement celle du règlement.
+    day, month, year = matches[-1]
+    try:
+        day = int(day)
+        month = int(month)
+        if year:
+            year = int(year)
+            if year < 100:
+                year += 2000
+        elif fallback_year:
+            year = int(fallback_year)
+        else:
+            year = now().year
+
+        d = datetime(year, month, day)
+        return d.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def invoice_no_date(invoice_no):
+    """Extrait la date JJMMYYYY depuis un numéro de facture historique."""
+    digits = re.sub(r"\D", "", str(invoice_no or ""))
+    if len(digits) < 8:
+        return ""
+    try:
+        return datetime.strptime(digits[:8], "%d%m%Y").strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def resolve_accounting_date(payment_text, invoice_no, received_date,
+                            accounting_year=None, accounting_month=None,
+                            paid=False):
+    """
+    Reconstruit la date d'encaissement historique.
+    Le mois comptable existant est prioritaire et n'est jamais modifié ici.
+    """
+    year = int(accounting_year) if accounting_year else None
+    month = int(accounting_month) if accounting_month else None
+
+    # 1. Date explicite dans le texte de paiement.
+    explicit = extract_payment_date(
+        payment_text,
+        fallback_year=year or (str(received_date or "")[:4] or now().year)
+    )
+    if explicit:
+        try:
+            d = datetime.strptime(explicit, "%Y-%m-%d")
+            if not year or not month or (d.year, d.month) == (year, month):
+                return explicit
+        except Exception:
+            pass
+
+    # 2. Si un mois comptable existe, la date du n° de facture est acceptable
+    #    uniquement si elle tombe dans ce même mois.
+    inv_date = invoice_no_date(invoice_no)
+    if inv_date:
+        try:
+            d = datetime.strptime(inv_date, "%Y-%m-%d")
+            if year and month and (d.year, d.month) == (year, month):
+                return inv_date
+        except Exception:
+            pass
+
+    # 3. Date de la ligne de Suivi, si elle est dans le mois comptable.
+    try:
+        rd = datetime.strptime(str(received_date or "")[:10], "%Y-%m-%d")
+        if year and month and (rd.year, rd.month) == (year, month):
+            return rd.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # 4. Ancienne facture marquée payée mais sans période comptable structurée :
+    #    on utilise la date portée par le numéro de facture comme meilleure trace
+    #    historique disponible. Cela ne change PAS CA/Déclarations.
+    if paid and inv_date:
+        return inv_date
+
+    return ""
+
+
+def payment_modes_from_text(text):
+    """Modes reconnus dans les vieux textes, y compris paiement mixte."""
+    value = str(text or "").upper()
+    found = []
+    patterns = (
+        ("ESP", r"\bESP(?:ÈCES|ECES)?\b"),
+        ("CB", r"\bCB\b|CARTE BANCAIRE"),
+        ("VIR", r"\bVIR\b|VIREMENT"),
+        ("PAY", r"\bPAY\b|PAYPAL"),
+        ("BTC", r"\bBTC\b|BITCOIN"),
+        ("CHQ", r"\bCHQ\b|CHÈQUE|CHEQUE"),
+    )
+    for mode, pattern in patterns:
+        if re.search(pattern, value, flags=re.I) and mode not in found:
+            found.append(mode)
+    return found
+
+
+def payment_amount_from_text(text):
+    """
+    Extrait au mieux un total d'un ancien champ paiement.
+    Exemples :
+      122,00 € -> 122
+      110€ ESP 12€ CB -> 122
+      88.80€ (29€+59.80€) -> 88.80 (évite le double comptage)
+      69+40 -> 109
+    """
+    value = str(text or "").replace("\u202f", " ").replace("\xa0", " ")
+    # Les dates ne doivent jamais devenir des montants.
+    clean = re.sub(r"(?<!\d)(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|\d{1,2}\.\d{1,2}\.\d{2,4})(?!\d)", " ", value)
+
+    money_tokens = re.findall(r"(\d[\d ]*(?:[,.]\d{1,2})?)\s*€", clean)
+    amounts = []
+    for token in money_tokens:
+        try:
+            amounts.append(float(token.replace(" ", "").replace(",", ".")))
+        except Exception:
+            pass
+
+    if amounts:
+        if len(amounts) == 1:
+            return amounts[0]
+        first = amounts[0]
+        rest = sum(amounts[1:])
+        # Premier nombre = total, détails monétaires entre parenthèses ensuite.
+        if abs(first - rest) < 0.011:
+            return first
+        # Sinon il s'agit typiquement d'un paiement mixte 110€ + 12€.
+        return sum(amounts)
+
+    # Anciens textes sans symbole € : 69+40, 89 + 3, etc.
+    plus_match = re.search(r"(\d+(?:[,.]\d{1,2})?(?:\s*\+\s*\d+(?:[,.]\d{1,2})?)+)", clean)
+    if plus_match:
+        vals = re.findall(r"\d+(?:[,.]\d{1,2})?", plus_match.group(1))
+        try:
+            return sum(float(v.replace(",", ".")) for v in vals)
+        except Exception:
+            pass
+
+    return 0.0
+
+
+def normalize_history_name(value):
+    return normalize_global_search(str(value or "").replace("-", " ").replace("/", " "))
+
+
+
+
+def normalize_client_filename_name(value):
+    """Nom client canonique pour retrouver les PDF historiques sans civilité."""
+    key = normalize_history_name(value)
+    if not key:
+        return ""
+    titles = {"m", "mr", "mme", "mlle", "monsieur", "madame", "mademoiselle"}
+    parts = [part for part in key.split() if part not in titles]
+    return " ".join(parts).strip()
+
+
+def canonical_client_invoice_no(value):
+    """Normalise les anciens numéros de facture client.
+
+    Cas connus de l'historique :
+    - perte du zéro initial pendant l'import ODS ;
+    - typo ponctuelle explicitement identifiée, sans heuristique risquée.
+    """
+    raw = str(value or "").strip()
+
+    # Corrections historiques sûres, validées par le PDF réellement archivé.
+    known_invoice_no_fixes = {
+        "1901920261400": "190120261400",  # Nordier Christiane
+    }
+    if raw in known_invoice_no_fixes:
+        return known_invoice_no_fixes[raw]
+
+    if raw.isdigit() and len(raw) == 11:
+        return raw.zfill(12)
+    return raw
+
+
+def _invoice_pdf_stem_without_language_suffix(stem):
+    """Retire uniquement un suffixe de langue WOPR connu (_FR, _EN, _UA...)."""
+    value = str(stem or "")
+    suffixes = [str(info[0]) for info in PDF_LANGUAGES.values() if info and info[0]]
+    if suffixes:
+        pattern = r"_(?:" + "|".join(re.escape(x) for x in suffixes) + r")$"
+        value = re.sub(pattern, "", value, flags=re.I)
+    return value
+
+
+def _invoice_no_from_pdf_path(path):
+    """Extrait un n° JJMMYYYYHHMM en fin de nom, avant éventuel suffixe langue."""
+    stem = _invoice_pdf_stem_without_language_suffix(Path(path).stem)
+    m = re.search(r"(?<!\d)(\d{12})$", stem)
+    if not m:
+        return ""
+    candidate = canonical_client_invoice_no(m.group(1))
+    return candidate if re.fullmatch(r"\d{12}", candidate or "") else ""
+
+
+def _find_invoice_pdf_by_client_date(client_name, entry_date, invoice_files=None):
+    """
+    Retrouve prudemment un PDF quand la vieille ligne n'a pas de n° exploitable.
+    On exige la date exacte portée par le n° du PDF et une correspondance de nom.
+    L'ordre prénom/nom dans le fichier n'a pas d'importance.
+    """
+    if not FACTURES_ROOT.exists():
+        return None, ""
+
+    target_date = str(entry_date or "")[:10]
+    try:
+        dt = datetime.strptime(target_date, "%Y-%m-%d")
+        expected_ddmmyyyy = dt.strftime("%d%m%Y")
+    except Exception:
+        return None, ""
+
+    client_tokens = [
+        t for t in normalize_history_name(client_name).split()
+        if len(t) >= 2
+    ]
+    if not client_tokens:
+        return None, ""
+
+    pdf_files = invoice_files if invoice_files is not None else FACTURES_ROOT.rglob("*.pdf")
+    matches = []
+
+    for p in pdf_files:
+        p = Path(p)
+        if "fournisseurs" in {part.casefold() for part in p.parts}:
+            continue
+
+        invoice_no = _invoice_no_from_pdf_path(p)
+        if not invoice_no or not invoice_no.startswith(expected_ddmmyyyy):
+            continue
+
+        clean_stem = _invoice_pdf_stem_without_language_suffix(p.stem)
+        name_part = re.sub(r"\d{12}$", "", normalize_history_name(clean_stem)).strip()
+        name_tokens = set(name_part.split())
+        matched = sum(1 for t in client_tokens if t in name_tokens)
+
+        required = 2 if len(client_tokens) >= 2 else 1
+        if matched < required:
+            continue
+
+        score = matched * 100
+        matches.append((score, p, invoice_no))
+
+    if not matches:
+        return None, ""
+
+    matches.sort(key=lambda x: (-x[0], len(x[1].name), str(x[1]).casefold()))
+    best_score = matches[0][0]
+    best = [x for x in matches if x[0] == best_score]
+    if len(best) != 1:
+        return None, ""
+
+    return best[0][1], best[0][2]
+
+
+def find_client_invoice_pdf(invoice_no, client_name, invoice_files=None):
+    """
+    Retrouve le PDF client réellement classé dans Factures.
+
+    V2.3.237 :
+    - corrige les numéros historiques ayant perdu leur zéro initial ;
+    - exige que le numéro soit en FIN de nom de fichier, donc
+      40820261400 ne peut plus matcher Pinson_140820261400.pdf ;
+    - si plusieurs clients partagent le même numéro, privilégie le nom/surnom
+      présent dans le fichier (ex. Lacombe_240820261100.pdf).
+    """
+    if not FACTURES_ROOT.exists():
+        return None
+
+    needle = canonical_client_invoice_no(invoice_no)
+    if not needle:
+        return None
+
+    invoice_key = _match_key(needle)
+    if not invoice_key:
+        return None
+
+    # Si l'appelant a déjà scanné Factures (ex. audit documents), on
+    # réutilise directement cette liste au lieu de refaire un rglob complet.
+    pdf_files = invoice_files
+    if pdf_files is None:
+        pdf_files = FACTURES_ROOT.rglob("*.pdf")
+
+    candidates = []
+    for p in pdf_files:
+        if "fournisseurs" in {part.casefold() for part in p.parts}:
+            continue
+        clean_stem = _invoice_pdf_stem_without_language_suffix(p.stem)
+        stem_key = _match_key(clean_stem)
+        # Le numéro de facture doit être le suffixe du nom, avant éventuel
+        # suffixe langue (_FR, _EN...), pas une simple sous-chaîne.
+        if stem_key.endswith(invoice_key):
+            candidates.append(p)
+
+    if not candidates:
+        return None
+
+    client_key = normalize_client_filename_name(client_name)
+    client_tokens = [
+        t for t in normalize_history_name(client_name).split()
+        if len(t) >= 2
+    ]
+
+    def score(path):
+        clean_stem = _invoice_pdf_stem_without_language_suffix(path.stem)
+        stem_key = normalize_history_name(clean_stem)
+        stem_compact = _match_key(clean_stem)
+        points = 0
+
+        if stem_compact.endswith(invoice_key):
+            points += 100
+
+        # Nom complet quand il est présent.
+        if client_key and client_key in stem_key:
+            points += 120
+
+        # Les anciens PDF sont souvent nommés uniquement avec le nom de famille.
+        # On donne donc un fort bonus à chaque token du client présent avant le n°.
+        name_part = stem_key
+        needle_norm = normalize_history_name(needle)
+        if needle_norm and name_part.endswith(needle_norm):
+            name_part = name_part[:-len(needle_norm)].strip()
+
+        matched_tokens = sum(1 for t in client_tokens if t in name_part.split())
+        points += matched_tokens * 80
+
+        # Bonus supplémentaire si le premier/dernier token du nom client apparaît.
+        if client_tokens:
+            if client_tokens[0] in name_part.split():
+                points += 30
+            if client_tokens[-1] in name_part.split():
+                points += 40
+
+        first = stem_key.split()[0] if stem_key.split() else ""
+        if first in {"m", "mr", "mme", "mlle", "monsieur", "madame", "mademoiselle"}:
+            points -= 35
+
+        return (points, -len(path.name), str(path).casefold())
+
+    return max(candidates, key=score)
+
+
+def seed_legacy_followups(con):
+    """
+    Importe les deux onglets Suivi-Rép 2025 et 2026 du WOPR.ods.
+
+    - 296 lignes historiques.
+    - Conserve les mois d'affichage du classeur.
+    - Conserve la nomenclature jaune / rouge.
+    - Conserve séparément les montants affichés et les montants réellement
+      comptabilisés par les formules LibreOffice.
+    """
+    migration_key = "legacy_followups_2025_2026_from_ods_v1"
+    if con.execute("SELECT 1 FROM app_meta WHERE key=?", (migration_key,)).fetchone():
+        return 0
+
+    stamp = datetime.now().isoformat(timespec="seconds")
+    inserted = 0
+
+    # Index clients tolérant accents, tirets et ponctuation.
+    clients = con.execute("SELECT id,name FROM clients").fetchall()
+    client_index = {}
+    for c in clients:
+        key = normalize_history_name(c["name"])
+        if key and key not in client_index:
+            client_index[key] = c["id"]
+
+    for item in LEGACY_FOLLOWUPS:
+        exists = con.execute("""
+            SELECT id FROM repairs
+            WHERE legacy_source_year=? AND legacy_source_row=?
+            LIMIT 1
+        """, (item["legacy_year"], item["legacy_row_no"])).fetchone()
+        if exists:
+            continue
+
+        client_name = item.get("client_name", "").strip() or "Client historique"
+        key = normalize_history_name(client_name)
+        client_id = client_index.get(key)
+
+        if not client_id:
+            created = item.get("received_date", "") + "T12:00:00"
+            cur = con.execute("""
+                INSERT INTO clients(
+                    name,address,address_street,postal_code,city,phone,email,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+            """, (
+                client_name, "", "", "", "", "", "",
+                created, created
+            ))
+            client_id = cur.lastrowid
+            if key:
+                client_index[key] = client_id
+
+        dossier_no = f"HIST-{item['legacy_year']}-{int(item['legacy_row_no']):04d}"
+        # Rare collision possible si une ancienne tentative existe : on la réutilise.
+        existing_dossier = con.execute(
+            "SELECT id FROM repairs WHERE dossier_no=?",
+            (dossier_no,)
+        ).fetchone()
+        if existing_dossier:
+            continue
+
+        created = item.get("received_date", "") + "T12:00:00"
+        signature_token = "hist-" + secrets.token_urlsafe(15)
+
+        con.execute("""
+            INSERT INTO repairs(
+                dossier_no, client_id, created_at, received_date,
+                device_type, brand_model, serial_no, system_password,
+                accessories, device_state, problem, diagnosis, work_done,
+                tests_validation, remarks, status, signature_token,
+                invoice_no, service_amount, goods_amount,
+                payment_method, payment_mode, paid, sent_via,
+                service_description, goods_description,
+                legacy_call_note, legacy_invoice_text,
+                legacy_source_year, legacy_source_row, legacy_imported,
+                followup_year, followup_month,
+                accounting_year, accounting_month, accounting_date, accounting_status,
+                accounting_service_amount, accounting_goods_amount
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            dossier_no,
+            client_id,
+            created,
+            item.get("received_date",""),
+            "", "", "", "", "", "",
+            item.get("problem",""),
+            "", "", "",
+            item.get("remarks",""),
+            "Terminé",
+            signature_token,
+            item.get("invoice_no",""),
+            float(item.get("service_amount",0) or 0),
+            float(item.get("goods_amount",0) or 0),
+            item.get("payment_method",""),
+            infer_payment_mode(item.get("payment_method","")),
+            int(item.get("paid",0) or 0),
+            item.get("sent_via",""),
+            item.get("problem",""),
+            "",
+            item.get("call_note",""),
+            item.get("legacy_invoice_text",""),
+            int(item.get("legacy_year")),
+            int(item.get("legacy_row_no")),
+            1,
+            int(item.get("followup_year")),
+            int(item.get("followup_month")),
+            item.get("accounting_year"),
+            item.get("accounting_month"),
+            resolve_accounting_date(
+                item.get("payment_method",""),
+                item.get("invoice_no",""),
+                item.get("received_date",""),
+                item.get("accounting_year"),
+                item.get("accounting_month"),
+                bool(item.get("paid",0))
+            ),
+            item.get("accounting_status","normal"),
+            float(item.get("accounting_service_amount",0) or 0),
+            float(item.get("accounting_goods_amount",0) or 0),
+        ))
+        inserted += 1
+
+    con.execute("""
+        INSERT OR REPLACE INTO app_meta(key,value,updated_at)
+        VALUES(?,?,?)
+    """, (
+        migration_key,
+        f"{inserted}/{len(LEGACY_FOLLOWUPS)} suivis ajoutés",
+        stamp
+    ))
+    return inserted
+
+
+def seed_legacy_ledger_entries(con):
+    """
+    Importe une seule fois les lignes historiques Achats/Ventes 2025 + 2026
+    extraites du classeur WOPR.ods.
+
+    - N'écrase aucune ligne existante.
+    - Évite les doublons exacts si quelques lignes ont déjà été saisies à la main.
+    - Une fois la migration faite, une suppression volontaire ne sera pas recréée.
+    """
+    migration_key = "legacy_ledger_2025_2026_from_ods_v2_seedfix"
+
+    done = con.execute(
+        "SELECT value FROM app_meta WHERE key=?",
+        (migration_key,)
+    ).fetchone()
+    if done:
+        return 0
+
+    inserted = 0
+    imported_at = datetime.now().isoformat(timespec="seconds")
+
+    for item in LEGACY_LEDGER_ENTRIES:
+        existing = con.execute("""
+            SELECT id
+            FROM ledger_entries
+            WHERE operation=?
+              AND COALESCE(party,'')=?
+              AND entry_date=?
+              AND COALESCE(description,'')=?
+              AND ABS(COALESCE(amount_ttc,0) - ?) < 0.001
+              AND COALESCE(invoice_no,'')=?
+            LIMIT 1
+        """, (
+            item["operation"],
+            item.get("party", ""),
+            item["entry_date"],
+            item.get("description", ""),
+            float(item.get("amount_ttc", 0)),
+            item.get("invoice_no", ""),
+        )).fetchone()
+
+        if existing:
+            continue
+
+        con.execute("""
+            INSERT INTO ledger_entries(
+                operation, party, entry_date, description, amount_ttc,
+                payment_type, invoice_no, remarks, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+        """, (
+            item["operation"],
+            item.get("party", ""),
+            item["entry_date"],
+            item.get("description", ""),
+            float(item.get("amount_ttc", 0)),
+            item.get("payment_type", ""),
+            item.get("invoice_no", ""),
+            item.get("remarks", ""),
+            imported_at,
+            imported_at,
+        ))
+        inserted += 1
+
+    con.execute("""
+        INSERT OR REPLACE INTO app_meta(key, value, updated_at)
+        VALUES(?,?,?)
+    """, (
+        migration_key,
+        f"{inserted}/{len(LEGACY_LEDGER_ENTRIES)} lignes ajoutées",
+        imported_at,
+    ))
+    return inserted
+
+
+def seed_legacy_management_data(con):
+    """Importe une seule fois Antivirus + devis historique du classeur ODS."""
+    stamp = datetime.now().isoformat(timespec="seconds")
+
+    av_key = "legacy_antivirus_from_ods_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (av_key,)).fetchone():
+        inserted = 0
+        for item in LEGACY_ANTIVIRUS_ENTRIES:
+            duplicate = con.execute("""
+                SELECT id FROM antivirus_entries
+                WHERE client_name=?
+                  AND COALESCE(setup_date,'')=?
+                  AND COALESCE(antivirus_name,'')=?
+                  AND COALESCE(expiration_date,'')=?
+                  AND COALESCE(invoice_no,'')=?
+                LIMIT 1
+            """, (
+                item.get("client_name",""),
+                item.get("setup_date",""),
+                item.get("antivirus_name",""),
+                item.get("expiration_date",""),
+                item.get("invoice_no",""),
+            )).fetchone()
+            if duplicate:
+                continue
+            con.execute("""
+                INSERT INTO antivirus_entries(
+                    client_name, setup_date, antivirus_name, expiration_date,
+                    invoice_no, info, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+            """, (
+                item.get("client_name",""),
+                item.get("setup_date",""),
+                item.get("antivirus_name",""),
+                item.get("expiration_date",""),
+                item.get("invoice_no",""),
+                item.get("info",""),
+                stamp, stamp
+            ))
+            inserted += 1
+        con.execute(
+            "INSERT OR REPLACE INTO app_meta(key,value,updated_at) VALUES(?,?,?)",
+            (av_key, f"{inserted}/{len(LEGACY_ANTIVIRUS_ENTRIES)} antivirus ajoutés", stamp)
+        )
+
+    quote_key = "legacy_quote_300620261500_from_ods_v1"
+    if not con.execute("SELECT 1 FROM app_meta WHERE key=?", (quote_key,)).fetchone():
+        quote = LEGACY_QUOTE
+        existing = con.execute(
+            "SELECT id FROM quotes WHERE quote_no=?",
+            (quote["quote_no"],)
+        ).fetchone()
+
+        if existing:
+            quote_id = existing["id"]
+        else:
+            cur = con.execute("""
+                INSERT INTO quotes(
+                    quote_no, quote_date, client_name, client_address_street,
+                    client_postal_code, client_city, contact_name, status,
+                    notes, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                quote["quote_no"], quote["quote_date"], quote["client_name"],
+                quote.get("client_address_street",""),
+                quote.get("client_postal_code",""),
+                quote.get("client_city",""),
+                quote.get("contact_name",""),
+                quote.get("status","Historique"),
+                quote.get("notes",""),
+                stamp, stamp
+            ))
+            quote_id = cur.lastrowid
+
+            for line in quote.get("lines", []):
+                con.execute("""
+                    INSERT INTO quote_lines(
+                        quote_id, position, line_type, quantity, description, unit_price
+                    ) VALUES(?,?,?,?,?,?)
+                """, (
+                    quote_id,
+                    line.get("position", 0),
+                    line.get("line_type", "service"),
+                    float(line.get("quantity", 1)),
+                    line.get("description", ""),
+                    float(line.get("unit_price", 0)),
+                ))
+
+        con.execute(
+            "INSERT OR REPLACE INTO app_meta(key,value,updated_at) VALUES(?,?,?)",
+            (quote_key, f"devis_id={quote_id}", stamp)
+        )
+
+
+def seed_legacy_quotes37(con):
+    """Importe l'archive devis.zip : 33 devis uniques et 37 PDF historiques."""
+    migration_key = "legacy_quotes37_zip_v3_recheck_complete"
+    done = con.execute("SELECT value FROM app_meta WHERE key=?", (migration_key,)).fetchone()
+    if done:
+        return {"quotes_added": 0, "documents_added": 0, "already_done": True}
+
+    stamp = datetime.now().isoformat(timespec="seconds")
+    quotes_added = 0
+    docs_added = 0
+
+    for quote in LEGACY_QUOTES_37:
+        existing = con.execute(
+            "SELECT id FROM quotes WHERE quote_no=?",
+            (quote["quote_no"],)
+        ).fetchone()
+
+        if existing:
+            quote_id = existing["id"]
+        else:
+            # Tente d'associer automatiquement au client local par nom exact, sans créer de doublon.
+            client_row = con.execute(
+                "SELECT id FROM clients WHERE lower(trim(name))=lower(trim(?)) LIMIT 1",
+                (quote.get("client_name", ""),)
+            ).fetchone()
+            client_id = client_row["id"] if client_row else None
+
+            cur = con.execute("""
+                INSERT INTO quotes(
+                    quote_no, quote_date, client_id, client_name,
+                    client_address_street, client_postal_code, client_city,
+                    contact_name, status, notes, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                quote["quote_no"],
+                quote.get("quote_date", ""),
+                client_id,
+                quote.get("client_name", "Client"),
+                quote.get("client_address_street", ""),
+                quote.get("client_postal_code", ""),
+                quote.get("client_city", ""),
+                quote.get("contact_name", ""),
+                quote.get("status", "Historique"),
+                quote.get("notes", ""),
+                stamp,
+                stamp,
+            ))
+            quote_id = cur.lastrowid
+
+            for line in quote.get("lines", []):
+                con.execute("""
+                    INSERT INTO quote_lines(
+                        quote_id, position, line_type, quantity, description, unit_price
+                    ) VALUES(?,?,?,?,?,?)
+                """, (
+                    quote_id,
+                    int(line.get("position", 0)),
+                    line.get("line_type", "service"),
+                    float(line.get("quantity", 1)),
+                    line.get("description", ""),
+                    float(line.get("unit_price", 0)),
+                ))
+            quotes_added += 1
+
+    # Les 37 fichiers sont reliés à leur devis. Plusieurs documents peuvent appartenir au même devis.
+    for doc in LEGACY_QUOTE_DOCUMENTS_37:
+        q = con.execute(
+            "SELECT id FROM quotes WHERE quote_no=?",
+            (doc["quote_no"],)
+        ).fetchone()
+        if not q:
+            continue
+        exists = con.execute(
+            "SELECT id FROM quote_documents WHERE quote_id=? AND filename=?",
+            (q["id"], doc["filename"])
+        ).fetchone()
+        if exists:
+            continue
+        con.execute("""
+            INSERT INTO quote_documents(quote_id, filename, label, created_at)
+            VALUES(?,?,?,?)
+        """, (
+            q["id"],
+            doc["filename"],
+            doc.get("label", "PDF historique"),
+            stamp,
+        ))
+        docs_added += 1
+
+    con.execute(
+        "INSERT OR REPLACE INTO app_meta(key,value,updated_at) VALUES(?,?,?)",
+        (
+            migration_key,
+            f"{quotes_added} devis ajoutés / {docs_added} PDF reliés / 33 devis uniques / 37 fichiers",
+            stamp,
+        )
+    )
+    return {"quotes_added": quotes_added, "documents_added": docs_added, "already_done": False}
+
+
+def now():
+    return datetime.now()
+
+def make_dossier_no():
+    """
+    Numéro de dossier lisible : JJMMAAAAHHMM (sans secondes).
+    Si deux dossiers sont créés dans la même minute, suffixe -2, -3, ...
+    """
+    base = now().strftime("%d%m%Y%H%M")
+    con = db()
+    try:
+        rows = con.execute(
+            """
+            SELECT dossier_no
+            FROM repairs
+            WHERE dossier_no=? OR dossier_no LIKE ?
+            """,
+            (base, f"{base}-%"),
+        ).fetchall()
+    finally:
+        con.close()
+
+    used = {
+        str(row["dossier_no"] or "").strip()
+        for row in rows
+        if str(row["dossier_no"] or "").strip()
+    }
+    if base not in used:
+        return base
+
+    idx = 2
+    while f"{base}-{idx}" in used:
+        idx += 1
+    return f"{base}-{idx}"
+
+def parse_money_input(value):
+    text = str(value or "").strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    if not text:
+        return 0.0
+    return round(float(text), 2)
+
+
+def ledger_valid_date(value):
+    try:
+        datetime.strptime(str(value or ""), "%Y-%m-%d")
+        return True
+    except Exception:
+        return False
+
+
+def ledger_month_name(month):
+    names = [
+        "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+        "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+    ]
+    return names[month] if 1 <= month <= 12 else ""
+
+
+def year_month_folder(root, date_value, supplier=False, create=True):
+    """Retourne root/YYYY/MM - Mois[/Fournisseurs]."""
+    try:
+        d = datetime.strptime(str(date_value or ""), "%Y-%m-%d")
+    except Exception:
+        d = now()
+
+    folder = root / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
+    if supplier:
+        folder = folder / "Fournisseurs"
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def safe_document_name(name):
+    value = str(name or "").strip()
+    value = value.replace("/", "-").replace("\\\\", "-")
+    value = re.sub(r'[<>:"|?*]+', "-", value)
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    return value or "Document.pdf"
+
+
+def _match_key(value):
+    """Normalise un texte pour comparer noms de fournisseurs / numéros de facture."""
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+
+
+def is_supplier_invoice_reference(invoice_no, party="", remarks=""):
+    """True uniquement pour une vraie référence de facture fournisseur.
+
+    Les anciens imports ODS contiennent parfois dans invoice_no un bon de commande
+    ou un numéro interne/date-heure. Ces valeurs ne doivent jamais servir à nommer
+    ou rapprocher une facture fournisseur.
+    """
+    raw = str(invoice_no or "").strip()
+    if not raw:
+        return False
+    folded = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode().casefold()
+    if any(x in folded for x in ("bon de commande", "n° de commande", "no de commande", "numero de commande", "commande n°", "commande no")):
+        return False
+
+    digits = re.sub(r"\D", "", raw)
+    remarks_folded = unicodedata.normalize("NFKD", str(remarks or "")).encode("ascii", "ignore").decode().casefold()
+    party_folded = str(party or "").casefold()
+    # Imports historiques Amazon/eBay : certains numéros ressemblent à une date/heure
+    # (ex. 60820261300 = 06/08/2026 13:00) et ne sont pas des factures fournisseur.
+    if ("commande" in remarks_folded or party_folded in {"amazon", "ebay"}) and len(digits) in (11, 12):
+        padded = digits.zfill(12)
+        try:
+            datetime.strptime(padded, "%d%m%Y%H%M")
+            return False
+        except Exception:
+            pass
+    return True
+
+def supplier_document_filename(entry_date, party, invoice_no, original_name):
+    """Nom maison : FOURNISSEUR_NumeroFacture.ext, comme le classement manuel de Foul."""
+    original = Path(str(original_name or "facture.pdf"))
+    suffix = original.suffix.lower() or ".pdf"
+    supplier = safe_document_name(party or "Fournisseur")
+    invoice_raw = str(invoice_no or "").strip()
+
+    # Si le N° est déjà connu en compta, il devient la partie droite du nom.
+    if is_supplier_invoice_reference(invoice_raw, party=party):
+        invoice = safe_document_name(invoice_raw)
+        return safe_document_name(f"{supplier}_{invoice}{suffix}")
+
+    # Sinon on conserve l'information utile du nom reçu (ex: Facture_20260903-0006.pdf)
+    # en retirant seulement les préfixes génériques, puis on ajoute le fournisseur réel.
+    stem = original.stem.strip()
+    stem = re.sub(r"^(facture|invoice)[ _-]*", "", stem, flags=re.IGNORECASE).strip(" _-")
+    if not stem:
+        stem = str(entry_date or now().strftime("%Y%m%d")).replace("-", "")
+    if _match_key(stem).startswith(_match_key(supplier)):
+        return safe_document_name(f"{stem}{suffix}")
+    return safe_document_name(f"{supplier}_{stem}{suffix}")
+
+
+def save_ledger_document(entry_id, storage):
+    """
+    Lie une facture fournisseur à une ligne Achats/Ventes et la range proprement.
+    Pas de sous-dossier par fournisseur : un seul dossier Fournisseurs par mois.
+    Les nouvelles pièces suivent le nom maison FOURNISSEUR_NumeroFacture.ext.
+    """
+    filename = str(getattr(storage, "filename", "") or "").strip()
+    if not filename:
+        return None
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
+        raise ValueError("Format non accepté : PDF, XML, JPG ou PNG uniquement.")
+    raw = storage.read()
+    if not raw:
+        raise ValueError("Fichier vide.")
+    if len(raw) > 20 * 1024 * 1024:
+        raise ValueError("Fichier trop volumineux (20 Mo maximum).")
+
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    if not row:
+        con.close()
+        raise ValueError("Ligne Achats/Ventes introuvable.")
+    if str(row["document_path"] or "").strip():
+        con.close()
+        raise ValueError("Une pièce justificative est déjà liée à cette ligne.")
+
+    folder = year_month_folder(FOURNISSEURS_ROOT, row["entry_date"], supplier=False, create=True)
+
+    # V2.3.95 — anti-doublon strict : avant même de fabriquer un nouveau nom,
+    # on cherche si CE fichier existe déjà dans Fournisseurs, quel que soit son nom.
+    # Exemple : une facture VistaPrint déjà classée manuellement doit être simplement
+    # liée à l'achat, jamais recopiée à côté sous un autre nom.
+    dest = None
+    for existing in folder.iterdir():
+        if not existing.is_file() or existing.suffix.lower() not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
+            continue
+        try:
+            if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
+                dest = existing
+                break
+        except Exception:
+            continue
+
+    # V2.3.97 — priorité absolue au classement existant de Foul.
+    # Même si le PDF reçu à nouveau n'est pas strictement identique (métadonnées,
+    # régénération du fournisseur, etc.), on ne doit pas créer une seconde facture
+    # à côté si une pièce déjà classée correspond sans ambiguïté à la même facture.
+    if dest is None:
+        existing_docs = [
+            p for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+        ]
+        invoice_key = _match_key(row["invoice_no"]) if is_supplier_invoice_reference(
+            row["invoice_no"], party=row["party"], remarks=row["remarks"]
+        ) else ""
+        supplier_key = _match_key(row["party"])
+
+        original_stem = Path(filename).stem.strip()
+        original_stem = re.sub(r"^(facture|invoice)[ _-]*", "", original_stem, flags=re.IGNORECASE).strip(" _-")
+        original_key = _match_key(original_stem)
+        # Un identifiant trop court/générique ne doit jamais servir à rapprocher.
+        if len(original_key) < 5:
+            original_key = ""
+
+        strong_matches = []
+        for existing in existing_docs:
+            stem_key = _match_key(existing.stem)
+            by_invoice = bool(invoice_key and len(invoice_key) >= 4 and invoice_key in stem_key)
+            by_original = bool(original_key and (original_key in stem_key or stem_key.endswith(original_key)))
+            # Quand on matche par nom reçu, on exige aussi le fournisseur si celui-ci
+            # est présent dans le nom classé, afin d'éviter les collisions.
+            supplier_ok = not supplier_key or supplier_key in stem_key or by_invoice
+            if by_invoice or (by_original and supplier_ok):
+                strong_matches.append(existing)
+
+        if len(strong_matches) == 1:
+            dest = strong_matches[0]
+        elif len(strong_matches) > 1:
+            con.close()
+            raise ValueError(
+                "Plusieurs justificatifs déjà classés semblent correspondre à cette facture. "
+                "Aucun nouveau fichier n'a été créé : vérifie les fichiers du mois puis rattache le bon."
+            )
+
+    if dest is None:
+        clean_name = supplier_document_filename(row["entry_date"], row["party"], row["invoice_no"], filename)
+        dest = folder / clean_name
+
+        # Le même nom existe déjà mais le contenu diffère : surtout ne pas fabriquer
+        # automatiquement un ' - 2'. Cela crée exactement le bazar que l'on veut éviter.
+        # On arrête et on laisse l'utilisateur vérifier le document existant.
+        if dest.exists():
+            con.close()
+            raise ValueError(
+                f"Un justificatif nommé {dest.name} existe déjà dans Fournisseurs. "
+                "Aucun doublon n'a été créé."
+            )
+        dest.write_bytes(raw)
+
+    rel = str(dest.relative_to(DOCUMENTS_ROOT))
+    con.execute("""
+        UPDATE ledger_entries
+        SET document_path=?, document_original_name=?, updated_at=?
+        WHERE id=?
+    """, (rel, filename, now().isoformat(timespec="seconds"), entry_id))
+    con.commit()
+    con.close()
+    return dest
+
+
+def _supplier_document_candidates(entry_date):
+    """Factures déjà classées par l'utilisateur dans le mois concerné, sans les modifier."""
+    folder = year_month_folder(FOURNISSEURS_ROOT, entry_date, supplier=False, create=False)
+    if not folder.is_dir():
+        return []
+    allowed = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+    return sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in allowed), key=lambda p: p.name.casefold())
+
+
+def _supplier_auto_match(row, candidates):
+    """Retourne un fichier uniquement quand le rapprochement est suffisamment sûr."""
+    if not candidates:
+        return None, "missing"
+
+    invoice_key = _match_key(row["invoice_no"] or "") if is_supplier_invoice_reference(row["invoice_no"], row["party"], row["remarks"]) else ""
+    party_key = _match_key(row["party"] or "")
+    date_txt = str(row["entry_date"] or "")[:10]
+    date_tokens = set()
+    if date_txt:
+        date_tokens.add(_match_key(date_txt))
+        date_tokens.add(_match_key(date_txt.replace("-", "")))
+        try:
+            d = datetime.strptime(date_txt, "%Y-%m-%d")
+            # Noms de fichiers rencontrés : 2026-09-08, 20260908,
+            # 08-09-2026, 08_09_2026, 08092026, etc.
+            date_tokens.update({
+                _match_key(d.strftime("%Y-%m-%d")),
+                _match_key(d.strftime("%Y%m%d")),
+                _match_key(d.strftime("%d-%m-%Y")),
+                _match_key(d.strftime("%d_%m_%Y")),
+                _match_key(d.strftime("%d%m%Y")),
+            })
+        except Exception:
+            pass
+    date_tokens.discard("")
+
+    scored = []
+    for path in candidates:
+        name_key = _match_key(path.stem)
+        score = 0
+        # Numéro de facture : signal le plus fiable.
+        if invoice_key and invoice_key in name_key:
+            score += 100
+        # Fournisseur réel tel que l'utilisateur l'a ajouté au nom du fichier.
+        if party_key and len(party_key) >= 3 and party_key in name_key:
+            score += 35
+        # Date de facture / achat, utile en complément.
+        if any(tok and tok in name_key for tok in date_tokens):
+            score += 15
+        scored.append((score, path))
+
+    scored.sort(key=lambda x: (-x[0], x[1].name.casefold()))
+    best_score = scored[0][0]
+    best = [p for score, p in scored if score == best_score and score > 0]
+
+    # Auto uniquement si le numéro de facture correspond, ou fournisseur+date sans ambiguïté.
+    if best_score >= 100 and len(best) == 1:
+        return best[0], "invoice"
+    if best_score >= 50 and len(best) == 1:
+        return best[0], "party_date"
+    if best_score > 0:
+        return None, "ambiguous"
+    return None, "missing"
+
+
+def auto_link_supplier_documents(years=None):
+    """
+    Rattache les factures déjà présentes dans private/documents/Fournisseurs aux achats existants.
+    Ne déplace, ne copie et ne renomme aucun fichier historique.
+
+    Par défaut, traite toutes les années depuis 2025 jusqu'à l'année courante.
+    """
+    if years is None:
+        years = tuple(range(2025, now().year + 1))
+
+    con = db()
+    placeholders = ",".join("?" for _ in years)
+    rows = con.execute(f"""
+        SELECT * FROM ledger_entries
+        WHERE operation='Achat'
+          AND COALESCE(document_path,'')=''
+          AND substr(entry_date,1,4) IN ({placeholders})
+        ORDER BY entry_date, id
+    """, tuple(str(y) for y in years)).fetchall()
+
+    linked = ambiguous = missing = 0
+    used = set()
+    for row in rows:
+        candidates = [p for p in _supplier_document_candidates(row["entry_date"]) if str(p.resolve()) not in used]
+        match, reason = _supplier_auto_match(row, candidates)
+        if not match:
+            if reason == "ambiguous":
+                ambiguous += 1
+            else:
+                missing += 1
+            continue
+        try:
+            rel = str(match.relative_to(DOCUMENTS_ROOT))
+        except Exception:
+            missing += 1
+            continue
+        con.execute("""
+            UPDATE ledger_entries
+            SET document_path=?, document_original_name=?, updated_at=?
+            WHERE id=? AND COALESCE(document_path,'')=''
+        """, (rel, match.name, now().isoformat(timespec="seconds"), row["id"]))
+        used.add(str(match.resolve()))
+        linked += 1
+
+    con.commit()
+    con.close()
+    return linked, ambiguous, missing
+
+
+def ledger_document_file(row):
+    """Résout une pièce fournisseur déplacée dans documents/Fournisseurs.
+
+    Ordre volontairement déterministe :
+      1. vraie référence de facture si connue ;
+      2. nom original enregistré ;
+      3. nom du fichier de l'ancien document_path ;
+      4. fournisseur + date si résultat unique ;
+      5. même logique dans toute l'arborescence Fournisseurs.
+
+    Un ancien chemin faux ne doit jamais empêcher la recherche.
+    """
+    if not row:
+        return None
+
+    rel = str(row["document_path"] or "").strip()
+    original_name = str(row["document_original_name"] or "").strip()
+    invoice_no = str(row["invoice_no"] or "").strip()
+    party = str(row["party"] or "").strip()
+    entry_date = str(row["entry_date"] or "").strip()
+
+    def _basename(value):
+        return str(value or "").replace("\\", "/").rstrip("/").split("/")[-1]
+
+    def _files(folder):
+        try:
+            return [
+                p for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+            ]
+        except Exception:
+            return []
+
+    def _pick(candidates):
+        if not candidates:
+            return None
+
+        # 1) La référence de facture est prioritaire sur les anciens noms.
+        invoice_key = _match_key(invoice_no)
+        if invoice_key and len(invoice_key) >= 4:
+            hits = [p for p in candidates if invoice_key in _match_key(p.stem)]
+            if len(hits) == 1:
+                return hits[0]
+            if len(hits) > 1:
+                party_key = _match_key(party)
+                if party_key and len(party_key) >= 3:
+                    narrowed = [p for p in hits if party_key in _match_key(p.stem)]
+                    if len(narrowed) == 1:
+                        return narrowed[0]
+
+        # 2) Nom original puis ancien basename document_path.
+        for wanted in (_basename(original_name), _basename(rel)):
+            if not wanted:
+                continue
+            hits = [p for p in candidates if p.name.casefold() == wanted.casefold()]
+            if len(hits) == 1:
+                return hits[0]
+
+        # 3) Fournisseur + date, seulement si sans ambiguïté.
+        party_key = _match_key(party)
+        date_keys = set()
+        try:
+            d = datetime.strptime(entry_date, "%Y-%m-%d")
+            date_keys.update({
+                _match_key(d.strftime("%Y%m%d")),
+                _match_key(d.strftime("%d%m%Y")),
+            })
+        except Exception:
+            pass
+        date_keys.discard("")
+
+        if party_key and len(party_key) >= 3:
+            hits = []
+            for p in candidates:
+                key = _match_key(p.stem)
+                if party_key in key and (not date_keys or any(dk in key for dk in date_keys)):
+                    hits.append(p)
+            if len(hits) == 1:
+                return hits[0]
+
+        return None
+
+    # Ancien chemin encore valide ? On l'accepte uniquement si le fichier existe.
+    # Mais si invoice_no est renseigné et que le basename ne correspond pas à cette
+    # référence, on ne fait PAS confiance à ce vieux lien (cas FR6201Q9ABEI qui
+    # pointait encore vers FR61SZP5ABEI).
+    if rel:
+        try:
+            candidate = (DOCUMENTS_ROOT / rel).resolve()
+            allowed = False
+            for root in (FOURNISSEURS_ROOT.resolve(), FACTURES_ROOT.resolve()):
+                try:
+                    candidate.relative_to(root)
+                    allowed = True
+                    break
+                except Exception:
+                    continue
+        except Exception:
+            allowed = False
+
+        if allowed and candidate.is_file():
+            invoice_key = _match_key(invoice_no)
+            if not invoice_key or invoice_key in _match_key(candidate.stem):
+                return candidate
+
+    # D'abord le mois réel de la ligne.
+    try:
+        d = datetime.strptime(entry_date, "%Y-%m-%d")
+        month_folder = FOURNISSEURS_ROOT / f"{d.year:04d}" / MONTH_FOLDER_NAMES[d.month]
+        hit = _pick(_files(month_folder))
+        if hit:
+            return hit
+    except Exception:
+        pass
+
+    # Puis toute l'arborescence : utile après déplacement manuel ou date historique
+    # légèrement différente du mois où le justificatif a été classé.
+    try:
+        all_files = [
+            p for p in FOURNISSEURS_ROOT.rglob("*")
+            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+        ]
+        hit = _pick(all_files)
+        if hit:
+            return hit
+    except Exception:
+        pass
+
+    return None
+
+
+def repair_dead_supplier_document_links():
+    """Répare uniquement les liens morts vers une pièce déjà présente dans Fournisseurs.
+
+    Aucun fichier n'est créé, copié, renommé ou supprimé ici.
+    """
+    con = db()
+    rows = con.execute("""
+        SELECT * FROM ledger_entries
+        WHERE operation='Achat' AND COALESCE(document_path,'')<>''
+    """).fetchall()
+    repaired = 0
+    for row in rows:
+        rel = str(row["document_path"] or "").strip()
+        try:
+            direct = (DOCUMENTS_ROOT / rel).resolve()
+            if direct.is_file():
+                continue
+        except Exception:
+            pass
+        found = ledger_document_file(row)
+        if not found:
+            continue
+        try:
+            new_rel = str(found.relative_to(DOCUMENTS_ROOT))
+        except Exception:
+            continue
+        if new_rel == rel:
+            continue
+        con.execute(
+            "UPDATE ledger_entries SET document_path=?, updated_at=? WHERE id=?",
+            (new_rel, now().isoformat(timespec="seconds"), row["id"]),
+        )
+        repaired += 1
+    if repaired:
+        con.commit()
+    con.close()
+    return repaired
+
+
+def find_document_recursive(root, filename=None, document_no=None):
+    """
+    Cherche un document dans les vrais dossiers WOPR/private/documents/Devis ou Factures.
+    Priorité au nom de fichier exact, sinon au numéro contenu dans le nom.
+    """
+    if not root.exists():
+        return None
+
+    if filename:
+        target = Path(filename).name.casefold()
+        for p in root.rglob("*"):
+            if p.is_file() and p.name.casefold() == target:
+                return p
+
+    if document_no:
+        needle = str(document_no).strip().casefold()
+        if needle:
+            matches = [
+                p for p in root.rglob("*.pdf")
+                if needle in p.name.casefold()
+            ]
+            if matches:
+                return sorted(matches)[0]
+
+    return None
+
+
+def quote_document_candidates(quote_no):
+    """
+    PDF historiques réellement présents avant génération WOPR.
+    Les PDF produits par l'application portent un suffixe technique avant
+    `.pdf` et ne sont jamais comptés comme des Originaux.
+    """
+    if not DEVIS_ROOT.exists():
+        return []
+    needle = str(quote_no or "").strip().casefold()
+    if not needle:
+        return []
+    return sorted(
+        p for p in DEVIS_ROOT.rglob("*.pdf")
+        if needle in p.name.casefold()
+        and not re.search(
+            rf"{re.escape(needle)}\.[^.]+\.pdf$",
+            p.name.casefold(),
+        )
+    )
+
+
+def make_quote_no(con=None):
+    """
+    Numéro de devis automatique, identique à la logique facture :
+    JJMMYYYYHHMM, ex. 310820261516.
+    """
+    base_dt = now()
+    prefix = cfg().get("invoice_prefix", "")
+    fmt = "%d%m%Y%H%M"
+
+    if con is None:
+        return prefix + base_dt.strftime(fmt)
+
+    # Très rare : deux devis dans la même minute.
+    # On conserve strictement le comportement existant : première minute libre
+    # parmi les 120 suivantes, mais avec une seule requête SQL.
+    candidates = [
+        prefix + (base_dt + timedelta(minutes=offset)).strftime(fmt)
+        for offset in range(120)
+    ]
+    placeholders = ",".join("?" for _ in candidates)
+    used = {
+        str(row["quote_no"] or "").strip()
+        for row in con.execute(
+            f"SELECT quote_no FROM quotes WHERE quote_no IN ({placeholders})",
+            candidates,
+        ).fetchall()
+    }
+
+    for candidate in candidates:
+        if candidate not in used:
+            return candidate
+
+    return candidates[0]
+
+
+def parse_quote_lines(form):
+    quantities = form.getlist("line_qty[]")
+    descriptions = form.getlist("line_desc[]")
+    prices = form.getlist("line_price[]")
+    types = form.getlist("line_type[]")
+
+    lines = []
+    count = max(len(quantities), len(descriptions), len(prices), len(types))
+    for i in range(count):
+        desc = descriptions[i].strip() if i < len(descriptions) else ""
+        if not desc:
+            continue
+        try:
+            qty = float((quantities[i] if i < len(quantities) else "1").replace(",", ".") or 1)
+        except Exception:
+            qty = 1.0
+        try:
+            price = float((prices[i] if i < len(prices) else "0").replace(",", ".") or 0)
+        except Exception:
+            price = 0.0
+        line_type = types[i] if i < len(types) and types[i] in ("service", "goods") else "service"
+        lines.append({
+            "position": len(lines),
+            "line_type": line_type,
+            "quantity": qty,
+            "description": desc,
+            "unit_price": price,
+        })
+    return lines
+
+
+def make_public_tracking_code(con):
+    """Génère un code client court, lisible et unique pour le futur suivi web."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    configured_prefix = re.sub(r"[^A-Za-z0-9]", "", str(cfg().get("tracking_code_prefix") or "WOPR")).upper()
+    prefix = (configured_prefix[:4] or "WOPR")
+    for _ in range(100):
+        suffix = "".join(secrets.choice(alphabet) for _ in range(4))
+        candidate = f"{prefix}-{suffix}"
+        exists = con.execute(
+            "SELECT 1 FROM repairs WHERE public_tracking_code=? LIMIT 1",
+            (candidate,),
+        ).fetchone()
+        if not exists:
+            return candidate
+    raise RuntimeError("Impossible de générer un code de suivi client unique.")
+
+
+def make_invoice_no():
+    """
+    Numéro standard JJMMYYYYHHMM.
+    Si une facture existe déjà dans la même minute :
+    JJMMYYYYHHMM-2, puis -3, etc.
+    """
+    c = cfg()
+    base = c.get("invoice_prefix", "") + now().strftime(
+        c.get("invoice_number_format", "%d%m%Y%H%M")
+    )
+
+    con = db()
+    try:
+        rows = con.execute(
+            """
+            SELECT invoice_no
+            FROM repairs
+            WHERE invoice_no=? OR invoice_no LIKE ?
+            """,
+            (base, f"{base}-%"),
+        ).fetchall()
+    finally:
+        con.close()
+
+    used = {
+        str(row["invoice_no"] or "").strip()
+        for row in rows
+        if str(row["invoice_no"] or "").strip()
+    }
+    if base not in used:
+        return base
+
+    suffix = 2
+    while f"{base}-{suffix}" in used:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+def local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def safe_filename(text):
+    text = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii")
+    text = re.sub(r"[^A-Za-z0-9_-]+", "_", text.strip())
+    return text.strip("_") or "client"
+
+
+def normalize_phone(value):
+    digits = re.sub(r"\D", "", value or "")
+    # Uniformise les formats français : +33 / 0033 / 0...
+    if digits.startswith("0033") and len(digits) > 4:
+        digits = "0" + digits[4:]
+    elif digits.startswith("33") and len(digits) >= 11:
+        digits = "0" + digits[2:]
+    return digits
+
+
+
+
+def google_credentials():
+    if not GOOGLE_LIBS_OK or not GOOGLE_TOKEN.exists():
+        return None
+    try:
+        creds = Credentials.from_authorized_user_file(str(GOOGLE_TOKEN), GOOGLE_SCOPE)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+            GOOGLE_TOKEN.write_text(creds.to_json(), encoding="utf-8")
+        return creds if creds.valid else None
+    except Exception:
+        return None
+
+
+def google_service():
+    creds = google_credentials()
+    if not creds:
+        return None
+    return google_build("people", "v1", credentials=creds, cache_discovery=False)
+
+
+def google_execute_with_retry(request, max_retries=3):
+    """Exécute une requête Google et temporise proprement en cas de quota 429."""
+    for attempt in range(max_retries + 1):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            if getattr(exc.resp, "status", None) != 429 or attempt >= max_retries:
+                raise
+            # Le quota critique est calculé à la minute : attendre un peu plus
+            # d'une minute évite de repartir dans la même fenêtre de quota.
+            time.sleep(65)
+
+
+def google_find_group(service, wanted_name=None):
+    wanted = (wanted_name or cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR").strip().casefold()
+    token = None
+    while True:
+        res = service.contactGroups().list(pageSize=1000, pageToken=token).execute()
+        for group in res.get("contactGroups", []):
+            if (group.get("name") or "").strip().casefold() == wanted or (group.get("formattedName") or "").strip().casefold() == wanted:
+                return group.get("resourceName")
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return None
+
+
+def google_find_existing_contact(service, client):
+    """Premier rattachement: cherche un contact Google existant pour éviter les doublons."""
+    wanted_emails = {
+        (client[key] or "").strip().casefold()
+        for key in ("email", "email_secondary")
+        if key in client.keys() and (client[key] or "").strip()
+    }
+    wanted_phones = {
+        normalize_phone(client[key])
+        for key in ("phone", "phone_secondary")
+        if key in client.keys() and normalize_phone(client[key])
+    }
+    token = None
+    while True:
+        res = service.people().connections().list(
+            resourceName="people/me",
+            pageSize=1000,
+            pageToken=token,
+            personFields="names,emailAddresses,phoneNumbers,addresses,memberships"
+        ).execute()
+        for person in res.get("connections", []):
+            emails = {(x.get("value") or "").strip().casefold() for x in person.get("emailAddresses", [])}
+            phones = {normalize_phone(x.get("value")) for x in person.get("phoneNumbers", [])}
+            if wanted_emails and wanted_emails.intersection(emails):
+                return person.get("resourceName")
+            if wanted_phones and wanted_phones.intersection(phones):
+                return person.get("resourceName")
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return None
+
+
+def google_contact_body(client):
+    """Construit uniquement les champs WOPR réellement renseignés.
+
+    Aucun tableau vide n'est envoyé à Google : une valeur absente dans WOPR ne
+    signifie jamais "effacer la valeur Google".
+    """
+    body = {}
+
+    first_name = (client["first_name"] or "").strip() if "first_name" in client.keys() else ""
+    last_name = (client["last_name"] or "").strip() if "last_name" in client.keys() else ""
+    fallback_name = (client["name"] or "").strip() if "name" in client.keys() else ""
+    company = (client["company"] or "").strip() if "company" in client.keys() else ""
+
+    if first_name or last_name:
+        google_name = {}
+        if first_name:
+            google_name["givenName"] = first_name
+        if last_name:
+            google_name["familyName"] = last_name
+        body["names"] = [google_name]
+    elif fallback_name and not company:
+        body["names"] = [{"givenName": fallback_name}]
+
+    emails = []
+    seen_emails = set()
+    for key, email_type in (("email", "home"), ("email_secondary", "other")):
+        email = (client[key] or "").strip() if key in client.keys() else ""
+        normalized = email.casefold()
+        if email and normalized not in seen_emails:
+            seen_emails.add(normalized)
+            emails.append({"value": email, "type": email_type})
+    if emails:
+        body["emailAddresses"] = emails
+
+    phones = []
+    seen_phones = set()
+    for key, phone_type in (("phone", "mobile"), ("phone_secondary", "other")):
+        phone = (client[key] or "").strip() if key in client.keys() else ""
+        normalized = normalize_phone(phone)
+        if phone and normalized and normalized not in seen_phones:
+            seen_phones.add(normalized)
+            phones.append({"value": phone, "type": phone_type})
+    if phones:
+        body["phoneNumbers"] = phones
+
+    street = (client["address_street"] or "").strip()
+    city = (client["city"] or "").strip()
+    postal = (client["postal_code"] or "").strip()
+    if street or city or postal:
+        body["addresses"] = [{
+            "streetAddress": street,
+            "city": city,
+            "postalCode": postal,
+            "country": "France",
+            "type": "home"
+        }]
+
+    if company:
+        body["organizations"] = [{"name": company, "type": "work"}]
+
+    notes = (client["notes"] or "").strip()
+    if notes:
+        body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
+
+    return body
+
+
+def google_safe_merge_contact(latest, wopr_body):
+    """Fusion non destructive WOPR -> Google."""
+    merged = {}
+    fields_changed = []
+
+    # Les objets renvoyés par People API contiennent beaucoup de propriétés
+    # en lecture seule (metadata, displayName, formattedType, ...). Elles ne
+    # doivent jamais être recopiées dans updateContact : Google répond sinon
+    # par un HTTP 400 « Request contains an invalid argument ».
+    writable_fields = {
+        "names": {"givenName", "familyName", "middleName", "honorificPrefix", "honorificSuffix"},
+        "emailAddresses": {"value", "type"},
+        "phoneNumbers": {"value", "type"},
+        "addresses": {"streetAddress", "city", "region", "postalCode", "country", "poBox", "neighborhood", "type"},
+        "organizations": {"name", "type", "title", "department"},
+        "biographies": {"value", "contentType"},
+    }
+
+    def writable_item(field, item):
+        allowed = writable_fields[field]
+        return {key: value for key, value in dict(item).items()
+                if key in allowed and value not in (None, "")}
+
+    existing_names = [writable_item("names", x) for x in latest.get("names", [])]
+    existing_names = [x for x in existing_names if x]
+    wanted_names = wopr_body.get("names", [])
+    if wanted_names:
+        wanted = wanted_names[0]
+        if existing_names:
+            current = dict(existing_names[0])
+            if wanted.get("givenName"):
+                current["givenName"] = wanted["givenName"]
+            if wanted.get("familyName"):
+                current["familyName"] = wanted["familyName"]
+            existing_names[0] = current
+        else:
+            existing_names = [dict(wanted)]
+        merged["names"] = existing_names
+        fields_changed.append("names")
+    elif wopr_body.get("organizations"):
+        # Fiche WOPR "entreprise seule" : nettoie les anciens prénom/nom
+        # recopiés dans Google, sans toucher aux notes ni aux coordonnées.
+        if existing_names:
+            merged["names"] = []
+            fields_changed.append("names")
+
+    def merge_multi(field, keyfunc):
+        existing = [writable_item(field, x) for x in latest.get(field, [])]
+        existing = [x for x in existing if x]
+        wanted = [writable_item(field, x) for x in wopr_body.get(field, [])]
+        wanted = [x for x in wanted if x]
+        if not wanted:
+            return
+        seen = {keyfunc(x) for x in existing if keyfunc(x)}
+        for item in wanted:
+            key = keyfunc(item)
+            if key and key not in seen:
+                existing.append(item)
+                seen.add(key)
+        merged[field] = existing
+        fields_changed.append(field)
+
+    merge_multi("emailAddresses", lambda x: (x.get("value") or "").strip().casefold())
+    merge_multi("phoneNumbers", lambda x: normalize_phone(x.get("value")))
+    merge_multi(
+        "addresses",
+        lambda x: "|".join([
+            (x.get("streetAddress") or "").strip().casefold(),
+            (x.get("postalCode") or "").strip().casefold(),
+            (x.get("city") or "").strip().casefold(),
+        ])
+    )
+    if wopr_body.get("organizations") and not wopr_body.get("names"):
+        merged["organizations"] = [writable_item("organizations", x) for x in wopr_body["organizations"]]
+        fields_changed.append("organizations")
+    else:
+        merge_multi("organizations", lambda x: (x.get("name") or "").strip().casefold())
+    # Google n'autorise qu'une seule biographie (note) par source. Une
+    # ancienne synchronisation peut en avoir créé plusieurs : on remplace
+    # alors la collection complète par la note WOPR courante au lieu d'en
+    # ajouter une nouvelle.
+    wanted_biographies = [writable_item("biographies", x) for x in wopr_body.get("biographies", [])]
+    wanted_biographies = [x for x in wanted_biographies if x]
+    if wanted_biographies:
+        merged["biographies"] = [wanted_biographies[0]]
+        fields_changed.append("biographies")
+
+    if latest.get("etag"):
+        merged["etag"] = latest["etag"]
+
+    return merged, ",".join(fields_changed)
+
+
+def google_contact_sync_hash(body):
+    """Empreinte stable des données WOPR destinées à Google Contacts."""
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def set_google_sync_state(client_id, status, resource_name=None, error=""):
+    con = db()
+    if resource_name is None:
+        con.execute("UPDATE clients SET google_sync_status=?, google_sync_error=? WHERE id=?",
+                    (status, error[:1000], client_id))
+    else:
+        con.execute("""UPDATE clients SET google_sync_status=?, google_sync_error=?,
+                     google_resource_name=?, google_synced_at=? WHERE id=?""",
+                    (status, error[:1000], resource_name, now().isoformat(timespec="seconds"), client_id))
+    con.commit(); con.close()
+
+
+def sync_client_to_google(client_id):
+    if not cfg().get("google_sync_enabled", True):
+        return False, "Synchronisation Google désactivée"
+
+    con = db()
+    client = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    con.close()
+    if not client:
+        return False, "Client introuvable"
+    if int(client["archived"] or 0) == 1:
+        return False, "Client archivé"
+
+    body = google_contact_body(client)
+    current_hash = google_contact_sync_hash(body)
+    previous_hash = (client["google_sync_hash"] or "").strip()
+    resource_name = (client["google_resource_name"] or "").strip()
+
+    # Rien n'a changé depuis le dernier envoi : zéro appel à Google.
+    if resource_name and previous_hash and previous_hash == current_hash:
+        set_google_sync_state(client_id, "Synchronisé")
+        return True, "Aucune modification à synchroniser"
+
+    service = google_service()
+    if not service:
+        set_google_sync_state(client_id, "À connecter", error="Google n'est pas encore connecté")
+        return False, "Google n'est pas encore connecté"
+
+    try:
+        group_resource = google_find_group(service)
+        if not group_resource:
+            msg = f"Le groupe Google '{cfg().get('google_contact_group') or cfg().get('business_name') or 'WOPR'}' est introuvable."
+            set_google_sync_state(client_id, "Erreur", error=msg)
+            return False, msg
+
+        if not resource_name:
+            resource_name = google_find_existing_contact(service, client)
+
+        if resource_name:
+            try:
+                latest = google_execute_with_retry(service.people().get(
+                    resourceName=resource_name,
+                    personFields="names,emailAddresses,phoneNumbers,addresses,organizations,biographies,metadata"
+                ))
+                safe_body, update_fields = google_safe_merge_contact(latest, body)
+                if update_fields:
+                    updated = google_execute_with_retry(service.people().updateContact(
+                        resourceName=resource_name,
+                        updatePersonFields=update_fields,
+                        body=safe_body
+                    ))
+                    resource_name = updated.get("resourceName", resource_name)
+            except HttpError as e:
+                if getattr(e.resp, "status", None) == 404:
+                    resource_name = None
+                else:
+                    raise
+
+        if not resource_name:
+            created = service.people().createContact(body=body).execute()
+            resource_name = created.get("resourceName")
+
+        # Ajoute au groupe Google configuré. Cette opération est sans danger si déjà membre.
+        try:
+            service.contactGroups().members().modify(
+                resourceName=group_resource,
+                body={"resourceNamesToAdd": [resource_name]}
+            ).execute()
+        except HttpError as e:
+            if getattr(e.resp, "status", None) not in (400, 409):
+                raise
+
+        set_google_sync_state(client_id, "Synchronisé", resource_name=resource_name)
+
+        # On mémorise uniquement une synchro réellement réussie.
+        con = db()
+        con.execute(
+            "UPDATE clients SET google_sync_hash=? WHERE id=?",
+            (current_hash, client_id),
+        )
+        con.commit()
+        con.close()
+        return True, "Synchronisé"
+    except Exception as e:
+        msg = str(e)
+        set_google_sync_state(client_id, "Erreur", error=msg)
+        return False, msg
+
+
+
+
+
+def _split_escaped(value, sep=";"):
+    out, cur = [], []
+    escaped = False
+    for ch in value:
+        if escaped:
+            cur.append("\\")
+            cur.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == sep:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if escaped:
+        cur.append("\\")
+    out.append("".join(cur))
+    return out
+
+
+def _vcard_unescape(value):
+    value = str(value or "")
+    # Ordre important : les séquences vCard sont traitées avant le backslash final.
+    value = value.replace("\\N", "\n").replace("\\n", "\n")
+    value = value.replace("\\,", ",").replace("\\;", ";")
+    value = value.replace("\\\\", "\\")
+    return value.strip()
+
+
+def _vcard_pref(key):
+    m = re.search(r"(?:^|;)PREF=(\\d+)", key, flags=re.I)
+    return int(m.group(1)) if m else 999
+
+
+def parse_proton_vcf(raw_text):
+    """Parse les champs utiles d'un export Proton Contacts VCF 3/4 sans dépendance externe."""
+    text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    unfolded = []
+    for line in text.split("\n"):
+        if line.startswith((" ", "\t")) and unfolded:
+            unfolded[-1] += line[1:]
+        else:
+            unfolded.append(line)
+
+    raw_cards, current = [], None
+    for line in unfolded:
+        u = line.strip().upper()
+        if u == "BEGIN:VCARD":
+            current = []
+        elif u == "END:VCARD":
+            if current is not None:
+                raw_cards.append(current)
+            current = None
+        elif current is not None:
+            current.append(line)
+
+    contacts = []
+    for pos, lines in enumerate(raw_cards, start=1):
+        fn = ""
+        n_value = ""
+        family_name = ""
+        given_name = ""
+        uid = ""
+        emails = []
+        phones = []
+        addresses = []
+        notes = []
+
+        for line in lines:
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            base = key.split(";", 1)[0]
+            prop = base.split(".")[-1].upper()
+            pref = _vcard_pref(key)
+
+            # PHOTO / KEY peuvent être énormes : on les ignore volontairement.
+            if prop in {"PHOTO", "KEY"}:
+                continue
+
+            if prop == "FN":
+                fn = _vcard_unescape(value)
+            elif prop == "N":
+                n_value = value
+            elif prop == "UID":
+                uid = _vcard_unescape(value)
+            elif prop == "EMAIL":
+                val = _vcard_unescape(value)
+                if val:
+                    emails.append((pref, val))
+            elif prop == "TEL":
+                val = _vcard_unescape(value)
+                if val:
+                    phones.append((pref, val))
+            elif prop == "ADR":
+                parts = _split_escaped(value, ";")
+                parts += [""] * (7 - len(parts))
+                parts = [_vcard_unescape(x) for x in parts[:7]]
+                addresses.append((pref, {
+                    "po_box": parts[0],
+                    "extended": parts[1],
+                    "street": parts[2],
+                    "city": parts[3],
+                    "region": parts[4],
+                    "postal_code": parts[5],
+                    "country": parts[6],
+                }))
+            elif prop == "NOTE":
+                val = _vcard_unescape(value)
+                if val:
+                    notes.append(val)
+
+        if n_value:
+            parts = _split_escaped(n_value, ";")
+            parts += [""] * (5 - len(parts))
+            family_name = _vcard_unescape(parts[0]).strip()
+            given_name = _vcard_unescape(parts[1]).strip()
+            if not fn:
+                fn = " ".join(x for x in [given_name, family_name] if x).strip()
+
+        emails.sort(key=lambda x: x[0])
+        phones.sort(key=lambda x: x[0])
+        addresses.sort(key=lambda x: x[0])
+
+        email_values = []
+        for _, value in emails:
+            if value.casefold() not in {x.casefold() for x in email_values}:
+                email_values.append(value)
+
+        phone_values = []
+        seen_phone = set()
+        for _, value in phones:
+            np = normalize_phone(value)
+            if np and np not in seen_phone:
+                seen_phone.add(np)
+                phone_values.append(value)
+
+        address_values = [x[1] for x in addresses]
+
+        if not fn:
+            fn = (email_values[0] if email_values else (phone_values[0] if phone_values else f"Contact Proton {pos}"))
+
+        primary_address = address_values[0] if address_values else {}
+        extra_notes = list(notes)
+
+        # La base WOPR a un email/téléphone/adresse principal.
+        # Les coordonnées Proton supplémentaires sont donc conservées dans Notes.
+        if len(email_values) > 2:
+            extra_notes.append("Autres e-mails Proton : " + " / ".join(email_values[2:]))
+        if len(phone_values) > 2:
+            extra_notes.append("Autres téléphones Proton : " + " / ".join(phone_values[2:]))
+        if len(address_values) > 1:
+            formatted = []
+            for adr in address_values[1:]:
+                line1 = adr.get("street", "")
+                line2 = " ".join(x for x in [adr.get("postal_code", ""), adr.get("city", "")] if x).strip()
+                formatted.append(", ".join(x for x in [line1, line2, adr.get("country", "")] if x))
+            if formatted:
+                extra_notes.append("Autres adresses Proton : " + " / ".join(formatted))
+
+        contacts.append({
+            "source_position": pos,
+            "uid": uid,
+            "name": fn.strip(),
+            "first_name": given_name,
+            "last_name": family_name,
+            "email": email_values[0].strip() if email_values else "",
+            "email_secondary": email_values[1].strip() if len(email_values) > 1 else "",
+            "emails": email_values,
+            "phone": phone_values[0].strip() if phone_values else "",
+            "phone_secondary": phone_values[1].strip() if len(phone_values) > 1 else "",
+            "phones": phone_values,
+            "address_street": primary_address.get("street", "").strip(),
+            "postal_code": primary_address.get("postal_code", "").strip(),
+            "city": primary_address.get("city", "").strip(),
+            "country": primary_address.get("country", "").strip(),
+            "addresses": address_values,
+            "notes": "\n".join(x for x in extra_notes if x).strip(),
+        })
+
+    return contacts
+
+
+
+def _contact_name_normalize(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.casefold()
+    text = re.sub(r"\([^)]*\)", " ", text)
+    text = re.sub(
+        r"\b(client|cliente|client[e]? de passage|mme|mr|m|madame|monsieur)\b",
+        " ",
+        text
+    )
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _contact_name_variants(first_name="", last_name="", legacy_name="", organization=""):
+    variants = set()
+
+    first = str(first_name or "").strip()
+    last = str(last_name or "").strip()
+    legacy = str(legacy_name or "").strip()
+    org = str(organization or "").strip()
+
+    for raw in (
+        " ".join(x for x in [first, last] if x),
+        " ".join(x for x in [last, first] if x),
+        legacy,
+        org,
+    ):
+        key = _contact_name_normalize(raw)
+        if key:
+            variants.add(key)
+
+    return variants
+
+
+
+def clean_google_contact_name(first_name="", last_name="", organization=""):
+    """Répare les exports Google où prénom/nom sont mal répartis."""
+    first = " ".join(str(first_name or "").split()).strip()
+    last = " ".join(str(last_name or "").split()).strip()
+    org = " ".join(str(organization or "").split()).strip()
+
+    # Cas : First Name = "Agnès Foricher", Last Name vide.
+    if first and not last:
+        parts = first.split()
+        if len(parts) >= 2:
+            return parts[0], " ".join(parts[1:])
+
+    # Cas : First Name = "Antoine", Last Name = "Lacoste Antoine"
+    if first and last:
+        fkey = _contact_name_normalize(first)
+        last_parts = last.split()
+        if last_parts and _contact_name_normalize(last_parts[-1]) == fkey:
+            cleaned_last = " ".join(last_parts[:-1]).strip()
+            if cleaned_last:
+                return first, cleaned_last
+
+        # Variante inverse : Last Name commence par le prénom.
+        if last_parts and _contact_name_normalize(last_parts[0]) == fkey:
+            cleaned_last = " ".join(last_parts[1:]).strip()
+            if cleaned_last:
+                return first, cleaned_last
+
+    # Organisation / association : ne pas inventer un prénom.
+    if not first and not last and org:
+        return "", org
+
+    return first, last
+
+
+
+def _contact_name_signature(first_name="", last_name="", legacy_name="", organization=""):
+    """Signature indépendante de l'ordre Prénom/Nom pour un rapprochement exact."""
+    variants = _contact_name_variants(first_name, last_name, legacy_name, organization)
+    signatures = set()
+    for value in variants:
+        tokens = [x for x in value.split() if x]
+        if not tokens:
+            continue
+        signatures.add(" ".join(sorted(tokens)))
+    return signatures
+
+
+
+def _merge_manual_local_client(con, master_id, duplicate_id):
+    """
+    Fusion manuelle explicitement demandée par l'utilisateur.
+    La fiche master est conservée. Les champs vides sont complétés depuis le doublon.
+    Les coordonnées différentes non copiées sont conservées dans les notes afin de ne rien perdre.
+    Les réparations/factures (portées par repairs) et les devis sont rattachés au master.
+    Aucun contact Google n'est supprimé.
+    """
+    if master_id == duplicate_id:
+        return {"merged": False, "repairs": 0, "quotes": 0, "reason": "same"}
+
+    master_row = con.execute("SELECT * FROM clients WHERE id=?", (master_id,)).fetchone()
+    dup_row = con.execute("SELECT * FROM clients WHERE id=?", (duplicate_id,)).fetchone()
+    if not master_row or not dup_row:
+        return {"merged": False, "repairs": 0, "quotes": 0, "reason": "missing"}
+
+    master = dict(master_row)
+    dup = dict(dup_row)
+    updates = {}
+
+    # Complète uniquement les champs vides de la fiche conservée.
+    for field in (
+        "first_name", "last_name", "company", "phone", "phone_secondary", "email", "email_secondary",
+        "address_street", "postal_code", "city"
+    ):
+        mv = str(master.get(field) or "").strip()
+        dv = str(dup.get(field) or "").strip()
+        if not mv and dv:
+            updates[field] = dup.get(field)
+            master[field] = dup.get(field)
+
+    # Conserve les éventuelles valeurs différentes dans les notes.
+    extra_notes = []
+    for label, field, normalizer in (
+        ("Téléphone", "phone", normalize_phone),
+        ("Téléphone secondaire", "phone_secondary", normalize_phone),
+        ("E-mail", "email", _email_key),
+        ("E-mail secondaire", "email_secondary", _email_key),
+        ("Adresse", "address_street", lambda x: str(x or "").strip().casefold()),
+        ("Code postal", "postal_code", lambda x: str(x or "").strip()),
+        ("Ville", "city", lambda x: str(x or "").strip().casefold()),
+        ("Entreprise", "company", lambda x: str(x or "").strip().casefold()),
+    ):
+        mv = str(master.get(field) or "").strip()
+        dv = str(dup.get(field) or "").strip()
+        if mv and dv and normalizer(mv) != normalizer(dv):
+            extra_notes.append(f"{label} (ancienne fiche fusionnée) : {dv}")
+
+    master_notes = str(master.get("notes") or "").strip()
+    dup_notes = str(dup.get("notes") or "").strip()
+    merged_notes_parts = []
+    if master_notes:
+        merged_notes_parts.append(master_notes)
+    if dup_notes and dup_notes != master_notes:
+        merged_notes_parts.append("Notes de la fiche fusionnée :\n" + dup_notes)
+    if extra_notes:
+        merged_notes_parts.append("\n".join(extra_notes))
+    merged_notes = "\n\n".join(x for x in merged_notes_parts if x).strip()
+    if merged_notes != master_notes:
+        updates["notes"] = merged_notes
+        master["notes"] = merged_notes
+
+    # Si le master n'est pas lié à Google mais le doublon l'est, récupère le lien.
+    # Si les deux ont des ressources Google différentes, on garde celle du master
+    # et on ne supprime rien chez Google.
+    if (
+        not str(master.get("google_resource_name") or "").strip()
+        and str(dup.get("google_resource_name") or "").strip()
+    ):
+        updates["google_resource_name"] = dup["google_resource_name"]
+        master["google_resource_name"] = dup["google_resource_name"]
+
+    first = str(master.get("first_name") or "").strip()
+    last = str(master.get("last_name") or "").strip()
+    company = str(master.get("company") or "").strip()
+    composed = compose_client_name(last, first) or company or str(master.get("name") or "").strip()
+
+    street = str(master.get("address_street") or "").strip()
+    postal = str(master.get("postal_code") or "").strip()
+    city = str(master.get("city") or "").strip()
+    address = "\n".join(
+        x for x in [street, " ".join(x for x in [postal, city] if x).strip()] if x
+    )
+
+    updates["name"] = composed
+    updates["address"] = address
+    updates["google_sync_status"] = "À synchroniser"
+    updates["google_sync_error"] = ""
+    updates["updated_at"] = now().isoformat(timespec="seconds")
+
+    if updates:
+        sets = ", ".join(f"{k}=?" for k in updates)
+        con.execute(
+            f"UPDATE clients SET {sets} WHERE id=?",
+            list(updates.values()) + [master_id]
+        )
+
+    repairs_count = con.execute(
+        "SELECT COUNT(*) FROM repairs WHERE client_id=?", (duplicate_id,)
+    ).fetchone()[0]
+    quotes_count = con.execute(
+        "SELECT COUNT(*) FROM quotes WHERE client_id=?", (duplicate_id,)
+    ).fetchone()[0]
+
+    # Les factures WOPR sont rattachées aux suivis via repairs.invoice_no :
+    # déplacer repairs déplace donc aussi l'historique de facturation côté client.
+    con.execute("UPDATE repairs SET client_id=? WHERE client_id=?", (master_id, duplicate_id))
+    con.execute("UPDATE quotes SET client_id=? WHERE client_id=?", (master_id, duplicate_id))
+    con.execute("DELETE FROM clients WHERE id=?", (duplicate_id,))
+
+    return {
+        "merged": True,
+        "repairs": int(repairs_count or 0),
+        "quotes": int(quotes_count or 0),
+        "reason": "",
+    }
+
+
+def _merge_one_local_client(con, master_id, duplicate_id):
+    """Fusionne un doublon local vers le master, après contrôles de conflit."""
+    if master_id == duplicate_id:
+        return {"merged": False, "repairs": 0, "quotes": 0}
+
+    master_row = con.execute("SELECT * FROM clients WHERE id=?", (master_id,)).fetchone()
+    dup_row = con.execute("SELECT * FROM clients WHERE id=?", (duplicate_id,)).fetchone()
+    if not master_row or not dup_row:
+        return {"merged": False, "repairs": 0, "quotes": 0}
+
+    master = dict(master_row)
+    dup = dict(dup_row)
+
+    if _field_conflict([master.get("email"), dup.get("email")], _email_key):
+        return {"merged": False, "repairs": 0, "quotes": 0}
+    if _field_conflict([master.get("email_secondary"), dup.get("email_secondary")], _email_key):
+        return {"merged": False, "repairs": 0, "quotes": 0}
+    if _field_conflict([master.get("phone"), dup.get("phone")], normalize_phone):
+        return {"merged": False, "repairs": 0, "quotes": 0}
+    if _field_conflict([master.get("phone_secondary"), dup.get("phone_secondary")], normalize_phone):
+        return {"merged": False, "repairs": 0, "quotes": 0}
+
+    # Les signatures doivent partager au moins une identité normalisée.
+    msig = _contact_name_signature(
+        master.get("first_name"), master.get("last_name"), master.get("name"), ""
+    )
+    dsig = _contact_name_signature(
+        dup.get("first_name"), dup.get("last_name"), dup.get("name"), ""
+    )
+    if not (msig & dsig):
+        return {"merged": False, "repairs": 0, "quotes": 0}
+
+    updates = {}
+    for field in (
+        "first_name", "last_name", "company", "phone", "phone_secondary", "email", "email_secondary",
+        "address_street", "postal_code", "city", "notes"
+    ):
+        if not str(master.get(field) or "").strip() and str(dup.get(field) or "").strip():
+            updates[field] = dup[field]
+            master[field] = dup[field]
+
+    if (
+        not str(master.get("google_resource_name") or "").strip()
+        and str(dup.get("google_resource_name") or "").strip()
+    ):
+        updates["google_resource_name"] = dup["google_resource_name"]
+        master["google_resource_name"] = dup["google_resource_name"]
+
+    first = str(master.get("first_name") or "").strip()
+    last = str(master.get("last_name") or "").strip()
+    composed = compose_client_name(last, first) or str(master.get("name") or "").strip()
+
+    street = str(master.get("address_street") or "").strip()
+    postal = str(master.get("postal_code") or "").strip()
+    city = str(master.get("city") or "").strip()
+    address = "\n".join(
+        x for x in [
+            street,
+            " ".join(x for x in [postal, city] if x).strip()
+        ] if x
+    )
+
+    updates["name"] = composed
+    updates["address"] = address
+    updates["google_sync_status"] = "À synchroniser"
+    updates["google_sync_error"] = ""
+    updates["updated_at"] = now().isoformat(timespec="seconds")
+
+    if updates:
+        sets = ", ".join(f"{k}=?" for k in updates)
+        con.execute(
+            f"UPDATE clients SET {sets} WHERE id=?",
+            list(updates.values()) + [master_id]
+        )
+
+    repairs_count = con.execute(
+        "SELECT COUNT(*) FROM repairs WHERE client_id=?", (duplicate_id,)
+    ).fetchone()[0]
+    quotes_count = con.execute(
+        "SELECT COUNT(*) FROM quotes WHERE client_id=?", (duplicate_id,)
+    ).fetchone()[0]
+
+    con.execute("UPDATE repairs SET client_id=? WHERE client_id=?", (master_id, duplicate_id))
+    con.execute("UPDATE quotes SET client_id=? WHERE client_id=?", (master_id, duplicate_id))
+    con.execute("DELETE FROM clients WHERE id=?", (duplicate_id,))
+
+    return {
+        "merged": True,
+        "repairs": repairs_count,
+        "quotes": quotes_count,
+    }
+
+
+def _local_client_richness(local, repairs_count=0, quotes_count=0):
+    filled = sum(
+        1 for field in (
+            "first_name", "last_name", "company", "phone", "phone_secondary", "email", "email_secondary",
+            "address_street", "postal_code", "city", "notes",
+            "google_resource_name"
+        )
+        if str(local.get(field) or "").strip()
+    )
+    return (repairs_count * 1000) + (quotes_count * 100) + filled
+
+
+def _client_activity_counts(con):
+    """Retourne les compteurs réparations/devis par client en 2 requêtes groupées."""
+    stats = {}
+
+    for row in con.execute(
+        "SELECT client_id, COUNT(*) AS n FROM repairs "
+        "WHERE client_id IS NOT NULL GROUP BY client_id"
+    ).fetchall():
+        stats.setdefault(int(row["client_id"]), {"repairs": 0, "quotes": 0})
+        stats[int(row["client_id"])]["repairs"] = int(row["n"] or 0)
+
+    for row in con.execute(
+        "SELECT client_id, COUNT(*) AS n FROM quotes "
+        "WHERE client_id IS NOT NULL GROUP BY client_id"
+    ).fetchall():
+        stats.setdefault(int(row["client_id"]), {"repairs": 0, "quotes": 0})
+        stats[int(row["client_id"])]["quotes"] = int(row["n"] or 0)
+
+    return stats
+
+
+
+
+def _field_conflict(values, normalizer=lambda x: str(x or "").strip().casefold()):
+    nonempty = {normalizer(x) for x in values if str(x or "").strip()}
+    nonempty.discard("")
+    return len(nonempty) > 1
+
+
+def find_safe_local_duplicate_groups(con):
+    rows = [dict(x) for x in con.execute("SELECT * FROM clients ORDER BY id").fetchall()]
+
+    # One client can have multiple historical spellings; group by exact token signature.
+    signature_to_ids = {}
+    by_id = {x["id"]: x for x in rows}
+    for c in rows:
+        for sig in _contact_name_signature(
+            c.get("first_name"), c.get("last_name"), c.get("name"), ""
+        ):
+            if sig:
+                signature_to_ids.setdefault(sig, set()).add(c["id"])
+
+    visited = set()
+    safe_groups = []
+    activity_stats = _client_activity_counts(con)
+
+    for sig, ids in signature_to_ids.items():
+        ids = set(ids)
+        if len(ids) < 2:
+            continue
+
+        frozen = tuple(sorted(ids))
+        if frozen in visited:
+            continue
+        visited.add(frozen)
+
+        members = [by_id[x] for x in sorted(ids) if x in by_id]
+        if len(members) < 2:
+            continue
+
+        if _field_conflict([x.get("email") for x in members], _email_key):
+            continue
+        if _field_conflict([x.get("phone") for x in members], normalize_phone):
+            continue
+
+        stats = {
+            m["id"]: (
+                activity_stats.get(m["id"], {}).get("repairs", 0),
+                activity_stats.get(m["id"], {}).get("quotes", 0),
+            )
+            for m in members
+        }
+
+        ordered = sorted(
+            members,
+            key=lambda m: (
+                _local_client_richness(
+                    m,
+                    stats[m["id"]][0],
+                    stats[m["id"]][1]
+                ),
+                -int(m["id"])
+            ),
+            reverse=True
+        )
+
+        safe_groups.append({
+            "key": sig,
+            "master": ordered[0],
+            "duplicates": ordered[1:],
+            "repairs_count": stats[ordered[0]["id"]][0],
+            "quotes_count": stats[ordered[0]["id"]][1],
+        })
+
+    return safe_groups
+
+
+def merge_safe_local_duplicates():
+    backup_database(force=True, tag="avant_fusion_doublons_clients")
+    con = db()
+    groups = find_safe_local_duplicate_groups(con)
+
+    merged_clients = 0
+    moved_repairs = 0
+    moved_quotes = 0
+
+    for group in groups:
+        master_id = group["master"]["id"]
+        for dup in group["duplicates"]:
+            result = _merge_one_local_client(con, master_id, dup["id"])
+            if result["merged"]:
+                merged_clients += 1
+                moved_repairs += result["repairs"]
+                moved_quotes += result["quotes"]
+
+    con.commit()
+    con.close()
+
+    return {
+        "groups": len(groups),
+        "merged_clients": merged_clients,
+        "moved_repairs": moved_repairs,
+        "moved_quotes": moved_quotes,
+    }
+
+
+def parse_google_contacts_csv(raw_text):
+    """Lit un export CSV Google Contacts et conserve les champs utiles à WOPR."""
+    reader = csv.DictReader(io.StringIO(str(raw_text or "")))
+    if not reader.fieldnames:
+        return []
+
+    required_hint = {"First Name", "Last Name", "Phone 1 - Value", "E-mail 1 - Value"}
+    if not any(x in set(reader.fieldnames) for x in required_hint):
+        raise ValueError("Ce fichier ne ressemble pas à un export Google Contacts.")
+
+    contacts = []
+    for pos, row in enumerate(reader, start=2):
+        labels = str(row.get("Labels") or "").strip()
+        # Les libellés Google sont conservés pour information ; le groupe cible est configurable.
+        # Si Labels est vide partout, on accepte le fichier tel quel.
+        raw_first_name = str(row.get("First Name") or "").strip()
+        raw_last_name = str(row.get("Last Name") or "").strip()
+        organization = str(row.get("Organization Name") or "").strip()
+
+        first_name, last_name = clean_google_contact_name(
+            raw_first_name,
+            raw_last_name,
+            organization
+        )
+
+        email = str(row.get("E-mail 1 - Value") or "").strip()
+        email_secondary = str(row.get("E-mail 2 - Value") or "").strip()
+        phone = str(row.get("Phone 1 - Value") or "").strip()
+        phone_secondary = str(row.get("Phone 2 - Value") or "").strip()
+
+        street = str(row.get("Address 1 - Street") or "").strip()
+        postal = str(row.get("Address 1 - Postal Code") or "").strip()
+        city = str(row.get("Address 1 - City") or "").strip()
+        country = str(row.get("Address 1 - Country") or "").strip()
+        notes = str(row.get("Notes") or "").strip()
+
+        display_name = " ".join(x for x in [first_name, last_name] if x).strip() or organization
+        if not display_name and not email and not email_secondary and not phone and not phone_secondary:
+            continue
+
+        contacts.append({
+            "source_position": pos,
+            "labels": labels,
+            "first_name": first_name,
+            "last_name": last_name,
+            "organization": organization,
+            "display_name": display_name,
+            "email": email,
+            "email_secondary": email_secondary,
+            "phone": phone,
+            "phone_secondary": phone_secondary,
+            "address_street": street,
+            "postal_code": postal,
+            "city": city,
+            "country": country,
+            "notes": notes,
+        })
+
+    return contacts
+
+
+def analyze_google_csv_contacts(contacts):
+    """
+    Matching V2.3.25 :
+      1) e-mail / téléphone uniques = preuves fortes, prioritaires ;
+      2) sinon identité exacte, ordre Prénom/Nom indifférent ;
+      3) doublons locaux sûrs sélectionnent la fiche la plus riche.
+    """
+    con = db()
+    local_rows = [dict(x) for x in con.execute("SELECT * FROM clients ORDER BY id").fetchall()]
+
+    local_stats = _client_activity_counts(con)
+
+    con.close()
+
+    email_index = {}
+    phone_index = {}
+    sig_index = {}
+
+    for local in local_rows:
+        cid = local["id"]
+
+        for email_field in ("email", "email_secondary"):
+            ek = _email_key(local.get(email_field))
+            if ek:
+                email_index.setdefault(ek, []).append(cid)
+
+        for phone_field in ("phone", "phone_secondary"):
+            pk = normalize_phone(local.get(phone_field))
+            if pk:
+                phone_index.setdefault(pk, []).append(cid)
+
+        for sig in _contact_name_signature(
+            local.get("first_name"),
+            local.get("last_name"),
+            local.get("name"),
+            ""
+        ):
+            sig_index.setdefault(sig, []).append(cid)
+
+    local_by_id = {x["id"]: x for x in local_rows}
+
+    analyzed = []
+    summary = {
+        "total_source": len(contacts),
+        "safe": 0,
+        "ambiguous": 0,
+        "unmatched": 0,
+        "already_complete": 0,
+        "will_fill": 0,
+        "will_merge": 0,
+        "actionable": 0,
+    }
+
+    for source in contacts:
+        evidence = []
+        status = "unmatched"
+        local = None
+        duplicate_ids = []
+
+        # ---------- Strong evidence first ----------
+        strong_sets = []
+
+        ek = _email_key(source.get("email"))
+        if ek:
+            email_ids = set(email_index.get(ek, []))
+            if len(email_ids) == 1:
+                strong_sets.append(email_ids)
+                evidence.append("e-mail")
+        ek_secondary = _email_key(source.get("email_secondary"))
+        if ek_secondary:
+            email_ids = set(email_index.get(ek_secondary, []))
+            if len(email_ids) == 1:
+                strong_sets.append(email_ids)
+                evidence.append("e-mail secondaire")
+
+        pk = normalize_phone(source.get("phone"))
+        if pk:
+            phone_ids = set(phone_index.get(pk, []))
+            if len(phone_ids) == 1:
+                strong_sets.append(phone_ids)
+                evidence.append("téléphone")
+        pk_secondary = normalize_phone(source.get("phone_secondary"))
+        if pk_secondary:
+            phone_ids = set(phone_index.get(pk_secondary, []))
+            if len(phone_ids) == 1:
+                strong_sets.append(phone_ids)
+                evidence.append("téléphone secondaire")
+
+        strong_ids = set()
+        if strong_sets:
+            strong_ids = set.union(*strong_sets)
+
+        if len(strong_ids) == 1:
+            cid = next(iter(strong_ids))
+            local = local_by_id.get(cid)
+            status = "safe"
+
+        elif len(strong_ids) > 1:
+            # e-mail and phone point to different clients: never guess.
+            status = "ambiguous"
+
+        # ---------- Name signature only if no strong conflict ----------
+        source_sigs = _contact_name_signature(
+            source.get("first_name"),
+            source.get("last_name"),
+            source.get("display_name"),
+            source.get("organization")
+        )
+
+        name_ids = set()
+        for sig in source_sigs:
+            name_ids.update(sig_index.get(sig, []))
+
+        if status == "safe" and local is not None:
+            # Other exact-name locals are treated as possible duplicates,
+            # but they cannot invalidate a strong e-mail/phone match.
+            others = [
+                local_by_id[x] for x in name_ids
+                if x != local["id"] and x in local_by_id
+            ]
+            safe_others = []
+            for other in others:
+                if _field_conflict(
+                    [local.get("email"), other.get("email")], _email_key
+                ):
+                    continue
+                if _field_conflict(
+                    [local.get("phone"), other.get("phone")], normalize_phone
+                ):
+                    continue
+                safe_others.append(other["id"])
+
+            duplicate_ids = safe_others
+            if duplicate_ids:
+                evidence.append("doublons locaux")
+
+        elif status == "unmatched" and name_ids:
+            candidate_rows = [local_by_id[x] for x in name_ids if x in local_by_id]
+
+            if len(candidate_rows) == 1:
+                local = candidate_rows[0]
+                status = "safe"
+                evidence.append("nom exact")
+
+            elif len(candidate_rows) > 1:
+                # Same exact identity and no conflicting phone/email => safe local duplicates.
+                conflict_email = _field_conflict(
+                    [x.get("email") for x in candidate_rows], _email_key
+                )
+                conflict_phone = _field_conflict(
+                    [x.get("phone") for x in candidate_rows], normalize_phone
+                )
+
+                if not conflict_email and not conflict_phone:
+                    candidate_rows.sort(
+                        key=lambda x: _local_client_richness(
+                            x,
+                            local_stats[x["id"]]["repairs"],
+                            local_stats[x["id"]]["quotes"],
+                        ),
+                        reverse=True
+                    )
+                    local = candidate_rows[0]
+                    duplicate_ids = [x["id"] for x in candidate_rows[1:]]
+                    status = "safe"
+                    evidence.extend(["nom exact", "doublons locaux"])
+                else:
+                    status = "ambiguous"
+
+        # ---------- Fields to complete ----------
+        fill = {}
+        if local is not None:
+            source_first = str(source.get("first_name") or "").strip()
+            source_last = str(source.get("last_name") or "").strip()
+
+            if not str(local.get("first_name") or "").strip() and source_first:
+                fill["first_name"] = source_first
+            if not str(local.get("last_name") or "").strip() and source_last:
+                fill["last_name"] = source_last
+            if not str(local.get("phone") or "").strip() and source.get("phone"):
+                fill["phone"] = str(source.get("phone") or "").strip()
+            if not str(local.get("phone_secondary") or "").strip() and source.get("phone_secondary"):
+                fill["phone_secondary"] = str(source.get("phone_secondary") or "").strip()
+            if not str(local.get("email") or "").strip() and source.get("email"):
+                fill["email"] = str(source.get("email") or "").strip()
+            if not str(local.get("email_secondary") or "").strip() and source.get("email_secondary"):
+                fill["email_secondary"] = str(source.get("email_secondary") or "").strip()
+            if not str(local.get("address_street") or "").strip() and source.get("address_street"):
+                fill["address_street"] = str(source.get("address_street") or "").strip()
+            if not str(local.get("postal_code") or "").strip() and source.get("postal_code"):
+                fill["postal_code"] = str(source.get("postal_code") or "").strip()
+            if not str(local.get("city") or "").strip() and source.get("city"):
+                fill["city"] = str(source.get("city") or "").strip()
+            if not str(local.get("company") or "").strip() and source.get("organization"):
+                fill["company"] = str(source.get("organization") or "").strip()
+
+        actionable = bool(fill or duplicate_ids)
+
+        row = dict(source)
+        row.update({
+            "status": status,
+            "local_client_id": local["id"] if local else None,
+            "local_name": (
+                compose_client_name(local.get("last_name"), local.get("first_name"))
+                or local.get("name")
+                or ""
+            ) if local else "",
+            "evidence": list(dict.fromkeys(evidence)),
+            "fill": fill,
+            "fill_count": len(fill),
+            "duplicate_local_ids": duplicate_ids,
+            "actionable": actionable,
+        })
+        analyzed.append(row)
+
+        if status == "safe":
+            summary["safe"] += 1
+            if fill:
+                summary["will_fill"] += 1
+            if duplicate_ids:
+                summary["will_merge"] += len(duplicate_ids)
+            if actionable:
+                summary["actionable"] += 1
+            else:
+                summary["already_complete"] += 1
+        elif status == "ambiguous":
+            summary["ambiguous"] += 1
+        else:
+            summary["unmatched"] += 1
+
+    return analyzed, summary
+
+
+def save_pending_google_csv_import(payload):
+    cleanup_pending_imports()
+    token = secrets.token_urlsafe(24)
+    path = IMPORT_DIR / f"googlecsv_{token}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    session["google_csv_import_token"] = token
+    return token
+
+
+def load_pending_google_csv_import():
+    token = session.get("google_csv_import_token", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,80}", token or ""):
+        return None, None
+    path = IMPORT_DIR / f"googlecsv_{token}.json"
+    if not path.exists():
+        return None, None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), path
+    except Exception:
+        return None, None
+
+
+def _email_key(value):
+    return (value or "").strip().casefold()
+
+
+def _name_key(value):
+    return re.sub(r"\\s+", " ", (value or "").strip()).casefold()
+
+
+def build_local_contact_index(rows):
+    index = {"email": {}, "phone": {}, "name": {}, "uid": {}}
+    for row in rows:
+        item = dict(row)
+        rid = item.get("id")
+        email = _email_key(item.get("email"))
+        email_secondary = _email_key(item.get("email_secondary"))
+        phone = normalize_phone(item.get("phone"))
+        name = _name_key(item.get("name"))
+        uid = (item.get("proton_uid") or "").strip()
+        if email:
+            index["email"].setdefault(email, []).append(rid)
+        if email_secondary:
+            index["email"].setdefault(email_secondary, []).append(rid)
+        if phone:
+            index["phone"].setdefault(phone, []).append(rid)
+        if name:
+            index["name"].setdefault(name, []).append(rid)
+        if uid:
+            index["uid"].setdefault(uid, []).append(rid)
+    return index
+
+
+def google_contacts_bulk_index(service):
+    """Indexe une seule fois tous les Google Contacts pour éviter 295 recherches API."""
+    index = {"email": {}, "phone": {}, "name": {}, "people": {}}
+    token = None
+    while True:
+        result = service.people().connections().list(
+            resourceName="people/me",
+            pageSize=1000,
+            pageToken=token,
+            personFields="names,emailAddresses,phoneNumbers,memberships"
+        ).execute()
+
+        for person in result.get("connections", []):
+            resource = person.get("resourceName")
+            if not resource:
+                continue
+            names = person.get("names", [])
+            display = (names[0].get("displayName") if names else "") or resource
+            emails = [(x.get("value") or "").strip() for x in person.get("emailAddresses", [])]
+            phones = [(x.get("value") or "").strip() for x in person.get("phoneNumbers", [])]
+            groups = set()
+            for membership in person.get("memberships", []):
+                cg = membership.get("contactGroupMembership", {})
+                if cg.get("contactGroupResourceName"):
+                    groups.add(cg["contactGroupResourceName"])
+
+            info = {
+                "resource_name": resource,
+                "display_name": display,
+                "emails": emails,
+                "phones": phones,
+                "groups": list(groups),
+            }
+            index["people"][resource] = info
+
+            nk = _name_key(display)
+            if nk:
+                index["name"].setdefault(nk, []).append(resource)
+            for email in emails:
+                ek = _email_key(email)
+                if ek:
+                    index["email"].setdefault(ek, []).append(resource)
+            for phone in phones:
+                pk = normalize_phone(phone)
+                if pk:
+                    index["phone"].setdefault(pk, []).append(resource)
+
+        token = result.get("nextPageToken")
+        if not token:
+            break
+    return index
+
+
+def _unique_contact_matches(contact, index, source_phone_counts=None):
+    """Retourne les IDs/ressources exacts par UID/email/téléphone sans fusion par simple nom."""
+    matches = set()
+    reasons = []
+
+    uid = (contact.get("uid") or "").strip()
+    if uid and "uid" in index and index["uid"].get(uid):
+        matches.update(index["uid"][uid])
+        reasons.append("UID Proton")
+
+    for email in contact.get("emails", []):
+        ek = _email_key(email)
+        vals = index.get("email", {}).get(ek, [])
+        if vals:
+            matches.update(vals)
+            reasons.append("e-mail")
+
+    # Un numéro partagé par plusieurs fiches Proton n'est pas assez sûr pour fusionner automatiquement.
+    for phone in contact.get("phones", []):
+        pk = normalize_phone(phone)
+        if not pk:
+            continue
+        if source_phone_counts is not None and source_phone_counts.get(pk, 0) > 1:
+            continue
+        vals = index.get("phone", {}).get(pk, [])
+        if vals:
+            matches.update(vals)
+            reasons.append("téléphone")
+
+    return sorted(matches), sorted(set(reasons))
+
+
+def analyze_proton_contacts(contacts, google_index=None):
+    # Détecte les coordonnées partagées dans le fichier source.
+    source_email_counts = {}
+    source_phone_counts = {}
+    for c in contacts:
+        for email in c.get("emails", []):
+            ek = _email_key(email)
+            if ek:
+                source_email_counts[ek] = source_email_counts.get(ek, 0) + 1
+        for phone in c.get("phones", []):
+            pk = normalize_phone(phone)
+            if pk:
+                source_phone_counts[pk] = source_phone_counts.get(pk, 0) + 1
+
+    con = db()
+    local_rows = con.execute("SELECT * FROM clients ORDER BY id").fetchall()
+    con.close()
+    local_index = build_local_contact_index(local_rows)
+
+    group_resource = None
+    if google_index is not None:
+        service = google_service()
+        group_resource = google_find_group(service) if service else None
+
+    analyzed = []
+    summary = {
+        "total": len(contacts),
+        "local_existing": 0,
+        "local_ambiguous": 0,
+        "google_existing": 0,
+        "google_ambiguous": 0,
+        "google_missing": 0,
+        "google_in_group": 0,
+        "shared_coordinates": 0,
+    }
+
+    for c in contacts:
+        local_matches, local_reasons = _unique_contact_matches(c, local_index, source_phone_counts)
+        google_matches, google_reasons = ([], [])
+        if google_index is not None:
+            google_matches, google_reasons = _unique_contact_matches(c, google_index, source_phone_counts)
+
+        shared = []
+        for email in c.get("emails", []):
+            ek = _email_key(email)
+            if ek and source_email_counts.get(ek, 0) > 1:
+                shared.append("e-mail partagé")
+        for phone in c.get("phones", []):
+            pk = normalize_phone(phone)
+            if pk and source_phone_counts.get(pk, 0) > 1:
+                shared.append("téléphone partagé")
+
+        google_in_group = False
+        if len(google_matches) == 1 and group_resource:
+            info = google_index["people"].get(google_matches[0], {})
+            google_in_group = group_resource in set(info.get("groups", []))
+
+        row = dict(c)
+        row.update({
+            "local_matches": local_matches,
+            "local_reasons": local_reasons,
+            "google_matches": google_matches,
+            "google_reasons": google_reasons,
+            "google_in_group": google_in_group,
+            "shared_warnings": sorted(set(shared)),
+        })
+        analyzed.append(row)
+
+        if len(local_matches) == 1:
+            summary["local_existing"] += 1
+        elif len(local_matches) > 1:
+            summary["local_ambiguous"] += 1
+
+        if google_index is not None:
+            if len(google_matches) == 1:
+                summary["google_existing"] += 1
+                if google_in_group:
+                    summary["google_in_group"] += 1
+            elif len(google_matches) > 1:
+                summary["google_ambiguous"] += 1
+            else:
+                summary["google_missing"] += 1
+
+        if shared:
+            summary["shared_coordinates"] += 1
+
+    return analyzed, summary
+
+
+def save_pending_proton_import(payload):
+    cleanup_pending_imports()
+    token = secrets.token_urlsafe(24)
+    path = IMPORT_DIR / f"proton_{token}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    session["proton_import_token"] = token
+    return token
+
+
+def load_pending_proton_import():
+    token = session.get("proton_import_token", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,80}", token or ""):
+        return None, None
+    path = IMPORT_DIR / f"proton_{token}.json"
+    if not path.exists():
+        return None, None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), path
+    except Exception:
+        return None, None
+
+
+def cleanup_pending_imports():
+    IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - 24 * 3600
+    for pattern in ("proton_*.json", "googlecsv_*.json"):
+        for path in IMPORT_DIR.glob(pattern):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                pass
+
+
+def _merge_notes(existing, imported):
+    existing = (existing or "").strip()
+    imported = (imported or "").strip()
+    if not imported:
+        return existing
+    if not existing:
+        return imported
+    if imported.casefold() in existing.casefold():
+        return existing
+    return existing + "\n\n--- Import Proton ---\n" + imported
+
+
+def google_create_from_proton(service, contact, group_resource):
+    if contact.get("first_name") or contact.get("last_name"):
+        google_name = {}
+        if contact.get("first_name"):
+            google_name["givenName"] = contact["first_name"]
+        if contact.get("last_name"):
+            google_name["familyName"] = contact["last_name"]
+        body = {"names": [google_name]}
+    else:
+        body = {"names": [{"givenName": contact.get("name") or "Client Proton"}]}
+
+    emails = [{"value": x, "type": "home"} for x in contact.get("emails", []) if x]
+    phones = [{"value": x, "type": "mobile"} for x in contact.get("phones", []) if x]
+    addresses = []
+    for adr in contact.get("addresses", []):
+        if any(adr.get(k) for k in ("street", "city", "postal_code", "country")):
+            addresses.append({
+                "streetAddress": adr.get("street", ""),
+                "city": adr.get("city", ""),
+                "region": adr.get("region", ""),
+                "postalCode": adr.get("postal_code", ""),
+                "country": adr.get("country", "") or "France",
+                "type": "home",
+            })
+
+    if emails:
+        body["emailAddresses"] = emails
+    if phones:
+        body["phoneNumbers"] = phones
+    if addresses:
+        body["addresses"] = addresses
+    if contact.get("notes"):
+        body["biographies"] = [{"value": contact["notes"], "contentType": "TEXT_PLAIN"}]
+
+    created = service.people().createContact(body=body).execute()
+    resource = created.get("resourceName")
+    if resource and group_resource:
+        try:
+            service.contactGroups().members().modify(
+                resourceName=group_resource,
+                body={"resourceNamesToAdd": [resource]}
+            ).execute()
+        except HttpError as e:
+            if getattr(e.resp, "status", None) not in (400, 409):
+                raise
+    return resource
+
+
+def csv_response(filename, rows):
+    bio = io.StringIO(newline="")
+    writer = csv.writer(bio)
+    for row in rows:
+        writer.writerow(row)
+    data = "\ufeff" + bio.getvalue()
+    return Response(data, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def vcard_escape(value):
+    return str(value or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+@app.route("/database/unlock", methods=["GET", "POST"])
+def database_unlock():
+    if request.remote_addr not in {"127.0.0.1", "::1"}:
+        return "Déverrouillage SQLCipher autorisé uniquement depuis le PC local.", 403
+
+    if not database_security_requires_unlock():
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        supplied = request.form.get("_csrf_token", "")
+        expected = session.get("_csrf_token", "")
+        if not expected or not supplied or not secrets.compare_digest(str(supplied), str(expected)):
+            abort(400, description="Jeton de sécurité invalide. Recharge la page puis réessaie.")
+        pin = request.form.get("pin", "").strip()
+        if not read_pin_hash() or not check_password_hash(read_pin_hash(), pin):
+            flash("PIN incorrect.")
+        else:
+            try:
+                state = initialize_database_security(pin)
+                init_db()
+                backup_database(force=False, tag="demarrage")
+                harden_local_permissions()
+                session.clear()
+                session["admin_authenticated"] = True
+                session.permanent = True
+                session["_csrf_token"] = secrets.token_urlsafe(32)
+                audit_event("SQLCIPHER_UNLOCK", f"Base SQLCipher : {state}", request.remote_addr)
+                if state == "migrated":
+                    flash("Base WOPR chiffrée avec SQLCipher et vérifiée.")
+                return redirect(url_for("index"))
+            except Exception as exc:
+                flash(str(exc))
+
+    return render_template("database_unlock.html")
+
+
+@app.route("/master-key/setup", methods=["GET", "POST"])
+def master_key_setup():
+    """Premier démarrage portable : importer ou créer la clé maître locale."""
+    if request.remote_addr not in {"127.0.0.1", "::1"}:
+        return "Configuration de la clé maître autorisée uniquement depuis le PC local.", 403
+
+    if MASTER_SECRET_FILE.exists():
+        try:
+            validate_master_secret(MASTER_SECRET_FILE.read_bytes())
+            return redirect(url_for("index"))
+        except ValueError:
+            pass
+
+    if request.method == "POST":
+        action = str(request.form.get("action") or "").strip()
+        if action == "import":
+            uploaded = request.files.get("master_key_file")
+            if not uploaded or not uploaded.filename:
+                flash("Choisis ton fichier master.key.")
+            else:
+                try:
+                    raw = uploaded.read(4096)
+                    install_master_secret(raw)
+                    audit_event("MASTER_KEY_IMPORTED", "Clé maître importée sur cette machine", request.remote_addr)
+                    flash("Clé maître importée. WOPR peut maintenant déchiffrer tes secrets.")
+                    return redirect(url_for("index"))
+                except Exception as exc:
+                    flash(str(exc))
+        elif action == "create":
+            try:
+                create_master_secret()
+                audit_event("MASTER_KEY_CREATED", "Nouvelle clé maître créée sur cette machine", request.remote_addr)
+                flash("Nouvelle clé maître créée. Pense à l'exporter et à la sauvegarder séparément.")
+                return redirect(url_for("index"))
+            except Exception as exc:
+                flash(f"Impossible de créer la clé maître : {exc}")
+
+    return render_template(
+        "master_key_setup.html",
+    )
+
+
+@app.context_processor
+def inject_globals():
+    configured_website = str(cfg().get("website") or "").strip()
+    return {
+        "config": cfg(),
+        "current_year": now().year,
+        "app_version": APP_VERSION,
+        "pdf_languages": PDF_LANGUAGES,
+        # Le lien du logo reste portable : chaque installation peut définir
+        # son propre site dans private/config.json.
+        "foul_fix_home_url": configured_website or "https://foul-fix.fr/",
+    }
+
+@app.context_processor
+def inject_security_globals():
+    return {
+        "csrf_token": csrf_token,
+        "admin_authenticated": bool(session.get("admin_authenticated")),
+        "client_mode": bool(session.get("client_mode")),
+        "client_logo_configured": bool(invoice_logo_path()),
+    }
+
+
+@app.before_request
+def security_gate():
+    endpoint = request.endpoint or ""
+
+    # V2.3.157 — Une installation portable ne fabrique jamais silencieusement
+    # une nouvelle clé si master.key manque. Sur le PC local, WOPR demande
+    # d'abord d'importer la clé existante (ou d'en créer une pour une vraie
+    # nouvelle installation).
+    if endpoint == "master_key_setup":
+        if request.remote_addr not in {"127.0.0.1", "::1"}:
+            return "Configuration de la clé maître autorisée uniquement depuis le PC local.", 403
+        return None
+    if endpoint != "static" and not MASTER_SECRET_FILE.exists():
+        if request.remote_addr not in {"127.0.0.1", "::1"}:
+            return "Clé maître WOPR absente sur la machine hôte.", 503
+        return redirect(url_for("master_key_setup"))
+
+    if endpoint == "database_unlock":
+        return None
+    if endpoint != "static" and database_security_requires_unlock():
+        if request.remote_addr not in {"127.0.0.1", "::1"}:
+            return "Base WOPR verrouillée sur la machine hôte.", 503
+        return redirect(url_for("database_unlock"))
+
+    # V2.3.52 — vraie sauvegarde quotidienne :
+    # si WOPR reste ouvert plusieurs jours, la première requête du nouveau
+    # jour crée le backup. backup_database évite automatiquement les doublons.
+    if endpoint != "static":
+        try:
+            backup_database(force=False, tag="quotidien")
+        except Exception:
+            # Une sauvegarde ne doit jamais bloquer l'utilisation de l'application.
+            pass
+
+    # Pages volontairement publiques : ressources statiques et signature client.
+    if endpoint in {"static", "sign"}:
+        return None
+
+    # La toute première création du PIN ne peut se faire que sur le PC local.
+    if not pin_is_configured():
+        if endpoint == "admin_setup":
+            if request.remote_addr not in {"127.0.0.1", "::1"}:
+                return render_template("pin_setup_local_only.html"), 403
+        else:
+            if request.remote_addr not in {"127.0.0.1", "::1"}:
+                return render_template("pin_setup_local_only.html"), 403
+            return redirect(url_for("admin_setup"))
+
+    # Protection CSRF de toutes les écritures atelier. La signature publique
+    # utilise son token fort dédié et est volontairement exclue ci-dessus.
+    if request.method == "POST":
+        supplied = request.form.get("_csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+        expected = session.get("_csrf_token", "")
+        if not expected or not supplied or not secrets.compare_digest(str(supplied), str(expected)):
+            abort(400, description="Jeton de sécurité invalide. Recharge la page puis réessaie.")
+
+    if endpoint in {"admin_login", "admin_setup"}:
+        return None
+
+    if not session.get("admin_authenticated"):
+        return redirect(url_for("admin_login", next=request.full_path if request.query_string else request.path))
+
+    # V2.3.39 — Mode Client :
+    # même si l'atelier est authentifié, aucune donnée sensible de l'application
+    # n'est accessible pendant une prise en charge devant le client.
+    if session.get("client_mode"):
+        allowed = {"static", "sign", "admin_lock", "repair_new", "repair_client_search", "atelier_dashboard", "atelier_client_mode", "atelier_client_mode_off", "security_invoice_logo_preview", "wopr_end_sequence_audio"}
+        current_rid = session.get("client_mode_rid")
+
+        if endpoint in {"repair_detail", "repair_signature", "qr_png", "intake_pdf"}:
+            try:
+                rid = int((request.view_args or {}).get("rid"))
+            except Exception:
+                rid = None
+            if current_rid and rid == int(current_rid):
+                allowed.add(endpoint)
+
+        if endpoint not in allowed:
+            if request.method == "GET":
+                return render_template("client_mode_blocked.html"), 403
+            abort(403, description="Action indisponible en Mode Client.")
+
+    session.permanent = True
+    return None
+
+
+@app.route("/admin/setup", methods=["GET", "POST"])
+def admin_setup():
+    if pin_is_configured():
+        return redirect(url_for("admin_login"))
+    if request.method == "POST":
+        pin = request.form.get("pin", "").strip()
+        confirm = request.form.get("pin_confirm", "").strip()
+        if not valid_pin_format(pin):
+            flash(f"Le PIN doit contenir uniquement {PIN_MIN_LENGTH} à {PIN_MAX_LENGTH} chiffres.")
+        elif pin != confirm:
+            flash("Les deux PIN ne correspondent pas.")
+        else:
+            write_pin(pin)
+            session.clear()
+            session["admin_authenticated"] = True
+            session.permanent = True
+            session["_csrf_token"] = secrets.token_urlsafe(32)
+            audit_event("PIN_CREATED", "PIN administrateur initialisé", request.remote_addr)
+            flash("PIN administrateur créé. WOPR est maintenant verrouillé.")
+            return redirect(url_for("index"))
+    return render_template("admin_setup.html")
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if session.get("admin_authenticated"):
+        return redirect(url_for("index"))
+    ip = request.remote_addr or "unknown"
+    state = LOGIN_FAILURES.get(ip, {"fails": 0, "blocked_until": 0.0})
+    wait = max(0, int(state.get("blocked_until", 0) - time.time()))
+    if request.method == "POST":
+        if wait > 0:
+            flash(f"Trop de tentatives. Réessaie dans {wait} seconde(s).")
+            return render_template("admin_login.html", wait=wait), 429
+        pin = request.form.get("pin", "").strip()
+        if read_pin_hash() and check_password_hash(read_pin_hash(), pin):
+            LOGIN_FAILURES.pop(ip, None)
+            next_url = safe_next_url(request.form.get("next"))
+            session.clear()
+            session["admin_authenticated"] = True
+            session.permanent = True
+            session["_csrf_token"] = secrets.token_urlsafe(32)
+            audit_event("LOGIN_OK", "Connexion PIN réussie", ip)
+            return redirect(next_url)
+        state["fails"] = int(state.get("fails", 0)) + 1
+        if state["fails"] >= PIN_MAX_ATTEMPTS:
+            state["blocked_until"] = time.time() + PIN_BLOCK_SECONDS
+            state["fails"] = 0
+        LOGIN_FAILURES[ip] = state
+        audit_event("LOGIN_FAIL", "PIN incorrect", ip)
+        flash("PIN incorrect.")
+    return render_template("admin_login.html", wait=wait, next_url=safe_next_url(request.args.get("next")))
+
+
+@app.route("/admin/lock", methods=["POST"])
+def admin_lock():
+    audit_event("LOCK", "Verrouillage manuel", request.remote_addr)
+    session.clear()
+    return redirect(url_for("admin_login", next=url_for("atelier_dashboard")))
+
+
+@app.route("/atelier/mode-client", methods=["GET", "POST"])
+def atelier_client_mode():
+    """Active l'affichage confidentiel du tableau de bord devant un client."""
+    session["client_mode"] = True
+    session.pop("client_mode_rid", None)
+    audit_event("CLIENT_MODE_ON", "Mode client activé depuis le tableau de bord", request.remote_addr)
+    return redirect(url_for("atelier_dashboard"))
+
+
+@app.route("/atelier/mode-client/off", methods=["GET", "POST"])
+def atelier_client_mode_off():
+    """Quitte uniquement le masquage client, sans déconnecter l'atelier."""
+    session.pop("client_mode", None)
+    session.pop("client_mode_rid", None)
+    audit_event("CLIENT_MODE_OFF", "Mode client désactivé depuis le tableau de bord", request.remote_addr)
+    return redirect(url_for("atelier_dashboard"))
+
+
+@app.route("/security", methods=["GET", "POST"])
+def security_page():
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        if action == "change_pin":
+            current = request.form.get("current_pin", "").strip()
+            new_pin = request.form.get("new_pin", "").strip()
+            confirm = request.form.get("new_pin_confirm", "").strip()
+            if not check_password_hash(read_pin_hash(), current):
+                flash("PIN actuel incorrect.")
+            elif not valid_pin_format(new_pin):
+                flash(f"Le nouveau PIN doit contenir {PIN_MIN_LENGTH} à {PIN_MAX_LENGTH} chiffres.")
+            elif new_pin != confirm:
+                flash("Les deux nouveaux PIN ne correspondent pas.")
+            else:
+                rewrapped = False
+                try:
+                    rewrap_database_key_for_new_pin(current, new_pin)
+                    rewrapped = True
+                    write_pin(new_pin)
+                    audit_event("PIN_CHANGED", "PIN administrateur modifié", request.remote_addr)
+                    flash("PIN modifié.")
+                except Exception as exc:
+                    if rewrapped:
+                        try:
+                            rewrap_database_key_for_new_pin(new_pin, current)
+                        except Exception:
+                            pass
+                    flash(f"PIN non modifié : {exc}")
+        elif action == "backup":
+            path = backup_database(force=True, tag="manuel")
+            audit_event("BACKUP", path.name if path else "", request.remote_addr)
+            flash("Sauvegarde locale créée." if path else "Aucune base à sauvegarder.")
+        elif action == "external_backup_test":
+            settings = read_external_backup_settings()
+            script = Path(os.path.expanduser(str(settings.get("script_path") or "")))
+            if not script.is_file():
+                audit_event("EXTERNAL_BACKUP_TEST_ERROR", "script introuvable", request.remote_addr)
+                flash(f"Script de sauvegarde introuvable : {script}")
+            else:
+                try:
+                    completed = subprocess.run(
+                        ["bash", str(script)],
+                        cwd=str(script.parent),
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                    )
+                    if completed.returncode == 0:
+                        audit_event("EXTERNAL_BACKUP_TEST", "OK", request.remote_addr)
+                        flash("Sauvegarde externe exécutée avec succès.")
+                    else:
+                        audit_event("EXTERNAL_BACKUP_TEST_ERROR", f"code={completed.returncode}", request.remote_addr)
+                        flash("Sauvegarde externe échouée : consulte le journal de sauvegarde.")
+                except subprocess.TimeoutExpired:
+                    audit_event("EXTERNAL_BACKUP_TEST_ERROR", "timeout", request.remote_addr)
+                    flash("Sauvegarde externe interrompue : délai dépassé.")
+                except Exception as exc:
+                    audit_event("EXTERNAL_BACKUP_TEST_ERROR", type(exc).__name__, request.remote_addr)
+                    flash(f"Impossible de lancer la sauvegarde externe : {exc}")
+        elif action == "restore_backup":
+            backup_name = request.form.get("backup_name", "").strip()
+            if request.form.get("confirm_restore") != "1":
+                flash("Restauration annulée : confirmation absente.")
+            else:
+                try:
+                    source, safety = restore_database_backup(backup_name)
+                    audit_event(
+                        "BACKUP_RESTORE",
+                        f"Sauvegarde restaurée : {source.name}; sécurité : {safety.name}",
+                        request.remote_addr
+                    )
+                    flash(
+                        f"Sauvegarde {source.name} ouverte dans WOPR. "
+                        f"L'ancienne base a été sauvegardée sous {safety.name}."
+                    )
+                except Exception as exc:
+                    audit_event("BACKUP_RESTORE_ERROR", type(exc).__name__, request.remote_addr)
+                    flash(f"Impossible de restaurer cette sauvegarde : {exc}")
+        elif action == "master_key_export":
+            if not MASTER_SECRET_FILE.exists():
+                flash("Aucune clé maître locale à exporter.")
+            else:
+                try:
+                    raw = validate_master_secret(MASTER_SECRET_FILE.read_bytes())
+                    audit_event("MASTER_KEY_EXPORTED", "Clé maître exportée manuellement", request.remote_addr)
+                    response = Response(raw + b"\n", mimetype="application/octet-stream")
+                    response.headers["Content-Disposition"] = 'attachment; filename="master.key"'
+                    response.headers["Cache-Control"] = "no-store"
+                    return response
+                except Exception as exc:
+                    flash(f"Impossible d'exporter la clé maître : {exc}")
+        elif action == "invoice_logo_upload":
+            storage = request.files.get("invoice_logo")
+            if not storage or not str(storage.filename or "").strip():
+                flash("Choisis une image pour le logo des factures.")
+            else:
+                suffix = Path(str(storage.filename)).suffix.lower()
+                if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    flash("Format de logo non pris en charge. Utilise PNG, JPG/JPEG ou WebP.")
+                else:
+                    try:
+                        img = Image.open(storage.stream)
+                        img = ImageOps.exif_transpose(img)
+                        img.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
+                        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                            img = img.convert("RGBA")
+                        else:
+                            img = img.convert("RGB")
+                        PRIVATE_ASSETS.mkdir(parents=True, exist_ok=True)
+                        tmp = _PRIVATE_LOGO_INVOICE.with_suffix(".tmp.png")
+                        img.save(tmp, format="PNG", optimize=True)
+                        os.replace(tmp, _PRIVATE_LOGO_INVOICE)
+                        audit_event("INVOICE_LOGO_UPDATED", f"source={Path(storage.filename).name}", request.remote_addr)
+                        flash("Logo des factures enregistré.")
+                    except Exception as exc:
+                        flash(f"Image de logo invalide : {exc}")
+        elif action == "invoice_logo_remove":
+            try:
+                _PRIVATE_LOGO_INVOICE.unlink(missing_ok=True)
+                audit_event("INVOICE_LOGO_REMOVED", "Logo facture supprimé", request.remote_addr)
+                flash("Logo des factures supprimé. Les PDF seront générés sans logo.")
+            except Exception as exc:
+                flash(f"Impossible de supprimer le logo : {exc}")
+        elif action == "abby_settings":
+            current = read_abby_settings()
+            api_key = request.form.get("abby_api_key", "").strip()
+            if api_key:
+                current["api_key"] = api_key
+            current["enabled"] = request.form.get("abby_enabled") == "on"
+            current["base_url"] = ABBY_API_BASE
+            write_abby_settings(current)
+            audit_event("ABBY_SETTINGS", "Configuration Abby mise à jour depuis Sécurité", request.remote_addr)
+            flash("Configuration Abby enregistrée localement.")
+        elif action == "sumup_settings":
+            current = read_sumup_settings()
+            api_key = request.form.get("sumup_api_key", "").strip()
+            if api_key:
+                current["api_key"] = api_key
+            current["merchant_code"] = request.form.get("sumup_merchant_code", "").strip()
+            current["enabled"] = request.form.get("sumup_enabled") == "on"
+            current["base_url"] = SUMUP_API_BASE
+            write_sumup_settings(current)
+            audit_event("SUMUP_SETTINGS", f"enabled={int(current['enabled'])}; merchant={current['merchant_code']}", request.remote_addr)
+            flash("Configuration SumUp enregistrée localement.")
+        elif action == "kdeconnect_test":
+            cli = kdeconnect_cli_path()
+            if not cli:
+                audit_event("KDECONNECT_TEST_ERROR", "CLI introuvable", request.remote_addr)
+                flash("❌ KDE Connect introuvable : kdeconnect-cli n'a pas été détecté sur cette machine.")
+            else:
+                devices = kdeconnect_available_devices()
+                if not devices:
+                    audit_event("KDECONNECT_TEST_ERROR", "aucun appareil joignable", request.remote_addr)
+                    flash(
+                        "⚠️ KDE Connect détecté, mais aucun téléphone appairé et joignable n'a été trouvé. "
+                        "Vérifie que KDE Connect est ouvert et que le téléphone est sur le même réseau."
+                    )
+                elif len(devices) == 1:
+                    dev = devices[0]
+                    audit_event(
+                        "KDECONNECT_TEST",
+                        f"OK device={dev.get('id','')} name={dev.get('name','')}",
+                        request.remote_addr,
+                    )
+                    flash(
+                        f"✅ Connexion WOPR / Téléphone OK — {dev.get('name') or 'Téléphone'} "
+                        f"({dev.get('id')})."
+                    )
+                else:
+                    names = ", ".join((d.get("name") or d.get("id") or "Appareil") for d in devices)
+                    audit_event("KDECONNECT_TEST", f"OK devices={len(devices)}", request.remote_addr)
+                    flash(
+                        f"✅ KDE Connect fonctionne — {len(devices)} appareils joignables : {names}. "
+                        "WOPR demandera lequel utiliser si nécessaire."
+                    )
+        elif action == "smtp_save":
+            current = read_smtp_settings()
+            token = request.form.get("smtp_token", "").strip()
+            if token:
+                current["token"] = token
+            current.update({
+                "enabled": request.form.get("smtp_enabled") == "on",
+                "host": request.form.get("smtp_host", "smtp.protonmail.ch").strip() or "smtp.protonmail.ch",
+                "port": int(request.form.get("smtp_port", "587") or 587),
+                "security": request.form.get("smtp_security", "starttls").strip().lower() or "starttls",
+                "username": request.form.get("smtp_username", "").strip(),
+                "sender_email": request.form.get("smtp_sender_email", "").strip(),
+                "sender_name": request.form.get("smtp_sender_name", "").strip() or str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
+            })
+            write_smtp_settings(current)
+            audit_event("SMTP_SETTINGS", "Configuration SMTP Proton mise à jour", request.remote_addr)
+            flash("Configuration SMTP Proton enregistrée localement.")
+    backups = sorted(
+        [p for p in BACKUP_DIR.iterdir() if p.is_file() and not p.name.startswith(".")],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    ) if BACKUP_DIR.exists() else []
+    latest_backup_at = (
+        datetime.fromtimestamp(backups[0].stat().st_mtime).strftime("%d/%m/%Y à %H:%M")
+        if backups else None
+    )
+    smtp_settings = read_smtp_settings()
+    abby_settings = read_abby_settings()
+    sumup_settings = read_sumup_settings()
+    external_backup = external_backup_status()
+    business = cfg()
+    return render_template(
+        "security.html",
+        backups=backups[:10],
+        latest_backup_at=latest_backup_at,
+        session_hours=ADMIN_SESSION_HOURS,
+        smtp_settings=smtp_settings,
+        smtp_token_configured=bool(smtp_settings.get("token")),
+        abby={k: v for k, v in abby_settings.items() if k != "api_key"},
+        abby_api_key_configured=bool(abby_settings.get("api_key")),
+        sumup={k: v for k, v in sumup_settings.items() if k != "api_key"},
+        sumup_api_key_configured=bool(sumup_settings.get("api_key")),
+        master_key_configured=MASTER_SECRET_FILE.exists(),
+        portability=portability_diagnostics(),
+        business_email=str(business.get("email") or "").strip(),
+        business_name=str(business.get("business_name") or "WOPR").strip() or "WOPR",
+        invoice_logo_configured=_PRIVATE_LOGO_INVOICE.is_file(),
+        external_backup=external_backup,
+    )
+
+
+@app.get("/security/invoice-logo")
+def security_invoice_logo_preview():
+    logo = invoice_logo_path()
+    if not logo:
+        abort(404)
+    response = send_file(logo, mimetype="image/png", as_attachment=False)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+def _xml_local_name(tag):
+    return str(tag or "").split("}")[-1].split(":")[-1]
+
+
+def _xml_first_text(root, names):
+    wanted = {str(x).casefold() for x in names}
+    for elem in root.iter():
+        if _xml_local_name(elem.tag).casefold() in wanted:
+            text = " ".join("".join(elem.itertext()).split())
+            if text:
+                return text
+    return ""
+
+
+def _xml_all_text(root, names):
+    wanted = {str(x).casefold() for x in names}
+    values = []
+    for elem in root.iter():
+        if _xml_local_name(elem.tag).casefold() in wanted:
+            text = " ".join("".join(elem.itertext()).split())
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _xml_decimal(text):
+    text = str(text or "").strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    m = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not m:
+        return None
+    try:
+        return round(float(m.group(0)), 2)
+    except Exception:
+        return None
+
+
+def _xml_date(text):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.search(r"\b(\d{4})(\d{2})(\d{2})\b", text)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return ""
+
+
+
+def cleanup_exact_supplier_document_duplicates():
+    """V2.3.95 — supprime uniquement les doublons *strictement identiques* déjà créés.
+
+    Le fichier canonique est le plus ancien (donc en pratique celui que Foul avait déjà
+    rangé manuellement). Toutes les lignes Achats/Ventes qui pointaient vers une copie
+    sont repointées vers ce fichier avant suppression. Aucun rapprochement approximatif.
+    """
+    con = db()
+    key = "v2395_exact_supplier_duplicates_cleanup_v1"
+    if con.execute("SELECT 1 FROM app_meta WHERE key=?", (key,)).fetchone():
+        con.close()
+        return 0
+
+    removed = 0
+    if FACTURES_ROOT.exists():
+        for folder in FACTURES_ROOT.rglob("Fournisseurs"):
+            if not folder.is_dir():
+                continue
+            files = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}]
+            groups = {}
+            for path in files:
+                try:
+                    raw = path.read_bytes()
+                except Exception:
+                    continue
+                signature = (len(raw), raw)
+                groups.setdefault(signature, []).append(path)
+
+            for same_files in groups.values():
+                if len(same_files) < 2:
+                    continue
+                # Le document manuel existait normalement avant la copie créée par l'API.
+                same_files.sort(key=lambda x: (x.stat().st_mtime, " - " in x.stem, len(x.name), x.name.casefold()))
+                canonical = same_files[0]
+                canonical_rel = str(canonical.relative_to(DOCUMENTS_ROOT))
+                for duplicate in same_files[1:]:
+                    duplicate_rel = str(duplicate.relative_to(DOCUMENTS_ROOT))
+                    con.execute(
+                        "UPDATE ledger_entries SET document_path=?, updated_at=? WHERE document_path=?",
+                        (canonical_rel, now().isoformat(timespec="seconds"), duplicate_rel),
+                    )
+                    try:
+                        duplicate.unlink()
+                        removed += 1
+                    except Exception:
+                        pass
+
+    con.execute(
+        "INSERT OR REPLACE INTO app_meta(key,value,updated_at) VALUES(?,?,?)",
+        (key, str(removed), now().isoformat(timespec="seconds")),
+    )
+    con.commit()
+    con.close()
+    return removed
+
+
+def parse_supplier_invoice_xml(file_bytes, filename="facture.xml"):
+    """Lecture tolérante des XML Factur-X/CII et UBL."""
+    try:
+        root = ET.fromstring(file_bytes)
+    except ET.ParseError as exc:
+        raise ValueError(f"XML invalide : {exc}") from exc
+
+    invoice_no = ""
+    for parent in root.iter():
+        lname = _xml_local_name(parent.tag)
+        if lname in {"ExchangedDocument", "Invoice"}:
+            for child in list(parent):
+                if _xml_local_name(child.tag) == "ID":
+                    invoice_no = " ".join("".join(child.itertext()).split())
+                    if invoice_no:
+                        break
+        if invoice_no:
+            break
+    if not invoice_no:
+        invoice_no = _xml_first_text(root, ["InvoiceNumber", "DocumentNumber", "ID"])
+
+    invoice_date = ""
+    for key in ("IssueDate", "InvoiceDate", "IssueDateTime", "DateTimeString"):
+        value = _xml_first_text(root, [key])
+        invoice_date = _xml_date(value)
+        if invoice_date:
+            break
+
+    supplier = ""
+    for party_name in ("SellerTradeParty", "AccountingSupplierParty", "SellerSupplierParty"):
+        for elem in root.iter():
+            if _xml_local_name(elem.tag) != party_name:
+                continue
+            supplier = _xml_first_text(elem, ["Name", "RegistrationName", "PartyName"])
+            if supplier:
+                break
+        if supplier:
+            break
+    if not supplier:
+        supplier = _xml_first_text(root, ["SellerName", "SupplierName", "RegistrationName"])
+
+    amount_ttc = None
+    for key in ("GrandTotalAmount", "TaxInclusiveAmount", "PayableAmount"):
+        for value in _xml_all_text(root, [key]):
+            parsed = _xml_decimal(value)
+            if parsed is not None:
+                amount_ttc = parsed
+                break
+        if amount_ttc is not None:
+            break
+
+    currency = ""
+    for elem in root.iter():
+        code = elem.attrib.get("currencyID") or elem.attrib.get("currencyId")
+        if code:
+            currency = str(code).strip().upper()
+            break
+    if not currency:
+        currency = _xml_first_text(root, ["InvoiceCurrencyCode"])
+
+    if not invoice_date:
+        raise ValueError("Date de facture introuvable dans le XML.")
+    if not supplier:
+        raise ValueError("Fournisseur introuvable dans le XML.")
+    if amount_ttc is None:
+        raise ValueError("Montant TTC introuvable dans le XML.")
+
+    return {
+        "invoice_no": invoice_no or Path(filename).stem,
+        "entry_date": invoice_date,
+        "party": supplier,
+        "amount_ttc": amount_ttc,
+        "currency": currency or "EUR",
+    }
+
+
+def import_supplier_xml_to_ledger(storage):
+    filename = str(storage.filename or "").strip()
+    if not filename.lower().endswith(".xml"):
+        raise ValueError("Seuls les fichiers XML sont acceptés.")
+
+    raw = storage.read()
+    if not raw:
+        raise ValueError("Fichier vide.")
+
+    info = parse_supplier_invoice_xml(raw, filename)
+
+    con = db()
+    duplicate = con.execute("""
+        SELECT id FROM ledger_entries
+        WHERE operation='Achat'
+          AND lower(trim(COALESCE(party,'')))=lower(trim(?))
+          AND lower(trim(COALESCE(invoice_no,'')))=lower(trim(?))
+          AND entry_date=?
+        LIMIT 1
+    """, (info["party"], info["invoice_no"], info["entry_date"])).fetchone()
+
+    if duplicate:
+        con.close()
+        return {"status": "duplicate", **info}
+
+    created = now().isoformat(timespec="seconds")
+    remarks = "Import Abby — facture électronique XML"
+    if info["currency"] and info["currency"] != "EUR":
+        remarks += f" — devise {info['currency']}"
+
+    cur = con.execute("""
+        INSERT INTO ledger_entries(
+            operation, party, entry_date, description, amount_ttc,
+            payment_type, invoice_no, remarks, created_at, updated_at
+        )
+        VALUES('Achat',?,?,?,?,?,?,?,?,?)
+    """, (
+        info["party"],
+        info["entry_date"],
+        "Facture fournisseur",
+        info["amount_ttc"],
+        "",
+        info["invoice_no"],
+        remarks,
+        created,
+        created,
+    ))
+    entry_id = int(cur.lastrowid)
+    con.commit()
+    con.close()
+
+    folder = year_month_folder(
+        FACTURES_ROOT, info["entry_date"], supplier=True, create=True
+    )
+    base_name = safe_document_name(f"{info['party']}_{info['invoice_no']}.xml")
+    dest = folder / base_name
+    if dest.exists():
+        stem, suffix = dest.stem, dest.suffix
+        n = 2
+        while (folder / f"{stem}_{n}{suffix}").exists():
+            n += 1
+        dest = folder / f"{stem}_{n}{suffix}"
+    dest.write_bytes(raw)
+    try:
+        con = db()
+        con.execute("""
+            UPDATE ledger_entries
+            SET document_path=?, document_original_name=?, updated_at=?
+            WHERE id=?
+        """, (str(dest.relative_to(DOCUMENTS_ROOT)), filename, now().isoformat(timespec="seconds"), entry_id))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+    return {"status": "created", "entry_id": entry_id, "saved_path": str(dest), **info}
+
+
+
+@app.route("/sumup/api-key/reveal", methods=["POST"])
+def sumup_api_key_reveal():
+    settings = read_sumup_settings()
+    audit_event("SUMUP_API_KEY_REVEAL", "Clé API SumUp affichée à l'écran", request.remote_addr)
+    return jsonify({"api_key": str(settings.get("api_key") or "")})
+
+
+@app.route("/sumup/test", methods=["POST"])
+def sumup_test():
+    settings = read_sumup_settings()
+    merchant_code = str(settings.get("merchant_code") or "").strip()
+    try:
+        if not settings.get("enabled"):
+            raise RuntimeError("Active d'abord l'intégration SumUp.")
+        if not settings.get("api_key"):
+            raise RuntimeError("Clé API SumUp absente.")
+        if not merchant_code:
+            raise RuntimeError("Merchant code SumUp absent.")
+
+        data = sumup_request(
+            "GET",
+            f"/v2.1/merchants/{urllib.parse.quote(merchant_code, safe='')}/transactions/history",
+            query={"order": "descending", "limit": 1}
+        )
+        count = len(data.get("items", [])) if isinstance(data, dict) else 0
+        message = f"Connexion SumUp OK — merchant {merchant_code}, accès transactions OK"
+        if count:
+            message += " (historique accessible)."
+        else:
+            message += " (aucune transaction récente renvoyée)."
+        settings["last_test_at"] = now().isoformat(timespec="seconds")
+        settings["last_test_ok"] = True
+        settings["last_test_message"] = message
+        write_sumup_settings(settings)
+        audit_event("SUMUP_TEST_OK", message, request.remote_addr)
+        flash(message)
+    except Exception as exc:
+        message = str(exc)
+        settings["last_test_at"] = now().isoformat(timespec="seconds")
+        settings["last_test_ok"] = False
+        settings["last_test_message"] = message
+        write_sumup_settings(settings)
+        audit_event("SUMUP_TEST_ERROR", type(exc).__name__, request.remote_addr)
+        flash(f"Échec connexion SumUp : {message}")
+    return redirect(url_for("security_page") + "#sumup-integration")
+
+
+@app.route("/abby")
+def abby_page():
+    settings = read_abby_settings()
+    con = db()
+    stats = con.execute("""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN COALESCE(abby_id,'')<>'' THEN 1 ELSE 0 END) AS linked,
+            SUM(CASE WHEN abby_sync_status='erreur' THEN 1 ELSE 0 END) AS errors
+        FROM clients
+    """).fetchone()
+    recent_errors = con.execute("""
+        SELECT id,name,company,abby_sync_error
+        FROM clients
+        WHERE abby_sync_status='erreur'
+          AND COALESCE(abby_sync_error,'')<>''
+        ORDER BY COALESCE(abby_synced_at,'') DESC, id DESC
+        LIMIT 10
+    """).fetchall()
+    con.close()
+
+    safe_settings = dict(settings)
+    safe_settings["api_key"] = ""
+    return render_template(
+        "abby.html",
+        abby=safe_settings,
+        api_key_configured=bool(settings.get("api_key")),
+        stats=stats,
+        recent_errors=recent_errors,
+        business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
+    )
+
+
+
+@app.route("/abby/import-fournisseurs", methods=["POST"])
+def abby_import_supplier_invoices():
+    files = request.files.getlist("supplier_xml")
+    files = [f for f in files if f and str(f.filename or "").strip()]
+    if not files:
+        flash("Sélectionne au moins une facture XML Abby.")
+        return redirect(url_for("abby_page"))
+
+    if len(files) > 100:
+        flash("Maximum 100 fichiers par import.")
+        return redirect(url_for("abby_page"))
+
+    backup_database(force=True, tag="avant_import_abby_fournisseurs")
+
+    created = 0
+    duplicates = 0
+    errors = []
+    last_year = now().year
+
+    for storage in files:
+        try:
+            result = import_supplier_xml_to_ledger(storage)
+            last_year = int(result["entry_date"][:4])
+            if result["status"] == "duplicate":
+                duplicates += 1
+            else:
+                created += 1
+        except Exception as exc:
+            errors.append(f"{storage.filename}: {exc}")
+
+    details = f"{created} importée(s), {duplicates} doublon(s), {len(errors)} erreur(s)"
+    audit_event("ABBY_SUPPLIER_XML_IMPORT", details, request.remote_addr)
+
+    if errors:
+        preview = " | ".join(errors[:3])
+        if len(errors) > 3:
+            preview += f" | +{len(errors)-3} autre(s)"
+        flash(f"Import Abby : {details}. {preview}")
+    else:
+        flash(f"Import Abby : {details}.")
+
+    return redirect(url_for("achats_ventes_page", year=last_year))
+
+
+@app.route("/abby/api-key/reveal", methods=["POST"])
+def abby_api_key_reveal():
+    """Révèle la clé uniquement sur demande explicite depuis une session atelier authentifiée."""
+    settings = read_abby_settings()
+    api_key = str(settings.get("api_key") or "")
+    audit_event("ABBY_API_KEY_REVEAL", "Clé API affichée à l'écran", request.remote_addr)
+    return jsonify({"api_key": api_key})
+
+
+@app.route("/abby/settings", methods=["POST"])
+def abby_settings_save():
+    current = read_abby_settings()
+    api_key = request.form.get("abby_api_key", "").strip()
+    if api_key:
+        current["api_key"] = api_key
+    current["enabled"] = request.form.get("abby_enabled") == "on"
+    current["base_url"] = ABBY_API_BASE
+    write_abby_settings(current)
+    audit_event("ABBY_SETTINGS", "Configuration Abby mise à jour", request.remote_addr)
+    flash("Configuration Abby enregistrée localement.")
+    return redirect(url_for("security_page") + "#integrations")
+
+
+@app.route("/abby/test", methods=["POST"])
+def abby_test():
+    settings = read_abby_settings()
+    stamp = now().isoformat(timespec="seconds")
+    try:
+        contacts = abby_request(
+            "GET", "/contacts",
+            query={"page": 1, "limit": 1, "archived": "false"}
+        )
+        organizations = abby_request(
+            "GET", "/organizations",
+            query={"page": 1, "limit": 1, "archived": "false"}
+        )
+        c_total = int(contacts.get("totalDocs") or 0) if isinstance(contacts, dict) else 0
+        o_total = int(organizations.get("totalDocs") or 0) if isinstance(organizations, dict) else 0
+        message = f"Connexion Abby OK — {c_total} contact(s), {o_total} entreprise(s)."
+        settings.update({
+            "last_test_at": stamp,
+            "last_test_ok": True,
+            "last_test_message": message,
+        })
+        write_abby_settings(settings)
+        audit_event("ABBY_TEST_OK", message, request.remote_addr)
+        flash(message)
+    except Exception as exc:
+        message = str(exc)
+        settings.update({
+            "last_test_at": stamp,
+            "last_test_ok": False,
+            "last_test_message": message,
+        })
+        write_abby_settings(settings)
+        audit_event("ABBY_TEST_ERROR", type(exc).__name__, request.remote_addr)
+        flash(f"Échec connexion Abby : {message}")
+    return redirect(url_for("security_page") + "#integrations")
+
+
+@app.route("/abby/sync-clients", methods=["POST"])
+def abby_sync_clients():
+    settings = read_abby_settings()
+    try:
+        summary = sync_clients_to_abby()
+        stamp = now().isoformat(timespec="seconds")
+        text = (
+            f"{summary['created']} créé(s), {summary['linked']} relié(s), "
+            f"{summary['already']} déjà synchronisé(s), "
+            f"{summary['skipped']} ignoré(s), {summary['errors']} erreur(s)."
+        )
+        settings["last_sync_at"] = stamp
+        settings["last_sync_summary"] = text
+        write_abby_settings(settings)
+        audit_event("ABBY_SYNC_CLIENTS", text, request.remote_addr)
+        flash(f"Synchronisation Abby terminée : {text}")
+    except Exception as exc:
+        audit_event("ABBY_SYNC_CLIENTS_ERROR", type(exc).__name__, request.remote_addr)
+        flash(f"Synchronisation Abby impossible : {exc}")
+    return redirect(url_for("abby_page"))
+
+
+
+# ============================================================
+# GA4 — statistiques foul-fix.fr dans le tableau de bord WOPR
+# Configuration privée : ../private/ga4.json
+# Clé de service :       ../private/ga4-service-account.json
+# ============================================================
+GA4_SETTINGS_FILE = PRIVATE_ROOT / "ga4.json"
+GA4_DEFAULT_CREDENTIALS_FILE = PRIVATE_ROOT / "ga4-service-account.json"
+_GA4_CACHE = {"at": 0.0, "data": None, "error": None}
+
+
+def read_ga4_settings():
+    defaults = {
+        "enabled": False,
+        "property_id": "",
+        "credentials_file": str(GA4_DEFAULT_CREDENTIALS_FILE),
+        "cache_seconds": 300,
+    }
+    try:
+        if GA4_SETTINGS_FILE.is_file():
+            raw = json.loads(GA4_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                defaults.update(raw)
+    except Exception:
+        pass
+
+    # Variables d'environnement facultatives, pratiques pour tester sans modifier de fichier.
+    env_property = str(os.environ.get("WOPR_GA4_PROPERTY_ID") or "").strip()
+    env_credentials = str(os.environ.get("WOPR_GA4_CREDENTIALS") or "").strip()
+    if env_property:
+        defaults["property_id"] = env_property
+        defaults["enabled"] = True
+    if env_credentials:
+        defaults["credentials_file"] = env_credentials
+
+    return defaults
+
+
+def _ga4_credentials_path(raw_path):
+    value = str(raw_path or "").strip()
+    if not value:
+        return GA4_DEFAULT_CREDENTIALS_FILE
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        # Un chemin relatif est interprété depuis la racine WOPR.
+        path = (WOPR_ROOT / path).resolve()
+    return path
+
+
+def _ga4_metric_value(report, metric_index):
+    try:
+        rows = report.get("rows") or []
+        if not rows:
+            return 0
+        values = rows[0].get("metricValues") or []
+        return int(float(values[metric_index].get("value") or 0))
+    except Exception:
+        return 0
+
+
+def _ga4_run_period(service, property_id, start_date, end_date):
+    body = {
+        "dateRanges": [{"startDate": start_date, "endDate": end_date}],
+        "metrics": [
+            {"name": "activeUsers"},
+            {"name": "sessions"},
+            {"name": "screenPageViews"},
+        ],
+        "limit": "1",
+    }
+    report = service.properties().runReport(
+        property=f"properties/{property_id}", body=body
+    ).execute()
+    return {
+        "users": _ga4_metric_value(report, 0),
+        "sessions": _ga4_metric_value(report, 1),
+        "views": _ga4_metric_value(report, 2),
+    }
+
+
+def fetch_ga4_dashboard_stats(force=False):
+    """Retourne les stats GA4 utiles au dashboard, avec cache pour ne pas solliciter l'API à chaque clic."""
+    settings = read_ga4_settings()
+    if not bool(settings.get("enabled", False)):
+        return None, "GA4 non configuré"
+
+    property_id = re.sub(r"\D", "", str(settings.get("property_id") or ""))
+    if not property_id:
+        return None, "Property ID GA4 absent"
+
+    credentials_path = _ga4_credentials_path(settings.get("credentials_file"))
+    if not credentials_path.is_file():
+        return None, f"Clé GA4 absente : {credentials_path.name}"
+
+    try:
+        cache_seconds = max(30, int(settings.get("cache_seconds") or 300))
+    except Exception:
+        cache_seconds = 300
+
+    now_ts = time.time()
+    if (not force and _GA4_CACHE.get("data") is not None and
+            now_ts - float(_GA4_CACHE.get("at") or 0) < cache_seconds):
+        return _GA4_CACHE["data"], _GA4_CACHE.get("error")
+
+    if not GOOGLE_LIBS_OK:
+        return None, "Bibliothèques Google indisponibles"
+
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            str(credentials_path),
+            scopes=["https://www.googleapis.com/auth/analytics.readonly"],
+        )
+        service = google_build(
+            "analyticsdata", "v1beta", credentials=creds, cache_discovery=False
+        )
+
+        local_today = now().date()
+        first_month = local_today.replace(day=1).isoformat()
+        first_year = local_today.replace(month=1, day=1).isoformat()
+        today_iso = local_today.isoformat()
+
+        data = {
+            "today": _ga4_run_period(service, property_id, "today", "today"),
+            "month": _ga4_run_period(service, property_id, first_month, today_iso),
+            "year": _ga4_run_period(service, property_id, first_year, today_iso),
+            "property_id": property_id,
+            "updated_at": now().strftime("%d/%m/%Y %H:%M"),
+        }
+        _GA4_CACHE.update({"at": now_ts, "data": data, "error": None})
+        return data, None
+    except HttpError as exc:
+        try:
+            message = str(exc.error_details[0].get("message") or exc) if exc.error_details else str(exc)
+        except Exception:
+            message = str(exc)
+        error = f"GA4 : {message}"
+    except Exception as exc:
+        error = f"GA4 : {exc}"
+
+    # Ne bloque jamais WOPR si Google est indisponible.
+    _GA4_CACHE.update({"at": now_ts, "data": None, "error": error})
+    return None, error
+
+
+@app.route("/stats")
+def stats_page():
+    """Statistiques externes : Google Analytics + consultations du portail de suivi."""
+    tab = str(request.args.get("tab") or "suivi").strip().lower()
+    if tab not in {"ga4", "suivi"}:
+        tab = "suivi"
+
+    ga4_stats = None
+    ga4_error = ""
+    if tab == "ga4":
+        ga4_stats, ga4_error = fetch_ga4_dashboard_stats()
+
+    tracking = {
+        "today": {"views": 0, "unique_visitors": 0},
+        "week": {"views": 0, "unique_visitors": 0},
+        "month": {"views": 0, "unique_visitors": 0},
+        "total_views": 0,
+        "codes": [],
+    }
+    tracking_rows = []
+    tracking_error = ""
+    tracking_enabled = bool(read_tracking_settings().get("enabled", False))
+    show_hidden = request.args.get("hidden") == "1"
+
+    if tab == "suivi":
+        if tracking_enabled:
+            try:
+                remote = fetch_tracking_stats()
+                if isinstance(remote, dict):
+                    tracking.update(remote)
+            except Exception as exc:
+                tracking_error = str(exc)
+        else:
+            tracking_error = "Le suivi en ligne n'est pas activé dans WOPR."
+
+        hidden_codes = _tracking_stats_hidden_codes()
+        con = db()
+        rows = con.execute("""
+            SELECT r.id, r.public_tracking_code, r.dossier_no, r.device_type,
+                   r.brand_model, r.status,
+                   c.first_name, c.last_name, c.name, c.company
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE COALESCE(trim(r.public_tracking_code),'') <> ''
+        """).fetchall()
+        con.close()
+
+        local_by_code = {}
+        for row in rows:
+            code = str(row["public_tracking_code"] or "").strip().upper()
+            if not code:
+                continue
+            first_name = str(row["first_name"] or "").strip()
+            last_name = str(row["last_name"] or "").strip()
+            legacy_name = str(row["name"] or "").strip()
+            company = str(row["company"] or "").strip()
+            person = " ".join(x for x in [first_name, last_name] if x).strip()
+            client_name = company or person or legacy_name or "Client"
+            device = " — ".join(x for x in [str(row["device_type"] or "").strip(), str(row["brand_model"] or "").strip()] if x)
+            local_by_code[code] = {
+                "repair_id": int(row["id"]),
+                "dossier_no": str(row["dossier_no"] or ""),
+                "client_name": client_name,
+                "device": device,
+                "status": str(row["status"] or ""),
+            }
+
+        tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+        for item in tracking.get("codes") or []:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip().upper()
+            local = local_by_code.get(code, {})
+            raw_first_view_at = str(item.get("first_view_at") or "").strip()
+            raw_last_view_at = str(item.get("last_view_at") or "").strip()
+            try:
+                last_view_sort = datetime.fromisoformat(raw_last_view_at.replace("Z", "+00:00")).timestamp() if raw_last_view_at else 0.0
+            except Exception:
+                last_view_sort = 0.0
+
+            row = {
+                "code": code,
+                "views": int(item.get("views") or 0),
+                "unique_visitors": int(item.get("unique_visitors") or 0),
+                "first_view_at": _tracking_stats_datetime(raw_first_view_at),
+                "last_view_at": _tracking_stats_datetime(raw_last_view_at),
+                "_last_view_sort": last_view_sort,
+                "preview_url": (f"{tracking_site}/suivi.html?code={urllib.parse.quote(code)}&preview=1" if tracking_site else ""),
+                "hidden": code in hidden_codes,
+                **local,
+            }
+            if show_hidden or not row["hidden"]:
+                tracking_rows.append(row)
+
+        # Vue Suivi : consultation la plus récente en premier.
+        # On trie sur la vraie date ISO reçue de l'API, jamais sur le texte affiché
+        # au format JJ/MM/AAAA, qui produirait un ordre chronologique incorrect.
+        tracking_rows.sort(
+            key=lambda x: (float(x.get("_last_view_sort") or 0.0), int(x.get("views") or 0)),
+            reverse=True,
+        )
+
+    return render_template(
+        "stats.html",
+        tab=tab,
+        ga4_stats=ga4_stats,
+        ga4_error=ga4_error,
+        tracking=tracking,
+        tracking_rows=tracking_rows,
+        tracking_error=tracking_error,
+        tracking_enabled=tracking_enabled,
+        show_hidden=show_hidden,
+    )
+
+@app.route("/atelier/mois")
+def atelier_month_details():
+    """Détail exact du KPI Réparations / ventes atelier."""
+    today = now().date()
+    try:
+        year = int(request.args.get("year", today.year))
+    except (TypeError, ValueError):
+        year = today.year
+    try:
+        month = int(request.args.get("month", today.month))
+    except (TypeError, ValueError):
+        month = today.month
+    if not 2000 <= year <= 2100:
+        year = today.year
+    if not 1 <= month <= 12:
+        month = today.month
+
+    prefix = f"{year:04d}-{month:02d}"
+    con = db()
+    rows = con.execute("""
+        SELECT r.id, r.dossier_no, r.received_date, r.device_type, r.brand_model,
+               r.problem, r.status, r.simple_invoice, r.invoice_no,
+               c.first_name AS client_first_name, c.last_name AS client_last_name,
+               c.name AS client_name, c.company AS client_company
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE substr(COALESCE(r.received_date,''),1,7)=?
+          AND lower(trim(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+        ORDER BY r.received_date DESC, r.id DESC
+    """, (prefix,)).fetchall()
+    con.close()
+
+    return render_template(
+        "atelier_month.html",
+        rows=rows,
+        selected_year=year,
+        selected_month=month,
+        month_name=ledger_month_name(month),
+    )
+
+
+@app.route("/atelier")
+def atelier_dashboard():
+    """Vue synthétique de l'atelier, sans modifier le Suivi historique."""
+    today = now().date()
+    current_year = today.year
+    current_month = today.month
+    try:
+        selected_year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        selected_year = current_year
+    try:
+        selected_month = int(request.args.get("month", current_month))
+    except (TypeError, ValueError):
+        selected_month = current_month
+    if not 2000 <= selected_year <= 2100:
+        selected_year = current_year
+    if not 1 <= selected_month <= 12:
+        selected_month = current_month
+    month_prefix = f"{selected_year:04d}-{selected_month:02d}"
+
+    con = db()
+
+    # Dossiers réellement présents dans l'atelier : on exclut les factures simples
+    # et les anciennes lignes comptables « Paiement du… » qui ne représentent pas du matériel.
+    active_rows = con.execute("""
+        SELECT r.id, r.status, r.problem, r.received_date, r.finished_at, r.returned_at,
+               r.invoice_no, r.accounting_status, r.accounting_service_amount,
+               r.accounting_goods_amount, r.service_amount, r.goods_amount,
+               c.first_name AS client_first_name, c.last_name AS client_last_name,
+               c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(r.simple_invoice,0)=0
+          AND lower(trim(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+        ORDER BY r.received_date DESC, r.id DESC
+    """).fetchall()
+
+    en_cours_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation"}
+    en_cours = [r for r in active_rows if str(r["status"] or "") in en_cours_statuses]
+    attente_piece = [r for r in active_rows if str(r["status"] or "") == "En attente pièce"]
+    a_restituer = [r for r in active_rows if str(r["status"] or "") == "Terminé"]
+
+    # Dossiers actifs anciens : information de pilotage, sans imposer de délai métier.
+    # On signale simplement les dossiers encore actifs reçus depuis 14 jours ou plus.
+    overdue = []
+    for r in en_cours:
+        raw_date = str(r["received_date"] or "")[:10]
+        try:
+            d = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            days = max(0, (today - d).days)
+        except Exception:
+            days = 0
+        if days >= 14:
+            item = dict(r)
+            item["days_open"] = days
+            overdue.append(item)
+    overdue.sort(key=lambda x: x["days_open"], reverse=True)
+
+    reparations_mois = [
+        r for r in active_rows
+        if str(r["received_date"] or "")[:7] == month_prefix
+    ]
+    # Le KPI mensuel représente toutes les entrées traitées par l'atelier,
+    # y compris les factures simples (qui ne créent volontairement aucun suivi).
+    reparations_mois_count = con.execute("""
+        SELECT COUNT(*)
+        FROM repairs r
+        WHERE substr(COALESCE(r.received_date,''), 1, 7)=?
+          AND lower(trim(COALESCE(r.problem,''))) NOT LIKE 'paiement du%'
+    """, (month_prefix,)).fetchone()[0]
+
+    # CA encaissé du mois : source comptable centralisée.
+    ca_row = next(
+        (r for r in accounting_monthly_totals(con, selected_year) if int(r["m"]) == selected_month),
+        None,
+    )
+    ca_month = (
+        float(ca_row["service_total"] or 0) + float(ca_row["goods_total"] or 0)
+        if ca_row else 0.0
+    )
+
+    # Impayés : exactement la même logique que la page Factures, une seule fois par facture.
+    # Cela évite de compter plusieurs lignes techniques / historiques d'une même facture.
+    invoice_rows = con.execute("""
+        SELECT r.*,
+               c.name AS client_name, c.first_name AS client_first_name,
+               c.last_name AS client_last_name,
+               (
+                   SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                   FROM invoice_lines il
+                   WHERE il.repair_id=r.id
+               ) AS invoice_lines_total
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.invoice_no),'')<>''
+        ORDER BY r.id
+    """).fetchall()
+
+    unpaid_groups = {}
+    for raw in invoice_rows:
+        x = dict(raw)
+        key = (x["client_id"], x["invoice_no"])
+        unpaid_groups.setdefault(key, []).append(x)
+
+    unpaid_rows = []
+    for members in unpaid_groups.values():
+        representative = next((x for x in members if not x.get("legacy_imported")), None) or max(
+            members, key=lambda x: (str(x.get("received_date") or ""), int(x.get("id") or 0))
+        )
+
+        total_candidates = []
+        edited_line_totals = []
+        for x in members:
+            line_total = float(x.get("invoice_lines_total") or 0)
+            if line_total > 0:
+                edited_line_totals.append(line_total)
+            total_candidates.extend([
+                line_total,
+                float(x.get("service_amount") or 0) + float(x.get("goods_amount") or 0),
+                float(x.get("accounting_service_amount") or 0) + float(x.get("accounting_goods_amount") or 0),
+                payment_amount_from_text(x.get("payment_method")),
+            ])
+
+        invoice_total = max(edited_line_totals) if edited_line_totals else max(total_candidates or [0.0])
+        paid = any(bool(x.get("paid")) for x in members)
+        deposit_amount = max([max(0.0, float(x.get("deposit_amount") or 0)) for x in members] or [0.0])
+        remaining_amount = max(0.0, invoice_total - (invoice_total if paid else min(invoice_total, deposit_amount)))
+        if remaining_amount <= 0 and invoice_total > 0:
+            continue
+        item = dict(representative)
+        item["invoice_total"] = invoice_total
+        item["deposit_amount"] = deposit_amount
+        item["remaining_amount"] = remaining_amount
+        unpaid_rows.append(item)
+
+    unpaid_rows.sort(key=lambda r: (str(r.get("received_date") or ""), int(r.get("id") or 0)))
+    unpaid_total = sum(float(r.get("remaining_amount") or r.get("invoice_total") or 0) for r in unpaid_rows)
+
+    # À surveiller : terminé depuis >= 7 jours. La date de fin est privilégiée,
+    # sinon la date de réception sert de filet pour l'ancien historique importé.
+    watch = []
+    for r in a_restituer:
+        raw_date = str(r["finished_at"] or r["received_date"] or "")[:10]
+        try:
+            d = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            days = max(0, (today - d).days)
+        except Exception:
+            days = 0
+        if days >= 7:
+            item = dict(r)
+            item["days_waiting"] = days
+            watch.append(item)
+    watch.sort(key=lambda x: x["days_waiting"], reverse=True)
+
+    available_years = {current_year}
+    try:
+        available_years.update(
+            int(row[0]) for row in con.execute(
+                "SELECT DISTINCT substr(received_date,1,4) FROM repairs WHERE substr(received_date,1,4) GLOB '[0-9][0-9][0-9][0-9]'"
+            ).fetchall()
+            if str(row[0]).isdigit()
+        )
+    except Exception:
+        pass
+    con.close()
+
+    return render_template(
+        "atelier.html",
+        current_year=current_year,
+        current_month=current_month,
+        selected_year=selected_year,
+        selected_month=selected_month,
+        available_years=sorted(available_years, reverse=True),
+        ledger_month_name=ledger_month_name,
+        month_name=ledger_month_name(selected_month),
+        en_cours_count=len(en_cours),
+        attente_piece_count=len(attente_piece),
+        overdue_count=len(overdue),
+        overdue_rows=overdue[:10],
+        a_restituer_count=len(a_restituer),
+        unpaid_count=len(unpaid_rows),
+        unpaid_total=unpaid_total,
+        ca_month=ca_month,
+        reparations_mois_count=int(reparations_mois_count or 0),
+        watch=watch[:10],
+        unpaid_rows=unpaid_rows[:10],
+        recent_rows=active_rows[:8],
+        business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
+        client_logo_configured=bool(invoice_logo_path()),
+    )
+
+
+
+@app.get("/_w/7f3a9c")
+def wopr_end_sequence_audio():
+    """Sample audio privé de l'easter egg WOPR."""
+    sample = PRIVATE_ASSETS / ".wopr_7f3a9c.bin"
+    if not sample.exists():
+        abort(404)
+    return send_file(
+        sample,
+        mimetype="audio/mpeg",
+        as_attachment=False,
+        download_name="sequence.bin",
+        conditional=True,
+        max_age=3600,
+    )
+
+@app.route("/")
+def home():
+    """Accueil WOPR : le tableau de bord Atelier devient la page principale."""
+    return redirect(url_for("atelier_dashboard"))
+
+
+
+def _tracking_stats_hidden_codes():
+    try:
+        if TRACKING_STATS_HIDDEN_FILE.is_file():
+            data = json.loads(TRACKING_STATS_HIDDEN_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return {str(x or "").strip().upper() for x in data if str(x or "").strip()}
+    except Exception:
+        pass
+    return set()
+
+
+def _tracking_stats_save_hidden_codes(codes):
+    TRACKING_STATS_HIDDEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = sorted({str(x or "").strip().upper() for x in codes if str(x or "").strip()})
+    TRACKING_STATS_HIDDEN_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+
+def _tracking_stats_datetime(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return raw[:16].replace("T", " ")
+
+
+def fetch_tracking_stats():
+    """Récupère les statistiques privées du portail Foul-Fix."""
+    conf = read_tracking_settings()
+    endpoint = str(conf.get("api_url") or "").strip()
+    api_key = str(conf.get("api_key") or "").strip()
+
+    if not bool(conf.get("enabled", False)):
+        raise RuntimeError("Le suivi en ligne n'est pas activé dans WOPR.")
+    if not endpoint:
+        raise RuntimeError("URL de l'API de suivi absente.")
+    if not api_key:
+        raise RuntimeError("Clé API de suivi absente.")
+
+    parsed = urllib.parse.urlsplit(endpoint)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query.append(("stats", "1"))
+    stats_url = urllib.parse.urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urllib.parse.urlencode(query),
+        parsed.fragment,
+    ))
+
+    req = urllib.request.Request(
+        stats_url,
+        headers={
+            "Accept": "application/json",
+            "X-WOPR-Key": api_key,
+        },
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            parsed_error = json.loads(exc.read().decode("utf-8", errors="replace"))
+            if isinstance(parsed_error, dict):
+                detail = str(parsed_error.get("error") or "")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"API suivi HTTP {exc.code}" + (f" — {detail}" if detail else "")
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Connexion au portail impossible : {exc.reason}") from exc
+
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise RuntimeError("Réponse invalide de l'API de suivi.")
+
+    stats = payload.get("stats")
+    if not isinstance(stats, dict):
+        raise RuntimeError("Statistiques absentes de la réponse.")
+    return stats
+
+
+@app.route("/suivi/stats")
+def tracking_stats_page():
+    error = ""
+    show_hidden = request.args.get("hidden") == "1"
+    hidden_codes = _tracking_stats_hidden_codes()
+    stats = {
+        "today": {"views": 0, "unique_visitors": 0},
+        "week": {"views": 0, "unique_visitors": 0},
+        "month": {"views": 0, "unique_visitors": 0},
+        "total_views": 0,
+        "codes": [],
+    }
+
+    try:
+        remote = fetch_tracking_stats()
+        if isinstance(remote, dict):
+            stats.update(remote)
+    except Exception as exc:
+        error = str(exc)
+
+    # Rapproche les codes publics avec les dossiers/client locaux WOPR.
+    con = db()
+    rows = con.execute("""
+        SELECT r.id, r.public_tracking_code, r.dossier_no, r.device_type,
+               r.brand_model, r.status,
+               c.first_name, c.last_name, c.name, c.company
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.public_tracking_code),'') <> ''
+    """).fetchall()
+    con.close()
+
+    local_by_code = {}
+    for row in rows:
+        code = str(row["public_tracking_code"] or "").strip().upper()
+        if not code:
+            continue
+
+        first_name = str(row["first_name"] or "").strip()
+        last_name = str(row["last_name"] or "").strip()
+        legacy_name = str(row["name"] or "").strip()
+        company = str(row["company"] or "").strip()
+
+        person = " ".join(x for x in [first_name, last_name] if x).strip()
+        client_name = company or person or legacy_name or "Client"
+
+        device = " — ".join(
+            x for x in [
+                str(row["device_type"] or "").strip(),
+                str(row["brand_model"] or "").strip(),
+            ] if x
+        )
+
+        local_by_code[code] = {
+            "repair_id": int(row["id"]),
+            "dossier_no": str(row["dossier_no"] or ""),
+            "client_name": client_name,
+            "device": device,
+            "status": str(row["status"] or ""),
+        }
+
+    enriched = []
+    for item in stats.get("codes") or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip().upper()
+        local = local_by_code.get(code, {})
+        tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+        preview_url = (
+            f"{tracking_site}/suivi.html?code={urllib.parse.quote(code)}&preview=1"
+            if tracking_site else ""
+        )
+        enriched.append({
+            "code": code,
+            "views": int(item.get("views") or 0),
+            "unique_visitors": int(item.get("unique_visitors") or 0),
+            "first_view_at": _tracking_stats_datetime(item.get("first_view_at")),
+            "last_view_at": _tracking_stats_datetime(item.get("last_view_at")),
+            "preview_url": preview_url,
+            "hidden": code in hidden_codes,
+            **local,
+        })
+
+    enriched.sort(key=lambda x: (int(x["views"]), str(x["last_view_at"])), reverse=True)
+
+    return render_template(
+        "tracking_stats.html",
+        stats=stats,
+        rows=enriched,
+        error=error,
+        show_hidden=show_hidden,
+        tracking_enabled=bool(read_tracking_settings().get("enabled", False)),
+    )
+
+
+@app.post("/suivi/stats/<code>/hide")
+def tracking_stats_hide(code):
+    code = str(code or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9-]{3,19}", code):
+        abort(400)
+
+    hidden_codes = _tracking_stats_hidden_codes()
+    hide = request.form.get("hidden") == "1"
+    if hide:
+        hidden_codes.add(code)
+        flash(f"{code} masqué des statistiques WOPR.")
+    else:
+        hidden_codes.discard(code)
+        flash(f"{code} réaffiché dans les statistiques WOPR.")
+    _tracking_stats_save_hidden_codes(hidden_codes)
+    if request.form.get("return_to") == "stats":
+        return redirect(url_for("stats_page", tab="suivi", hidden=1 if not hide else None))
+    return redirect(url_for("tracking_stats_page", hidden=1 if not hide else None))
+
+
+
+@app.post("/suivi/stats/<code>/delete")
+def tracking_stats_delete(code):
+    code = str(code or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9-]{3,19}", code):
+        abort(400)
+
+    settings = read_tracking_settings()
+    endpoint = str(settings.get("api_url") or "").strip()
+    api_key = str(settings.get("api_key") or "").strip()
+    if not endpoint or not api_key:
+        flash("Suppression impossible : API de suivi non configurée.")
+        if request.form.get("return_to") == "stats":
+            return redirect(url_for("stats_page", tab="suivi"))
+        return redirect(url_for("tracking_stats_page"))
+
+    try:
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(
+                {"action": "delete_stats", "code": code},
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-WOPR-Key": api_key,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            raise RuntimeError(str(payload.get("error") or "Réponse invalide du portail."))
+
+        # Nettoie aussi un éventuel ancien masquage local.
+        hidden_codes = _tracking_stats_hidden_codes()
+        if code in hidden_codes:
+            hidden_codes.discard(code)
+            _tracking_stats_save_hidden_codes(hidden_codes)
+
+        if not payload.get("deleted"):
+            flash(f"Aucune statistique enregistrée pour {code} sur le serveur.")
+        elif payload.get("legacy_daily_preserved"):
+            flash(
+                f"Stats de {code} supprimées. Les anciens compteurs journaliers ne "
+                "pouvaient pas être recalculés exactement car ils datent de l'ancien format."
+            )
+        else:
+            flash(f"Statistiques de {code} supprimées définitivement.")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            parsed = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
+            if isinstance(parsed, dict):
+                detail = str(parsed.get("error") or "")
+        except Exception:
+            pass
+        flash(f"Suppression impossible : HTTP {exc.code}" + (f" — {detail}" if detail else ""))
+    except Exception as exc:
+        flash(f"Suppression impossible : {exc}")
+
+    if request.form.get("return_to") == "stats":
+        return redirect(url_for("stats_page", tab="suivi"))
+    return redirect(url_for("tracking_stats_page"))
+
+
+@app.route("/suivi")
+def index():
+    to_return_only = request.args.get("a_restituer") == "1"
+    en_cours_only = request.args.get("en_cours") == "1"
+    attente_piece_only = request.args.get("attente_piece") == "1"
+    overdue_only = request.args.get("overdue") == "1"
+    client_search = str(request.args.get("q") or "").strip()
+    client_search_folded = client_search.casefold()
+    try:
+        requested_year = int(request.args.get("year") or now().year)
+    except Exception:
+        requested_year = now().year
+
+    try:
+        selected_month = int(request.args.get("month") or 0)
+    except (TypeError, ValueError):
+        selected_month = 0
+    if selected_month not in range(1, 13):
+        selected_month = 0
+
+    con = db()
+
+    # V2.3.138 — les dossiers "Laissé pour pièces" doivent avoir une date de clôture
+    # afin que le PDF de suivi affiche bien la date finale.
+    con.execute("""
+        UPDATE repairs
+        SET finished_at=?
+        WHERE status='Laissé pour pièces'
+          AND COALESCE(trim(finished_at),'')=''
+    """, (now().isoformat(timespec="seconds"),))
+
+    # V2.3.136 — invariant métier :
+    # "Laissé pour pièces" = aucune facture, aucun paiement, aucun CA, aucun impayé.
+    # Corrige aussi automatiquement les dossiers déjà passés dans cet état avec
+    # d'anciens montants / statut comptable restés en base.
+    con.execute("""
+        UPDATE repairs
+        SET service_amount=0,
+            goods_amount=0,
+            payment_method='',
+            payment_mode='',
+            payment_detail='',
+            paid=0,
+            invoice_no=NULL,
+            accounting_year=NULL,
+            accounting_month=NULL,
+            accounting_date='',
+            accounting_status='normal',
+            accounting_service_amount=0,
+            accounting_goods_amount=0,
+            service_description='',
+            goods_description='',
+            legacy_invoice_text=''
+        WHERE status='Laissé pour pièces'
+          AND (
+              COALESCE(service_amount,0)<>0
+              OR COALESCE(goods_amount,0)<>0
+              OR COALESCE(trim(invoice_no),'')<>''
+              OR COALESCE(paid,0)<>0
+              OR COALESCE(accounting_status,'normal')<>'normal'
+              OR COALESCE(accounting_service_amount,0)<>0
+              OR COALESCE(accounting_goods_amount,0)<>0
+          )
+    """)
+    con.execute("""
+        DELETE FROM invoice_lines
+        WHERE repair_id IN (
+            SELECT id FROM repairs WHERE status='Laissé pour pièces'
+        )
+    """)
+    con.commit()
+
+    # Garde-fou : si la migration n'a jamais été exécutée (lancement atypique),
+    # la page Suivi la déclenche.
+    inserted_now = seed_legacy_followups(con)
+    if inserted_now:
+        con.commit()
+        flash(f"Historique Suivi importé : {inserted_now} ligne(s).")
+
+    year_rows = con.execute("""
+        SELECT DISTINCT COALESCE(
+            followup_year,
+            CAST(substr(received_date,1,4) AS INTEGER)
+        ) AS y
+        FROM repairs
+        WHERE received_date IS NOT NULL
+          AND COALESCE(simple_invoice,0)=0
+        ORDER BY y DESC
+    """).fetchall()
+    available_years = [int(x["y"]) for x in year_rows if x["y"]]
+
+    if available_years and requested_year not in available_years:
+        requested_year = max(available_years)
+
+    if client_search_folded:
+        # Recherche transverse : toutes les années du Suivi.
+        rows = con.execute("""
+            SELECT r.*,
+                   c.name client_name,
+                   c.first_name client_first_name,
+                   c.last_name client_last_name,
+                   c.phone client_phone,
+                   c.email client_email,
+                   c.company client_company
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE COALESCE(r.simple_invoice,0)=0
+            ORDER BY r.received_date DESC,
+                     CASE WHEN r.legacy_source_row IS NULL THEN 999999 ELSE r.legacy_source_row END DESC,
+                     r.id DESC
+        """).fetchall()
+    else:
+        rows = con.execute("""
+            SELECT r.*,
+                   c.name client_name,
+                   c.first_name client_first_name,
+                   c.last_name client_last_name,
+                   c.phone client_phone,
+                   c.email client_email,
+                   c.company client_company
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE COALESCE(r.simple_invoice,0)=0
+              AND COALESCE(
+                r.followup_year,
+                CAST(substr(r.received_date,1,4) AS INTEGER)
+              )=?
+            ORDER BY
+                COALESCE(r.followup_month, CAST(substr(r.received_date,6,2) AS INTEGER)) DESC,
+                r.received_date DESC,
+                CASE WHEN r.legacy_source_row IS NULL THEN 999999 ELSE r.legacy_source_row END DESC,
+                r.id DESC
+        """, (requested_year,)).fetchall()
+
+    # Recherche transverse : client, facture, dossier, appareil et panne.
+    if client_search_folded:
+        filtered_rows = []
+        for row in rows:
+            haystack = " ".join([
+                str(row["client_first_name"] or ""),
+                str(row["client_last_name"] or ""),
+                str(row["client_name"] or ""),
+                str(row["client_company"] or ""),
+                str(row["client_phone"] or ""),
+                str(row["client_email"] or ""),
+                str(row["invoice_no"] or ""),
+                str(row["dossier_no"] or ""),
+                str(row["device_type"] or ""),
+                str(row["brand_model"] or ""),
+                str(row["serial_no"] or ""),
+                str(row["problem"] or ""),
+                str(row["diagnosis"] or ""),
+                str(row["status"] or ""),
+                str(row["received_date"] or ""),
+            ]).casefold()
+            if client_search_folded in haystack:
+                filtered_rows.append(row)
+        rows = filtered_rows
+
+    # Filtre Atelier "En cours" : mêmes statuts que le KPI du tableau de bord.
+    if en_cours_only:
+        en_cours_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation"}
+        rows = [row for row in rows if str(row["status"] or "") in en_cours_statuses]
+
+    if attente_piece_only:
+        rows = [row for row in rows if str(row["status"] or "") == "En attente pièce"]
+
+    # Filtre Atelier "Dossiers +14 j" : strictement la même définition que le KPI.
+    if overdue_only:
+        overdue_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation"}
+        cutoff_date = now().date() - timedelta(days=14)
+        overdue_rows = []
+        for row in rows:
+            if str(row["status"] or "") not in overdue_statuses:
+                continue
+            raw_date = str(row["received_date"] or "")[:10]
+            try:
+                received = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if received <= cutoff_date:
+                overdue_rows.append(row)
+        rows = overdue_rows
+
+    # V2.3.82 : un encaissement effectué un autre mois que le suivi doit être
+    # visible dans le mois d'encaissement, sans créer une seconde écriture comptable.
+    # On fabrique donc uniquement une ligne d'affichage virtuelle.
+    cross_month_payments = {}
+    for source_row in rows:
+        if to_return_only or en_cours_only or attente_piece_only or overdue_only or client_search_folded:
+            continue
+        ay = source_row["accounting_year"]
+        am = source_row["accounting_month"]
+        fm = source_row["followup_month"]
+        fy = source_row["followup_year"]
+        if not (ay and am and source_row["paid"]):
+            continue
+        if int(ay) != requested_year:
+            continue
+        if int(fy or requested_year) == int(ay) and int(fm or 0) == int(am):
+            continue
+        virtual = dict(source_row)
+        virtual["_virtual_payment"] = True
+        virtual["_source_followup_month"] = fm
+        virtual["_display_total"] = float(source_row["accounting_service_amount"] or 0) + float(source_row["accounting_goods_amount"] or 0)
+        virtual["_display_payment_mode"] = source_row["payment_mode"] or ""
+        virtual["_display_accounting_date"] = source_row["accounting_date"] or ""
+        virtual["problem"] = f"Paiement du {str(source_row['received_date'] or '')[8:10]}/{str(source_row['received_date'] or '')[5:7]}/{str(source_row['received_date'] or '')[0:4]}"
+        cross_month_payments.setdefault(int(am), []).append(virtual)
+
+    # V2.3.19 : les anciennes lignes "Paiement du ..." servent au CA,
+    # mais ne doivent pas remplacer le dossier d'origine dans le Suivi.
+    history_invoice_groups = {}
+    for row in rows:
+        item = dict(row)
+        invoice_no = str(item.get("invoice_no") or "").strip()
+        if not invoice_no:
+            continue
+
+        key = (item.get("client_id"), invoice_no)
+        group = history_invoice_groups.setdefault(key, {
+            "total": 0.0,
+            "modes": [],
+            "accounting_date": "",
+            "has_origin": False,
+        })
+
+        problem_text = str(item.get("problem") or "").strip().casefold()
+        if not problem_text.startswith("paiement du"):
+            group["has_origin"] = True
+
+        group["total"] = max(
+            float(group["total"] or 0),
+            float(item.get("service_amount") or 0) + float(item.get("goods_amount") or 0),
+            float(item.get("accounting_service_amount") or 0) + float(item.get("accounting_goods_amount") or 0),
+            payment_amount_from_text(item.get("payment_method")),
+        )
+
+        structured_mode = normalize_payment_mode(item.get("payment_mode"))
+        if structured_mode and structured_mode not in group["modes"]:
+            group["modes"].append(structured_mode)
+
+        for detected_mode in payment_modes_from_text(item.get("payment_method")):
+            if detected_mode not in group["modes"]:
+                group["modes"].append(detected_mode)
+
+        accounting_date = str(item.get("accounting_date") or "")[:10]
+        if accounting_date and accounting_date > str(group["accounting_date"] or ""):
+            group["accounting_date"] = accounting_date
+
+    # V2.3.84 : le compteur « À restituer » doit compter exactement les dossiers
+    # qui peuvent réellement être affichés. Les anciennes lignes ODS « Paiement du… »
+    # sont des écritures comptables, pas du matériel encore présent à l'atelier.
+    to_return_count = 0
+    for row in rows:
+        if row["status"] != "Terminé":
+            continue
+        invoice_no = str(row["invoice_no"] or "").strip()
+        group = history_invoice_groups.get((row["client_id"], invoice_no)) if invoice_no else None
+        problem_text = str(row["problem"] or "").strip().casefold()
+        is_payment_row = problem_text.startswith("paiement du")
+        if row["legacy_imported"] and is_payment_row and group and group.get("has_origin"):
+            continue
+        # Une ligne comptable de paiement seule n'est jamais un appareil à restituer.
+        if is_payment_row:
+            continue
+        to_return_count += 1
+
+    totals_rows = [] if client_search_folded else accounting_monthly_totals(con, requested_year)
+
+    totals_map = {
+        int(x["m"]): {
+            "service": float(x["service_total"] or 0),
+            "goods": float(x["goods_total"] or 0),
+        }
+        for x in totals_rows
+    }
+
+    con.close()
+
+    month_names = {
+        1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",
+        7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"
+    }
+
+    months = []
+    red_count = 0
+    yellow_count = 0
+
+    for month in range(12,0,-1):
+        if selected_month and month != selected_month:
+            continue
+        month_rows = []
+        for row in rows:
+            row_month = row["followup_month"]
+            if not row_month:
+                try:
+                    row_month = int(str(row["received_date"])[5:7])
+                except Exception:
+                    row_month = 0
+            if int(row_month or 0) != month:
+                continue
+
+            item = dict(row)
+            if item.get("tracking_completion_notification_sent") or item.get("tracking_completion_sms_sent"):
+                item["_notification_status"] = "client"
+            elif item.get("status") in {"Terminé", "Restitué"} and item.get("tracking_completion_notification_error"):
+                item["_notification_status"] = "error"
+            elif item.get("tracking_initial_notification_sent"):
+                item["_notification_status"] = "code"
+            elif item.get("tracking_initial_notification_error"):
+                item["_notification_status"] = "error"
+            else:
+                item["_notification_status"] = ""
+            if to_return_only and item.get("status") != "Terminé":
+                continue
+
+            item["_days_waiting_return"] = None
+            if item.get("status") == "Terminé" and item.get("finished_at"):
+                try:
+                    finished_dt = datetime.fromisoformat(str(item.get("finished_at")))
+                    if finished_dt.tzinfo is None and now().tzinfo is not None:
+                        finished_dt = finished_dt.replace(tzinfo=now().tzinfo)
+                    item["_days_waiting_return"] = max(0, (now().date() - finished_dt.date()).days)
+                except Exception:
+                    pass
+
+            invoice_no = str(item.get("invoice_no") or "").strip()
+            group = history_invoice_groups.get((item.get("client_id"), invoice_no)) if invoice_no else None
+            problem_text = str(item.get("problem") or "").strip().casefold()
+            is_payment_row = problem_text.startswith("paiement du")
+
+            # Masquer les lignes comptables « Paiement du… » de la vue atelier :
+            # ce ne sont pas des appareils encore présents. Dans la vue normale,
+            # on conserve l'ancien comportement pour ne pas modifier l'historique.
+            if to_return_only and is_payment_row:
+                continue
+            # Masquer la ligne comptable de paiement lorsqu'une vraie ligne dossier existe.
+            # Le CA continue d'utiliser cette ligne via accounting_*.
+            if item.get("legacy_imported") and is_payment_row and group and group.get("has_origin"):
+                continue
+
+            item["_payment_split"] = payment_split_values(item.get("payment_detail"), item.get("payment_method"))
+
+            if item.get("status") == "Laissé pour pièces":
+                item["_display_total"] = 0.0
+                item["_display_payment_mode"] = ""
+                item["_display_accounting_date"] = ""
+                item["accounting_status"] = "normal"
+            elif group:
+                item["_display_total"] = float(group.get("total") or 0)
+                item["_display_payment_mode"] = " + ".join(group.get("modes") or [])
+                item["_display_accounting_date"] = group.get("accounting_date") or item.get("accounting_date") or ""
+            else:
+                item["_display_total"] = float(item.get("service_amount") or 0) + float(item.get("goods_amount") or 0)
+                item["_display_payment_mode"] = item.get("payment_mode") or ""
+                item["_display_accounting_date"] = item.get("accounting_date") or ""
+
+            if item.get("accounting_status") == "red":
+                red_count += 1
+            elif item.get("accounting_status") == "yellow":
+                yellow_count += 1
+            month_rows.append(item)
+
+        # Lignes purement visuelles pour les encaissements inter-mois.
+        month_rows.extend(cross_month_payments.get(month, []))
+
+        t = totals_map.get(month, {"service":0.0,"goods":0.0})
+
+        # Vue filtrée depuis le tableau de bord Atelier :
+        # ne pas afficher les mois sans aucun dossier correspondant.
+        if (to_return_only or en_cours_only or attente_piece_only or overdue_only) and not month_rows:
+            continue
+
+        months.append({
+            "number": month,
+            "name": month_names[month],
+            "rows": month_rows,
+            "service_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only or overdue_only) else t["service"],
+            "goods_total": 0.0 if (to_return_only or en_cours_only or attente_piece_only or overdue_only) else t["goods"],
+        })
+
+    try:
+        edit_id = int(request.args.get("edit") or 0)
+    except Exception:
+        edit_id = 0
+
+    return render_template(
+        "index.html",
+        months=months,
+        selected_year=requested_year,
+        available_years=available_years,
+        red_count=red_count,
+        yellow_count=yellow_count,
+        to_return_count=to_return_count,
+        to_return_only=to_return_only,
+        en_cours_only=en_cours_only,
+        attente_piece_only=attente_piece_only,
+        overdue_only=overdue_only,
+        selected_month=selected_month,
+        month_names=month_names,
+        client_search=client_search,
+        search_all_years=bool(client_search_folded),
+        edit_id=edit_id,
+        current_period=now().strftime("%Y-%m"),
+    )
+
+
+
+
+@app.route("/documents/dossiers")
+def document_folders_info():
+    return {
+        "devis": str(DEVIS_ROOT),
+        "factures": str(FACTURES_ROOT),
+        "factures_fournisseurs": "Factures/AAAA/MM - Mois/Fournisseurs",
+    }
+
+
+@app.route("/antivirus")
+def antivirus_page():
+    con = db()
+    seed_legacy_management_data(con)
+    con.commit()
+    entries = con.execute("""
+        SELECT * FROM antivirus_entries
+        ORDER BY COALESCE(expiration_date,'0000-00-00') DESC, id DESC
+    """).fetchall()
+    clients = con.execute("SELECT name FROM clients ORDER BY name COLLATE NOCASE").fetchall()
+    con.close()
+
+    today = now().date()
+    display_entries = []
+    for row in entries:
+        item = dict(row)
+        status = "unknown"
+        days = None
+        if item.get("expiration_date"):
+            try:
+                exp = datetime.strptime(item["expiration_date"], "%Y-%m-%d").date()
+                days = (exp - today).days
+                if days < 0:
+                    status = "expired"
+                elif days <= 30:
+                    status = "soon"
+                else:
+                    status = "valid"
+            except Exception:
+                pass
+        item["expiration_status"] = status
+        item["days_left"] = days
+        display_entries.append(item)
+
+    return render_template(
+        "antivirus.html",
+        entries=display_entries,
+        clients=clients,
+        today=today.isoformat(),
+    )
+
+
+@app.route("/antivirus/add", methods=["POST"])
+def antivirus_add():
+    client_name = request.form.get("client_name", "").strip()
+    if not client_name:
+        flash("Le nom ou le prénom du client est obligatoire.")
+        return redirect(url_for("antivirus_page"))
+
+    stamp = now().isoformat(timespec="seconds")
+    con = db()
+    con.execute("""
+        INSERT INTO antivirus_entries(
+            client_name, setup_date, antivirus_name, expiration_date,
+            invoice_no, info, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?)
+    """, (
+        client_name,
+        request.form.get("setup_date", "").strip(),
+        request.form.get("antivirus_name", "").strip(),
+        request.form.get("expiration_date", "").strip(),
+        request.form.get("invoice_no", "").strip(),
+        request.form.get("info", "").strip(),
+        stamp, stamp
+    ))
+    con.commit()
+    con.close()
+    audit_event("ANTIVIRUS_ADD", client_name, request.remote_addr)
+    flash("Antivirus ajouté.")
+    return redirect(url_for("antivirus_page"))
+
+
+@app.route("/antivirus/<int:entry_id>/edit", methods=["POST"])
+def antivirus_edit(entry_id):
+    client_name = request.form.get("client_name", "").strip()
+    if not client_name:
+        flash("Le nom du client est obligatoire.")
+        return redirect(url_for("antivirus_page"))
+
+    con = db()
+    if not con.execute("SELECT id FROM antivirus_entries WHERE id=?", (entry_id,)).fetchone():
+        con.close()
+        return "Ligne introuvable", 404
+
+    con.execute("""
+        UPDATE antivirus_entries SET
+            client_name=?, setup_date=?, antivirus_name=?, expiration_date=?,
+            invoice_no=?, info=?, updated_at=?
+        WHERE id=?
+    """, (
+        client_name,
+        request.form.get("setup_date", "").strip(),
+        request.form.get("antivirus_name", "").strip(),
+        request.form.get("expiration_date", "").strip(),
+        request.form.get("invoice_no", "").strip(),
+        request.form.get("info", "").strip(),
+        now().isoformat(timespec="seconds"),
+        entry_id
+    ))
+    con.commit()
+    con.close()
+    audit_event("ANTIVIRUS_EDIT", f"id={entry_id}", request.remote_addr)
+    flash("Ligne antivirus modifiée.")
+    return redirect(url_for("antivirus_page"))
+
+
+@app.route("/antivirus/<int:entry_id>/delete", methods=["POST"])
+def antivirus_delete(entry_id):
+    backup_database(force=True, tag="avant_suppression_antivirus")
+    con = db()
+    con.execute("DELETE FROM antivirus_entries WHERE id=?", (entry_id,))
+    con.commit()
+    con.close()
+    audit_event("ANTIVIRUS_DELETE", f"id={entry_id}", request.remote_addr)
+    flash("Ligne antivirus supprimée.")
+    return redirect(url_for("antivirus_page"))
+
+
+
+def quote_client_email(con, quote_row):
+    """
+    Recherche l'e-mail directement dans la table Clients.
+
+    Priorité :
+    1. client_id du devis ;
+    2. adresse + code postal + ville (très fiable pour les devis historiques) ;
+    3. égalité exacte sur Nom ou Entreprise/Société ;
+    4. correspondance partielle unique sur Nom / Société.
+    """
+    try:
+        client_id = quote_row["client_id"]
+    except Exception:
+        client_id = None
+
+    if client_id:
+        row = con.execute(
+            "SELECT email FROM clients WHERE id=?",
+            (client_id,)
+        ).fetchone()
+        if row and str(row["email"] or "").strip():
+            return str(row["email"]).strip()
+
+    quote_name = " ".join(str(quote_row["client_name"] or "").split()).strip()
+    wanted = _contact_name_normalize(quote_name)
+
+    quote_street = " ".join(str(quote_row["client_address_street"] or "").split()).strip().casefold()
+    quote_cp = str(quote_row["client_postal_code"] or "").strip()
+    quote_city = " ".join(str(quote_row["client_city"] or "").split()).strip().casefold()
+
+    rows = con.execute("""
+        SELECT id,name,first_name,last_name,company,email,
+               address_street,postal_code,city
+        FROM clients
+        WHERE COALESCE(trim(email),'')<>''
+    """).fetchall()
+
+    # 1) Adresse + CP + ville : idéal pour les anciens devis dont le nom
+    # a changé ou contient une faute de frappe.
+    address_matches = []
+    if quote_street and quote_cp and quote_city:
+        for r in rows:
+            street = " ".join(str(r["address_street"] or "").split()).strip().casefold()
+            cp = str(r["postal_code"] or "").strip()
+            city = " ".join(str(r["city"] or "").split()).strip().casefold()
+            if street == quote_street and cp == quote_cp and city == quote_city:
+                address_matches.append(r)
+
+    if len(address_matches) == 1:
+        return str(address_matches[0]["email"] or "").strip()
+
+    if not wanted:
+        return ""
+
+    # 2) Match exact sur nom complet ou société.
+    exact = []
+    for r in rows:
+        keys = {
+            _contact_name_normalize(r["name"]),
+            _contact_name_normalize(r["company"]),
+            _contact_name_normalize(
+                " ".join(x for x in [r["first_name"] or "", r["last_name"] or ""] if x)
+            ),
+            _contact_name_normalize(
+                " ".join(x for x in [r["last_name"] or "", r["first_name"] or ""] if x)
+            ),
+        }
+        keys.discard("")
+        if wanted in keys:
+            exact.append(r)
+
+    if len(exact) == 1:
+        return str(exact[0]["email"] or "").strip()
+
+    # 3) Match partiel UNIQUE sur nom / société.
+    partial = []
+    if len(wanted) >= 5:
+        for r in rows:
+            values = [
+                _contact_name_normalize(r["name"]),
+                _contact_name_normalize(r["company"]),
+            ]
+            values = [v for v in values if len(v) >= 5]
+            if any(wanted in v or v in wanted for v in values):
+                partial.append(r)
+
+    unique = {}
+    for r in partial:
+        unique[int(r["id"])] = r
+
+    if len(unique) == 1:
+        r = next(iter(unique.values()))
+        return str(r["email"] or "").strip()
+
+    return ""
+
+
+
+@app.route("/devis")
+def quotes_page():
+    q = " ".join(str(request.args.get("q") or "").split()).strip()
+    q_folded = q.casefold()
+    con = db()
+    seed_legacy_management_data(con)
+    seed_result = seed_legacy_quotes37(con)
+    con.commit()
+
+    rows = con.execute("""
+        SELECT q.*,
+               (SELECT COALESCE(SUM(ql.quantity * ql.unit_price),0)
+                FROM quote_lines ql WHERE ql.quote_id=q.id) AS total,
+               (SELECT COALESCE(GROUP_CONCAT(ql.description, ' '),'')
+                FROM quote_lines ql WHERE ql.quote_id=q.id) AS lines_text
+        FROM quotes q
+        ORDER BY q.quote_date DESC, q.id DESC
+    """).fetchall()
+
+    all_quotes = []
+    for row in rows:
+        item = dict(row)
+        item["client_email"] = quote_client_email(con, row)
+        candidates = quote_document_candidates(item["quote_no"])
+        item["real_documents"] = [str(p) for p in candidates]
+        item["document_count"] = len(candidates)
+        item["first_document_path"] = str(candidates[0]) if candidates else ""
+        all_quotes.append(item)
+
+    con.close()
+
+    if seed_result.get("quotes_added") or seed_result.get("documents_added"):
+        flash(
+            f"Archive devis importée : {seed_result.get('quotes_added',0)} devis ajoutés."
+        )
+
+    current_year = now().year
+    available_years = sorted(
+        {current_year} | {
+            int(str(q.get("quote_date") or "")[:4])
+            for q in all_quotes
+            if str(q.get("quote_date") or "")[:4].isdigit()
+        },
+        reverse=True,
+    )
+    try:
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
+    archive_years = [y for y in available_years if y != current_year]
+
+    try:
+        selected_month = int(request.args.get("month") or 0)
+    except (TypeError, ValueError):
+        selected_month = 0
+    if selected_month not in range(1, 13) or q_folded:
+        selected_month = 0
+
+    if q_folded:
+        quotes = []
+        for quote in all_quotes:
+            haystack = " ".join([
+                str(quote.get("quote_no") or ""),
+                str(quote.get("quote_date") or ""),
+                str(quote.get("client_name") or ""),
+                str(quote.get("client_company") or ""),
+                str(quote.get("contact_name") or ""),
+                str(quote.get("status") or ""),
+                str(quote.get("notes") or ""),
+                str(quote.get("lines_text") or ""),
+                f"{float(quote.get('total') or 0):.2f}",
+                f"{float(quote.get('total') or 0):.2f}".replace(".", ","),
+            ]).casefold()
+            if q_folded in haystack:
+                quotes.append(quote)
+    else:
+        period_prefix = f"{year:04d}-"
+        if selected_month:
+            period_prefix = f"{year:04d}-{selected_month:02d}-"
+        quotes = [
+            quote for quote in all_quotes
+            if str(quote.get("quote_date") or "").startswith(period_prefix)
+        ]
+
+    archived_quotes = [quote for quote in quotes if quote["document_count"] > 0]
+    historical_quote_count = len(archived_quotes)
+    historical_document_count = sum(q["document_count"] for q in archived_quotes)
+
+    today = now().date()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    year_start = today.replace(month=1, day=1)
+
+    quote_period_counts = {"week": 0, "month": 0, "year": 0}
+    if year == current_year:
+        for quote in archived_quotes:
+            try:
+                quote_day = datetime.strptime(str(quote.get("quote_date") or "")[:10], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if week_start <= quote_day <= today:
+                quote_period_counts["week"] += 1
+            if month_start <= quote_day <= today:
+                quote_period_counts["month"] += 1
+            if year_start <= quote_day <= today:
+                quote_period_counts["year"] += 1
+
+    return render_template(
+        "quotes.html",
+        quotes=quotes,
+        historical_document_count=historical_document_count,
+        historical_quote_count=historical_quote_count,
+        quote_period_counts=quote_period_counts,
+        devis_root=str(DEVIS_ROOT),
+        year=year,
+        current_year=current_year,
+        archive_years=archive_years,
+        selected_month=selected_month,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
+        q=q,
+        search_all_years=bool(q_folded),
+    )
+
+
+@app.route("/devis/new", methods=["GET", "POST"])
+def quote_new():
+    con = db()
+    clients = con.execute("""
+        SELECT id,name,company,address_street,postal_code,city
+        FROM clients ORDER BY name COLLATE NOCASE
+    """).fetchall()
+
+    if request.method == "POST":
+        lines = parse_quote_lines(request.form)
+        if not lines:
+            con.close()
+            flash("Ajoute au moins une ligne au devis.")
+            return redirect(url_for("quote_new"))
+
+        quote_no = request.form.get("quote_no", "").strip()
+        if not re.fullmatch(r"\d{12}", quote_no):
+            quote_no = make_quote_no(con)
+        if con.execute("SELECT id FROM quotes WHERE quote_no=?", (quote_no,)).fetchone():
+            quote_no = make_quote_no(con)
+
+        quote_date = request.form.get("quote_date", "").strip() or now().strftime("%Y-%m-%d")
+        stamp = now().isoformat(timespec="seconds")
+
+        client_id_raw = request.form.get("client_id", "").strip()
+        client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+
+        cur = con.execute("""
+            INSERT INTO quotes(
+                quote_no, quote_date, client_id, client_name, client_company,
+                client_address_street, client_postal_code, client_city,
+                contact_name, status, notes, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            quote_no, quote_date, client_id,
+            request.form.get("client_name","").strip() or "Client",
+            request.form.get("client_company","").strip(),
+            request.form.get("client_address_street","").strip(),
+            request.form.get("client_postal_code","").strip(),
+            request.form.get("client_city","").strip(),
+            "",
+            request.form.get("status","Brouillon").strip() or "Brouillon",
+            request.form.get("notes","").strip(),
+            stamp, stamp
+        ))
+        quote_id = cur.lastrowid
+
+        for line in lines:
+            con.execute("""
+                INSERT INTO quote_lines(
+                    quote_id,position,line_type,quantity,description,unit_price
+                ) VALUES(?,?,?,?,?,?)
+            """, (
+                quote_id, line["position"], line["line_type"], line["quantity"],
+                line["description"], line["unit_price"]
+            ))
+
+        con.commit()
+        con.close()
+        audit_event("QUOTE_ADD", f"id={quote_id}; no={quote_no}", request.remote_addr)
+        flash("Devis créé.")
+        return redirect(url_for("quote_edit", quote_id=quote_id))
+
+    automatic_quote_no = make_quote_no(con)
+    con.close()
+    empty_quote = {
+        "id": None,
+        "quote_no": automatic_quote_no,
+        "quote_date": now().strftime("%Y-%m-%d"),
+        "client_id": None,
+        "client_name": "",
+        "client_company": "",
+        "client_address_street": "",
+        "client_postal_code": "",
+        "client_city": "",
+        "contact_name": "",
+        "status": "Brouillon",
+        "notes": "",
+    }
+    return render_template("quote_edit.html", q=empty_quote, quote_lines=[], clients=clients, documents=[], is_new=True)
+
+
+@app.route("/devis/<int:quote_id>/edit", methods=["GET", "POST"])
+def quote_edit(quote_id):
+    con = db()
+    q = con.execute("SELECT * FROM quotes WHERE id=?", (quote_id,)).fetchone()
+    if not q:
+        con.close()
+        return "Devis introuvable", 404
+
+    clients = con.execute("""
+        SELECT id,name,company,address_street,postal_code,city
+        FROM clients ORDER BY name COLLATE NOCASE
+    """).fetchall()
+
+    if request.method == "POST":
+        lines = parse_quote_lines(request.form)
+        if not lines:
+            con.close()
+            flash("Ajoute au moins une ligne au devis.")
+            return redirect(url_for("quote_edit", quote_id=quote_id))
+
+        # Le numéro est attribué automatiquement à la création et ne change plus.
+        quote_no = q["quote_no"]
+
+        client_id_raw = request.form.get("client_id", "").strip()
+        client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+
+        con.execute("""
+            UPDATE quotes SET
+                quote_no=?, quote_date=?, client_id=?, client_name=?, client_company=?,
+                client_address_street=?, client_postal_code=?, client_city=?,
+                contact_name=?, status=?, notes=?, updated_at=?, edited_in_app=1
+            WHERE id=?
+        """, (
+            quote_no,
+            request.form.get("quote_date","").strip() or q["quote_date"],
+            client_id,
+            request.form.get("client_name","").strip() or "Client",
+            request.form.get("client_company","").strip(),
+            request.form.get("client_address_street","").strip(),
+            request.form.get("client_postal_code","").strip(),
+            request.form.get("client_city","").strip(),
+            "",
+            request.form.get("status","Brouillon").strip() or "Brouillon",
+            request.form.get("notes","").strip(),
+            now().isoformat(timespec="seconds"),
+            quote_id
+        ))
+
+        con.execute("DELETE FROM quote_lines WHERE quote_id=?", (quote_id,))
+        for line in lines:
+            con.execute("""
+                INSERT INTO quote_lines(
+                    quote_id,position,line_type,quantity,description,unit_price
+                ) VALUES(?,?,?,?,?,?)
+            """, (
+                quote_id, line["position"], line["line_type"], line["quantity"],
+                line["description"], line["unit_price"]
+            ))
+
+        con.commit()
+        con.close()
+        audit_event("QUOTE_EDIT", f"id={quote_id}", request.remote_addr)
+        flash("Devis modifié.")
+        return redirect(url_for("quote_edit", quote_id=quote_id))
+
+    lines = con.execute("""
+        SELECT * FROM quote_lines WHERE quote_id=? ORDER BY position,id
+    """, (quote_id,)).fetchall()
+    con.close()
+    documents = [
+        {"index": i, "filename": p.name, "path": str(p)}
+        for i, p in enumerate(quote_document_candidates(q["quote_no"]))
+    ]
+    return render_template("quote_edit.html", q=q, quote_lines=lines, clients=clients, documents=documents, is_new=False)
+
+
+
+@app.route("/devis/<int:quote_id>/email", methods=["GET", "POST"])
+def quote_email(quote_id):
+    smtp_settings = read_smtp_settings()
+
+    con = db()
+    q = con.execute(
+        "SELECT * FROM quotes WHERE id=?",
+        (quote_id,)
+    ).fetchone()
+
+    if not q:
+        con.close()
+        return "Devis introuvable", 404
+
+    client_email = quote_client_email(con, q)
+    q = dict(q)
+    q["client_email"] = client_email
+    con.close()
+
+    cancel_url = url_for("quotes_page")
+
+    if request.method == "GET":
+        if not smtp_settings.get("enabled") or not smtp_settings.get("token"):
+            flash("Configure d'abord le SMTP Proton dans Sécurité.")
+            return redirect(url_for("security_page"))
+
+        if not q["client_email"]:
+            flash("Impossible d'envoyer : le client n'a pas d'adresse e-mail.")
+            return redirect(cancel_url)
+
+        ident = business_identity()
+        subject = f"{ident['name']} - Devis {q['quote_no']}"
+        body = (
+            "Bonjour,\n\n"
+            f"Veuillez trouver ci-joint votre devis {ident['name']}.\n\n"
+            "Je reste à votre disposition si vous avez des questions.\n\n"
+            "Cordialement,\n"
+            f"{business_signature()}"
+        )
+
+        return render_template(
+            "quote_email_preview.html",
+            q=q,
+            recipient=q["client_email"],
+            subject=subject,
+            body=body,
+            cancel_url=cancel_url,
+            sender=smtp_settings.get("sender_email") or smtp_settings.get("username"),
+        )
+
+    recipient = request.form.get("recipient", "").strip()
+    subject = request.form.get("subject", "").strip()
+    body = request.form.get("body", "").strip()
+
+    if not recipient or "@" not in recipient:
+        flash("Adresse destinataire invalide.")
+        return redirect(url_for("quote_email", quote_id=quote_id))
+
+    if not subject:
+        flash("L'objet du message est obligatoire.")
+        return redirect(url_for("quote_email", quote_id=quote_id))
+
+    # Réutilise le PDF officiel du devis pour garantir la même pièce jointe
+    # que celle téléchargée depuis la page Devis.
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess.update(dict(session))
+        pdf_response = client.get(url_for("quote_pdf", quote_id=quote_id))
+        if pdf_response.status_code != 200:
+            flash("Impossible de générer le PDF du devis.")
+            return redirect(url_for("quote_email", quote_id=quote_id))
+        pdf_data = bytes(pdf_response.data)
+
+    sender_email = str(
+        smtp_settings.get("sender_email") or smtp_settings.get("username") or ""
+    ).strip()
+    sender_name = str(smtp_settings.get("sender_name") or business_identity()["name"]).strip()
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    msg["To"] = recipient
+    set_email_content(msg, body)
+
+    attachment_name = (
+        f"{safe_filename(q['client_name'])}_"
+        f"{safe_filename(q['quote_no'])}.pdf"
+    )
+    msg.add_attachment(
+        pdf_data,
+        maintype="application",
+        subtype="pdf",
+        filename=attachment_name
+    )
+
+    try:
+        smtp_send_message(msg)
+        audit_event(
+            "QUOTE_EMAIL",
+            f"Devis {q['quote_no']} envoyé à {recipient}",
+            request.remote_addr
+        )
+        flash(f"Devis {q['quote_no']} envoyé par e-mail à {recipient}.")
+        return redirect(cancel_url)
+    except Exception as e:
+        audit_event(
+            "QUOTE_EMAIL_ERROR",
+            f"Devis {q['quote_no']} : {type(e).__name__}",
+            request.remote_addr
+        )
+        flash(f"Échec envoi e-mail : {e}")
+        return redirect(url_for("quote_email", quote_id=quote_id))
+
+
+@app.route("/devis/<int:quote_id>/delete", methods=["POST"])
+def quote_delete(quote_id):
+    backup_database(force=True, tag="avant_suppression_devis")
+    con = db()
+    q = con.execute("SELECT quote_no FROM quotes WHERE id=?", (quote_id,)).fetchone()
+    if not q:
+        con.close()
+        return "Devis introuvable", 404
+    con.execute("DELETE FROM quote_documents WHERE quote_id=?", (quote_id,))
+    con.execute("DELETE FROM quote_lines WHERE quote_id=?", (quote_id,))
+    con.execute("DELETE FROM quotes WHERE id=?", (quote_id,))
+    con.commit()
+    con.close()
+    audit_event("QUOTE_DELETE", f"id={quote_id}; no={q['quote_no']}", request.remote_addr)
+    flash("Devis supprimé.")
+    return redirect(url_for("quotes_page"))
+
+
+@app.route("/devis/<int:quote_id>/original/<int:doc_index>")
+def quote_original_real(quote_id, doc_index):
+    con = db()
+    q = con.execute("SELECT quote_no FROM quotes WHERE id=?", (quote_id,)).fetchone()
+    con.close()
+    if not q:
+        return "Devis introuvable", 404
+
+    docs = quote_document_candidates(q["quote_no"])
+    if doc_index < 0 or doc_index >= len(docs):
+        return "PDF original introuvable dans WOPR/private/documents/Devis", 404
+
+    path = docs[doc_index]
+    return send_file(
+        path,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=path.name,
+    )
+
+
+@app.route("/devis/document/<int:document_id>")
+def quote_original_document(document_id):
+    con = db()
+    row = con.execute("""
+        SELECT qd.*, q.quote_no
+        FROM quote_documents qd
+        JOIN quotes q ON q.id=qd.quote_id
+        WHERE qd.id=?
+    """, (document_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Document introuvable", 404
+
+    path = find_document_recursive(
+        DEVIS_ROOT,
+        filename=row["filename"],
+        document_no=row["quote_no"],
+    )
+    if not path:
+        return (
+            "PDF historique introuvable dans le dossier privé des devis. "
+            "Vérifie qu'il est bien rangé dans Devis/AAAA/MM - Mois/.",
+            404,
+        )
+
+    return send_file(
+        path,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=path.name,
+    )
+
+
+@app.route("/devis/<int:quote_id>/pdf")
+def quote_pdf(quote_id):
+    """
+    Devis WOPR au format historique Calc/PDF.
+    La mise en page reprend le modèle réel fourni par l'utilisateur.
+    """
+    con = db()
+    q = con.execute("SELECT * FROM quotes WHERE id=?", (quote_id,)).fetchone()
+    lines = con.execute("""
+        SELECT * FROM quote_lines WHERE quote_id=? ORDER BY position,id
+    """, (quote_id,)).fetchall()
+    con.close()
+
+    if not q:
+        return "Devis introuvable", 404
+
+    # V2.3.68 — pour un devis historique encore intact, le PDF téléchargé
+    # est le vrai fichier original, octet pour octet.
+    original_docs = quote_document_candidates(q["quote_no"])
+    if original_docs and not int(q["edited_in_app"] or 0):
+        original_path = original_docs[0]
+        return send_file(
+            original_path,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=original_path.name,
+        )
+
+    conf = cfg()
+    bio = io.BytesIO()
+    c = canvas.Canvas(bio, pagesize=A4)
+    c.setTitle(f"Devis {q['quote_no']} - {q['client_name']}")
+    W, H = A4
+
+    BLUE = colors.HexColor("#3399FF")
+    LINE_BLUE = colors.HexColor("#3399FF")
+    BORDER = colors.HexColor("#222222")
+    LIGHT_BORDER = colors.HexColor("#8DC8F0")
+    LIGHT_GREY = colors.HexColor("#777777")
+    QF = QUOTE_FONTS
+
+    def euro(value):
+        return f"{float(value or 0):,.2f} €".replace(",", "X").replace(".", ",").replace("X", " ")
+
+    def qty_text(value):
+        v = float(value or 0)
+        if abs(v - round(v)) < 0.0001:
+            return str(int(round(v)))
+        return f"{v:g}".replace(".", ",")
+
+    def split_to_width(text, font, size, max_width):
+        words = str(text or "").split()
+        if not words:
+            return [""]
+        out, current = [], ""
+        for word in words:
+            test = word if not current else current + " " + word
+            if pdfmetrics.stringWidth(test, font, size) <= max_width:
+                current = test
+            else:
+                if current:
+                    out.append(current)
+                current = word
+        if current:
+            out.append(current)
+        return out
+
+    def draw_wrapped(text, x, y, max_width, font, size, leading, max_lines=None):
+        lines_out = []
+        for raw in str(text or "").splitlines() or [""]:
+            wrapped = split_to_width(raw, font, size, max_width)
+            lines_out.extend(wrapped or [""])
+        if max_lines:
+            lines_out = lines_out[:max_lines]
+        c.setFont(font, size)
+        for item in lines_out:
+            c.drawString(x, y, item)
+            y -= leading
+        return y
+
+    def draw_footer():
+        c.setFillColor(colors.black)
+        c.setFont(QF["regular"], 7.4)
+        footer_parts = [str(conf.get("business_name") or "WOPR").strip()]
+        owner = str(conf.get("owner_name") or "").strip()
+        if owner:
+            footer_parts.append(owner)
+        if str(conf.get("siret") or "").strip():
+            footer_parts.append(f"N° Siret : {conf.get('siret')}")
+        if str(conf.get("ape") or "").strip():
+            footer_parts.append(f"Code APE : {conf.get('ape')}")
+        footer1 = " - ".join(x for x in footer_parts if x)
+        c.drawCentredString(W/2, 17.8*mm, footer1)
+        c.setFont(QF["bold"], 7.4)
+        c.drawCentredString(W/2, 13.8*mm, f"IBAN : {conf.get('iban','')}")
+        c.setFont(QF["regular"], 7.2)
+        c.drawCentredString(
+            W/2, 10.2*mm,
+            f"- {conf.get('website','')} - {conf.get('email','')} -"
+        )
+        c.setFont(QF["regular"], 7.0)
+        c.drawCentredString(
+            W/2, 5.8*mm,
+            "Dispensé d'immatriculation au registre du commerce et des sociétés, "
+            "en application de l'article L. 123-1-1 du Code de commerce"
+        )
+
+    # ----------------------------------------------------------------
+    # Bandeau supérieur identique au modèle historique
+    # ----------------------------------------------------------------
+    margin_x = 4.5*mm
+    c.setStrokeColor(LINE_BLUE)
+    c.setLineWidth(0.9*mm)
+    c.line(margin_x, H-4.2*mm, W-margin_x, H-4.2*mm)
+
+    logo_x = 4.5*mm
+    logo_top = H-5.8*mm
+    logo_w = 121.5*mm
+    logo_h = 53.7*mm
+    invoice_logo = invoice_logo_path()
+    if invoice_logo:
+        try:
+            c.drawImage(
+                str(invoice_logo),
+                logo_x, logo_top-logo_h,
+                width=logo_w, height=logo_h,
+                preserveAspectRatio=False,
+                mask="auto"
+            )
+        except Exception:
+            pass
+
+    # Bloc DEVIS bleu à droite
+    bx = 136.8*mm
+    by = H-36.2*mm
+    bw = 68.3*mm
+    bh = 28.0*mm
+    c.setFillColor(BLUE)
+    c.setStrokeColor(BLUE)
+    c.rect(bx, by, bw, bh, fill=1, stroke=0)
+
+    c.setFillColor(colors.white)
+    c.setFont(QF["regular"], 22)
+    c.drawCentredString(bx+bw/2, by+18.0*mm, "DEVIS")
+
+    c.setFillColor(colors.black)
+    c.setFont(QF["regular"], 9.2)
+    c.drawString(bx+1.2*mm, by+8.1*mm, "Devis n°")
+    c.drawString(bx+1.2*mm, by+3.4*mm, "Date")
+    c.drawString(bx+20.3*mm, by+8.1*mm, ":")
+    c.drawString(bx+20.3*mm, by+3.4*mm, ":")
+    c.setFont(QF["regular"], 9.0)
+    c.drawString(bx+23.2*mm, by+8.1*mm, str(q["quote_no"] or ""))
+    c.drawString(bx+23.2*mm, by+3.4*mm, fr_date(q["quote_date"]))
+
+    # Ligne bleue sous le bandeau
+    c.setStrokeColor(LINE_BLUE)
+    c.setLineWidth(0.9*mm)
+    c.line(margin_x, H-58.3*mm, W-margin_x, H-58.3*mm)
+
+    # ----------------------------------------------------------------
+    # Cadres entreprise / client
+    # ----------------------------------------------------------------
+    company_x = 9.6*mm
+    box_y = H-111.8*mm
+    company_w = 69.0*mm
+    box_h = 45.5*mm
+    c.setFillColor(colors.white)
+    c.setStrokeColor(LIGHT_BORDER)
+    c.setLineWidth(0.45*mm)
+    c.rect(company_x, box_y, company_w, box_h, fill=1, stroke=1)
+
+    c.setFillColor(colors.black)
+    c.setFont(QF["bold"], 13.0)
+    c.drawString(company_x+1.0*mm, box_y+box_h-6.0*mm, conf.get("owner_name",""))
+    c.setFont(QF["regular"], 12.2)
+    c.drawString(company_x+1.0*mm, box_y+box_h-18.5*mm, conf.get("address_line1","25 rue font laurière"))
+    c.drawString(company_x+1.0*mm, box_y+box_h-30.7*mm, conf.get("address_line2",""))
+    c.drawString(company_x+1.0*mm, box_y+box_h-42.2*mm, f"Tél : {conf.get('phone','06 60 47 29 48')}")
+
+    client_x = 136.5*mm
+    client_w = 68.1*mm
+    c.setStrokeColor(BORDER)
+    c.setLineWidth(0.35*mm)
+    c.rect(client_x, box_y, client_w, box_h, fill=0, stroke=1)
+
+    c.setFont(QF["regular"], 13.2)
+    c.drawString(client_x+0.6*mm, box_y+box_h-6.0*mm, "Client :")
+    # Soulignement du titre comme sur l'original
+    client_label_w = pdfmetrics.stringWidth("Client :", QF["regular"], 13.2)
+    c.setLineWidth(0.35*mm)
+    c.line(
+        client_x+0.6*mm, box_y+box_h-6.8*mm,
+        client_x+0.6*mm+client_label_w, box_y+box_h-6.8*mm
+    )
+
+    c.setFont(QF["regular"], 9.5)
+    cy = box_y+box_h-15.2*mm
+    cy = draw_wrapped(q["client_name"], client_x+0.7*mm, cy, client_w-2*mm, QF["regular"], 9.5, 4.5*mm, 2)
+    if q["client_company"]:
+        cy -= 0.5*mm
+        cy = draw_wrapped(q["client_company"], client_x+0.7*mm, cy, client_w-2*mm, QF["regular"], 9.2, 4.2*mm, 2)
+    if q["client_address_street"]:
+        cy -= 1.0*mm
+        cy = draw_wrapped(q["client_address_street"], client_x+0.7*mm, cy, client_w-2*mm, QF["regular"], 9.2, 4.2*mm, 3)
+    cityline = " ".join(x for x in [q["client_postal_code"], q["client_city"]] if x)
+    if cityline:
+        cy -= 1.0*mm
+        draw_wrapped(cityline, client_x+0.7*mm, cy, client_w-2*mm, QF["regular"], 9.2, 4.2*mm, 2)
+
+    # ----------------------------------------------------------------
+    # Tableau historique : Quantité | Désignation | vide | Total
+    # ----------------------------------------------------------------
+    table_x = 4.2*mm
+    table_top = H-116.7*mm
+    col_qty = 19.0*mm
+    col_desc = 91.0*mm
+    col_blank = 29.0*mm
+    col_total = 61.0*mm
+    table_w = col_qty + col_desc + col_blank + col_total
+    header_h = 9.2*mm
+    row_h = 5.8*mm
+
+    xs = [
+        table_x,
+        table_x+col_qty,
+        table_x+col_qty+col_desc,
+        table_x+col_qty+col_desc+col_blank,
+        table_x+table_w
+    ]
+
+    c.setStrokeColor(BORDER)
+    c.setLineWidth(0.28*mm)
+    c.setFillColor(BLUE)
+    c.rect(table_x, table_top-header_h, table_w, header_h, fill=1, stroke=1)
+    for x in xs[1:-1]:
+        c.line(x, table_top, x, table_top-header_h)
+
+    c.setFillColor(colors.white)
+    c.setFont(QF["regular"], 9.8)
+    c.drawCentredString((xs[0]+xs[1])/2, table_top-header_h+2.8*mm, "Quantité")
+    c.setFont(QF["bold"], 9.7)
+    c.drawCentredString((xs[1]+xs[2])/2, table_top-header_h+2.8*mm, "Désignation")
+    c.drawCentredString((xs[3]+xs[4])/2, table_top-header_h+2.8*mm, "Total")
+
+    # Transforme chaque ligne métier en lignes visuelles du Calc.
+    visual_rows = []
+    grand_total = 0.0
+
+    for line in lines:
+        qty = float(line["quantity"] or 0)
+        price = float(line["unit_price"] or 0)
+        total = qty * price
+        grand_total += total
+
+        desc_raw = str(line["description"] or "")
+        desc_parts = []
+        for raw in desc_raw.splitlines() or [""]:
+            wrapped = split_to_width(raw, QF["regular"], 8.2, col_desc-2.0*mm)
+            desc_parts.extend(wrapped or [""])
+
+        if not desc_parts:
+            desc_parts = [""]
+
+        visual_rows.append({
+            "qty": qty_text(qty),
+            "desc": desc_parts[0],
+            "total": euro(total),
+            "main": True,
+        })
+        for extra in desc_parts[1:]:
+            visual_rows.append({"qty":"", "desc":extra, "total":"", "main":False})
+
+        # Dans le modèle Calc, les articles/prestations sont séparés par une ligne vide.
+        visual_rows.append({"qty":"", "desc":"", "total":"", "main":False})
+
+    # Le modèle d'origine conserve un tableau visuel assez haut, même avec peu de lignes.
+    min_visual_rows = 12
+    while len(visual_rows) < min_visual_rows:
+        visual_rows.append({"qty":"", "desc":"", "total":"", "main":False})
+
+    # Pour garder le bas de page identique, limite l'affichage à 16 lignes visuelles.
+    # Les descriptions sont compactées plus haut pour éviter le dépassement.
+    visual_rows = visual_rows[:16]
+
+    y_top = table_top-header_h
+    c.setFillColor(colors.black)
+
+    for row in visual_rows:
+        y_bottom = y_top-row_h
+        c.setStrokeColor(BORDER)
+        c.setLineWidth(0.22*mm)
+        c.rect(table_x, y_bottom, table_w, row_h, fill=0, stroke=1)
+        for x in xs[1:-1]:
+            c.line(x, y_top, x, y_bottom)
+
+        c.setFont(QF["regular"], 8.2)
+        if row["qty"]:
+            c.drawCentredString((xs[0]+xs[1])/2, y_bottom+1.8*mm, row["qty"])
+        if row["desc"]:
+            fit_text(c, row["desc"], xs[1]+0.8*mm, y_bottom+1.7*mm, col_desc-1.6*mm, QF["regular"], 8.2, 6.0)
+        if row["total"]:
+            c.setFont(QF["regular"], 8.7)
+            c.drawRightString(xs[4]-0.8*mm, y_bottom+1.7*mm, row["total"])
+        y_top = y_bottom
+
+    # Deux lignes TVA / Facture / Total
+    vat_h = 7.0*mm
+    vat_y1 = y_top-vat_h
+    vat_y2 = vat_y1-vat_h
+
+    # Ligne 1
+    c.rect(table_x, vat_y1, table_w, vat_h, fill=0, stroke=1)
+    c.line(xs[2], y_top, xs[2], vat_y1)
+    c.line(xs[3], y_top, xs[3], vat_y1)
+    c.setFont(QF["italic"], 9.5)
+    c.drawString(xs[1]+1.0*mm, vat_y1+2.0*mm, "TVA non applicable, art. 293 B du CGI")
+
+    # Ligne 2
+    c.rect(table_x, vat_y2, table_w, vat_h, fill=0, stroke=1)
+    c.line(xs[2], vat_y1, xs[2], vat_y2)
+    c.line(xs[3], vat_y1, xs[3], vat_y2)
+    c.setFont(QF["italic"], 9.5)
+    c.drawString(xs[1]+1.0*mm, vat_y2+2.0*mm, "Facture en euros")
+    c.setFont(QF["bold"], 9.5)
+    c.drawString(xs[2]+2.2*mm, vat_y2+2.0*mm, "Net à payer :")
+    c.setFont(QF["bold"], 10.0)
+    c.drawRightString(xs[4]-0.8*mm, vat_y2+2.0*mm, euro(grand_total))
+
+    # ----------------------------------------------------------------
+    # Mentions sous tableau
+    # ----------------------------------------------------------------
+    under_y = vat_y2-3.2*mm
+    c.setFillColor(colors.black)
+    c.setFont(QF["regular"], 7.2)
+    c.drawString(table_x+0.5*mm, under_y, "En cas de non réparation, un ")
+    prefix_w = pdfmetrics.stringWidth("En cas de non réparation, un ", QF["regular"], 7.2)
+    c.setFont(QF["bold"], 7.2)
+    c.drawString(table_x+0.5*mm+prefix_w, under_y, "forfait de 30€")
+    bold_w = pdfmetrics.stringWidth("forfait de 30€", QF["bold"], 7.2)
+    c.setFont(QF["regular"], 7.2)
+    c.drawString(
+        table_x+0.5*mm+prefix_w+bold_w, under_y,
+        " pour recherche de pannes sera appliqué."
+    )
+    c.drawString(
+        table_x+0.5*mm, under_y-4.2*mm,
+        "Le client aura la possibilité de régler le forfait ou de laisser le matériel pour pièces."
+    )
+
+    # Paragraphe données - texte identique à l'original
+    data_y = under_y-13.0*mm
+    data_text = (
+        "L'entreprise met en œuvre des mesures de sécurité conformes aux exigences légales pour protéger les données. "
+        "Toutefois, elle ne peut être tenue responsable des pertes de données résultant d'événements imprévisibles "
+        "tels que les cyberattaques, les défaillances techniques ou les catastrophes naturelles."
+    )
+    c.setFont(QF["regular"], 5.9)
+    wrapped_data = split_to_width(data_text, QF["regular"], 5.9, 185*mm)
+    for part in wrapped_data[:3]:
+        c.drawString(table_x+0.5*mm, data_y, part)
+        data_y -= 3.3*mm
+
+    c.setFont(QF["bold"], 5.9)
+    c.drawString(
+        table_x+0.5*mm, data_y,
+        "Les utilisateurs sont invités à sauvegarder régulièrement leurs données importantes."
+    )
+
+    # Conditions paiement à gauche
+    conditions_y = data_y-10.0*mm
+    c.setFillColor(LIGHT_GREY)
+    c.setFont(QF["regular"], 5.8)
+    condition_lines = [
+        "Conditions de paiement : paiement à réception de facture",
+        "Aucun escompte consenti pour règlement anticipé",
+        "Tout incident de paiement est passible d'intérêt de retard. Le montant des pénalités résulte de l'application",
+        "aux sommes restant dues d'un taux d'intérêt légal en vigueur au moment de l'incident.",
+        "Indemnité forfaitaire pour frais de recouvrement due au créancier en cas de retard de paiement: 40€",
+    ]
+    yy = conditions_y
+    for txt in condition_lines:
+        c.drawString(table_x+0.5*mm, yy, txt)
+        yy -= 4.0*mm
+
+    # Zone Bon pour accord à droite
+    sig_x = 151.5*mm
+    sig_w = 53.5*mm
+    sig_h = 34.0*mm
+    sig_y = 27.2*mm
+    sig_header_h = 4.3*mm
+    c.setFillColor(colors.white)
+    c.setStrokeColor(LINE_BLUE)
+    c.setLineWidth(0.55*mm)
+    c.rect(sig_x, sig_y, sig_w, sig_h, fill=0, stroke=1)
+    c.line(sig_x, sig_y+sig_h-sig_header_h, sig_x+sig_w, sig_y+sig_h-sig_header_h)
+    c.setFillColor(colors.black)
+    c.setFont(QF["bold"], 5.7)
+    c.drawCentredString(
+        sig_x+sig_w/2, sig_y+sig_h-sig_header_h+1.3*mm,
+        "Bon pour accord + Signature"
+    )
+
+    draw_footer()
+
+    c.save()
+    pdf_bytes = bio.getvalue()
+
+    # Sauvegarde automatique dans WOPR/private/documents/Devis/AAAA/MM - Mois
+    quote_folder = year_month_folder(DEVIS_ROOT, q["quote_date"], create=True)
+    quote_filename = safe_document_name(f"{q['client_name']}_{q['quote_no']}.wopr.pdf")
+    quote_saved_path = quote_folder / quote_filename
+    try:
+        quote_saved_path.write_bytes(pdf_bytes)
+    except Exception as exc:
+        app.logger.warning("Impossible d'enregistrer le devis dans %s: %s", quote_saved_path, exc)
+
+    bio.seek(0)
+    return send_file(
+        bio,
+        mimetype="application/pdf",
+        # V2.3.239 : le devis vient d'être archivé dans private/documents/Devis.
+        # L'utilisateur le visualise sans créer une seconde copie dans Téléchargements.
+        as_attachment=False,
+        download_name=quote_filename
+    )
+
+
+def open_local_document_folder(folder):
+    """Ouvre un dossier local dans l'explorateur du système."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if os.name == "nt":
+            os.startfile(str(folder))
+        elif sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", str(folder)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.Popen(
+                ["xdg-open", str(folder)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _folder_open_response(folder):
+    ok, error = open_local_document_folder(folder)
+    if ok:
+        return Response(status=204)
+    return Response(
+        error or "Impossible d'ouvrir le dossier",
+        status=500,
+        mimetype="text/plain"
+    )
+
+
+@app.route("/repair/<int:rid>/intake-folder", methods=["GET", "POST"])
+def repair_intake_folder(rid):
+    con = db()
+    row = con.execute(
+        "SELECT received_date, created_at FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Dossier introuvable"), 404
+
+    document_date = str(row["received_date"] or row["created_at"] or "")[:10]
+    folder = year_month_folder(
+        SUIVI_REPARATIONS_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+@app.route("/repair/<int:rid>/invoice-folder", methods=["GET", "POST"])
+def repair_invoice_folder(rid):
+    con = db()
+    row = con.execute(
+        "SELECT invoice_no, finished_at, received_date FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Facture introuvable"), 404
+
+    document_date = invoice_no_date(row["invoice_no"])
+    if not document_date:
+        document_date = str(row["finished_at"] or row["received_date"] or "")[:10]
+
+    folder = year_month_folder(
+        FACTURES_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+@app.route("/devis/<int:quote_id>/folder", methods=["GET", "POST"])
+def quote_folder_open(quote_id):
+    con = db()
+    row = con.execute(
+        "SELECT quote_date FROM quotes WHERE id=?",
+        (quote_id,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Devis introuvable"), 404
+
+    folder = year_month_folder(
+        DEVIS_ROOT,
+        row["quote_date"],
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+
+@app.route("/achats-ventes/<int:entry_id>/document/folder", methods=["GET", "POST"])
+def achats_ventes_document_folder(entry_id):
+    """Ouvre le dossier du justificatif réellement résolu pour une ligne Achat/Vente."""
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+
+    try:
+        path = ledger_document_file(row)
+    except Exception:
+        path = None
+
+    if path and Path(path).is_file():
+        return _folder_open_response(Path(path).parent)
+
+    # Sans justificatif joint, ouvre tout de même le dossier Fournisseurs du mois.
+    document_date = str(row["entry_date"] or "")[:10]
+    folder = year_month_folder(
+        FOURNISSEURS_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+@app.route("/achats-ventes/vente/<int:entry_id>/folder", methods=["GET", "POST"])
+def achats_ventes_sale_invoice_folder(entry_id):
+    con = db()
+    row = con.execute(
+        "SELECT * FROM ledger_entries WHERE id=?",
+        (entry_id,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return jsonify(ok=False, error="Ligne introuvable"), 404
+    if (row["operation"] or "").casefold() != "vente":
+        return jsonify(ok=False, error="Cette ligne n'est pas une vente"), 400
+
+    invoice_no = canonical_client_invoice_no(row["invoice_no"])
+    pdf = find_client_invoice_pdf(invoice_no, row["party"] or "")
+    if pdf and pdf.exists():
+        return _folder_open_response(pdf.parent)
+
+    document_date = invoice_no_date(invoice_no)
+    if not document_date:
+        document_date = str(row["entry_date"] or "")[:10]
+    folder = year_month_folder(
+        FACTURES_ROOT,
+        document_date,
+        create=True
+    )
+    return _folder_open_response(folder)
+
+
+# ===== STOCK SIMPLE ==========================================================
+# V1 volontairement minimaliste : référence, fonction, quantité, remarques,
+# image. Les quantités restent du texte afin d'accepter "2x10", "2M/2F", etc.
+
+def ensure_stock_table():
+    con = db()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stock_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference TEXT NOT NULL,
+            function TEXT,
+            quantity TEXT,
+            remarks TEXT,
+            image_name TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.commit()
+    con.close()
+    STOCK_IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _stock_save_image(upload, old_name=""):
+    if not upload or not getattr(upload, "filename", ""):
+        return old_name
+
+    original = str(upload.filename or "").strip()
+    suffix = Path(original).suffix.lower()
+    allowed = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    if suffix not in allowed:
+        raise ValueError("Format d'image non accepté. Utilise JPG, PNG, WEBP ou GIF.")
+
+    STOCK_IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_hex(12)}{suffix}"
+    destination = STOCK_IMAGES_ROOT / filename
+    upload.save(destination)
+
+    if old_name:
+        try:
+            old_path = STOCK_IMAGES_ROOT / Path(str(old_name)).name
+            if old_path.is_file():
+                old_path.unlink()
+        except OSError:
+            pass
+    return filename
+
+
+
+
+def _stock_reference_parts(value):
+    """Découpe une saisie contenant plusieurs références."""
+    raw = " ".join(str(value or "").split()).strip()
+    if not raw:
+        return []
+
+    parts = re.split(r"\s*(?:/|;|,|\|)\s*", raw)
+    cleaned = []
+    seen = set()
+
+    for part in parts:
+        part = " ".join(str(part or "").split()).strip()
+        if not part:
+            continue
+        key = re.sub(r"[\s\-_./]+", "", part).casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(part)
+
+    return cleaned or [raw]
+
+
+
+def _stock_normalize_reference(value):
+    return re.sub(r"[\s\-_./]+", "", str(value or "")).casefold()
+
+
+def _stock_http_text(url, timeout=8):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/154 Safari/537.36",
+            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(2_500_000)
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return raw.decode(charset, errors="replace")
+
+
+def _stock_clean_search_text(value):
+    value = re.sub(r"<[^>]+>", " ", str(value or ""))
+    value = html.unescape(value)
+    return " ".join(value.split()).strip()
+
+
+def _stock_guess_from_reference(reference):
+    """Déductions locales sûres quand la référence contient déjà l'information."""
+    parts = _stock_reference_parts(reference)
+    if len(parts) > 1:
+        for part in sorted(parts, key=lambda x: (len(_stock_normalize_reference(x)), len(x))):
+            guessed = _stock_guess_from_reference(part)
+            if guessed:
+                return guessed
+        return ""
+
+    raw = " ".join(str(reference or "").split()).strip()
+    low = raw.casefold()
+    if not raw:
+        return ""
+
+    # Valeurs explicites : ex. "0201 100nF 10V Condensateur en Céramique"
+    cap = re.search(r"\b(0201|0402|0603|0805|1206)?\s*([0-9.,]+\s*(?:pf|nf|uf|µf))\s*([0-9.,]+\s*v)?\b", low, re.I)
+    if cap and ("condens" in low or re.search(r"\b(?:pf|nf|uf|µf)\b", low)):
+        size = (cap.group(1) or "").upper()
+        value = (cap.group(2) or "").replace(" ", "")
+        volts = (cap.group(3) or "").replace(" ", "")
+        parts = ["Condensateur céramique CMS"]
+        if size:
+            parts.append(size)
+        if value:
+            parts.append(value)
+        if volts:
+            parts.append(volts.upper())
+        return " ".join(parts)
+
+    if "connecteur" in low or "port " in low:
+        if "usb-c" in low or "type-c" in low or "type c" in low:
+            return "Connecteur USB-C"
+        if "micro usb" in low:
+            return "Connecteur Micro-USB"
+        if "hdmi" in low:
+            return "Connecteur HDMI"
+
+    if "ferrite" in low:
+        return "Ferrite"
+    if "relais" in low or "relay" in low:
+        return "Relais"
+    if "mosfet" in low:
+        if re.search(r"\bp[\s-]*(?:ch|channel)\b", low):
+            return "MOSFET canal P"
+        if re.search(r"\bn[\s-]*(?:ch|channel)\b", low):
+            return "MOSFET canal N"
+        return "MOSFET"
+    if "tvs" in low:
+        return "Diode TVS"
+    if "esd" in low and "diode" in low:
+        return "Diode de protection ESD"
+    if "buck" in low and "boost" in low:
+        return "Convertisseur Buck-Boost"
+    if "buck" in low or "step-down" in low or "step down" in low:
+        return "Régulateur Buck / Step-Down"
+    if "boost" in low or "step-up" in low or "step up" in low:
+        return "Régulateur Boost / Step-Up"
+    if "pd controller" in low or ("power delivery" in low and "controller" in low):
+        return "Contrôleur USB-C / Power Delivery"
+
+    # Familles courantes de dépannage : on reconnaît la famille même quand
+    # le suffixe de valeur/boîtier n'est pas présent dans la saisie.
+    compact = re.sub(r"[\s\-_./]+", "", raw).upper()
+
+    # TAI-TECH HCBxxxxKF... : ferrite bead CMS (ex. HCB2012KF-121T50).
+    if re.fullmatch(r"HCB\d{4}KF[A-Z0-9]*", compact):
+        return "Ferrite / Ferrite bead CMS"
+
+    # LL4148 / LL4148-GS08 / variantes : diode signal rapide MiniMELF.
+    if compact.startswith("LL4148"):
+        return "Diode à commutation rapide"
+
+    # Famille ST VNxxx : interrupteurs intelligents / drivers high-side.
+    # Ex. VN820, VN750, VN920...
+    if re.fullmatch(r"VN\d{3,4}[A-Z0-9]*", compact):
+        return "High-side driver / Interrupteur intelligent"
+
+    # Famille TI TPS229xx : load switches.
+    if re.fullmatch(r"TPS229\d+[A-Z0-9]*", compact):
+        return "Interrupteur de charge / Load switch"
+
+    # onsemi NCP1014 + suffixes (ST100T3G, etc.).
+    if re.fullmatch(r"NCP1014[A-Z0-9]*", compact):
+        return "Contrôleur d’alimentation / Convertisseur Flyback"
+
+    # Familles Alpha & Omega les plus utilisées en dépannage.
+    if re.fullmatch(r"AO(?:N|D|I|T|C)\d+[A-Z0-9]*", compact):
+        return "MOSFET"
+
+    # Famille 78Lxx : régulateurs linéaires positifs (78L05, 78L09, 78L12...)
+    m = re.fullmatch(r"78l(\d{2})", re.sub(r"[\s\-_./]+", "", low))
+    if m:
+        return f"Régulateur de tension {int(m.group(1))}V"
+
+    return ""
+
+
+def _stock_format_number_fr(value):
+    return str(value or "").replace(".", ",")
+
+
+def _stock_function_from_description(description):
+    """Convertit une description constructeur/distributeur en fonction courte."""
+    text = _stock_clean_search_text(description)
+    low = text.casefold()
+    if not text:
+        return ""
+
+    # Convertisseurs DC/DC : cas très courant en dépannage.
+    if (
+        ("synchronous" in low and ("step-down" in low or "step down" in low))
+        or "synchronous buck" in low
+    ):
+        vin = re.search(
+            r"(\d+(?:[.,]\d+)?)\s*[-v ]+\s*to\s*(\d+(?:[.,]\d+)?)\s*[- ]*v\s*(?:input)?",
+            text, re.I
+        )
+        amps = re.search(r"(\d+(?:[.,]\d+)?)\s*[- ]*a\b", text, re.I)
+        extras = []
+        if vin:
+            extras.append(
+                _stock_format_number_fr(vin.group(1)) + "–" +
+                _stock_format_number_fr(vin.group(2)) + " V"
+            )
+        if amps:
+            extras.append(_stock_format_number_fr(amps.group(1)) + " A")
+        return "Régulateur Buck synchrone" + ((" " + " / ".join(extras)) if extras else "")
+
+    if "step-down" in low or "step down" in low or "buck converter" in low or "buck regulator" in low:
+        return "Régulateur Buck / Step-Down"
+
+    if "step-up" in low or "step up" in low or "boost converter" in low or "boost regulator" in low:
+        return "Régulateur Boost / Step-Up"
+
+    if "buck-boost" in low or "buck boost" in low:
+        return "Convertisseur Buck-Boost"
+
+    if "load switch" in low or "power distribution switch" in low or "power switch" in low:
+        extras = []
+        volts = re.search(r"(\d+(?:[.,]\d+)?)\s*[- ]*v", text, re.I)
+        amps = re.search(r"(\d+(?:[.,]\d+)?)\s*[- ]*a\b", text, re.I)
+        if volts:
+            extras.append(_stock_format_number_fr(volts.group(1)) + " V")
+        if amps:
+            extras.append(_stock_format_number_fr(amps.group(1)) + " A")
+        return "Interrupteur de charge / Load switch" + ((" " + " / ".join(extras)) if extras else "")
+
+    if "load switch" in low or "power distribution switch" in low:
+        return "Interrupteur de charge / Load switch"
+
+    if (
+        "power controller" in low
+        or "power management ic" in low
+        or "power-management ic" in low
+        or "power management controller" in low
+    ):
+        return "Contrôleur de gestion d’alimentation"
+
+    if (
+        "high-side driver" in low
+        or "high side driver" in low
+        or "high-side switch" in low
+        or "high side switch" in low
+        or "smart power high-side" in low
+        or "smart high-side" in low
+    ):
+        return "High-side driver / Interrupteur intelligent"
+
+    if "low-side driver" in low or "low side driver" in low:
+        return "Low-side driver"
+
+    if "gate driver" in low:
+        return "Driver de grille MOSFET"
+
+    if "battery charger" in low or "battery charging" in low or "charger ic" in low:
+        return "Contrôleur de charge batterie"
+
+    if "led driver" in low:
+        return "Driver LED"
+
+    if "level translator" in low or "level shifter" in low:
+        return "Traducteur de niveau logique"
+
+    if "analog switch" in low or "bilateral switch" in low:
+        return "Commutateur analogique"
+
+    if "current sense amplifier" in low:
+        return "Amplificateur de mesure de courant"
+
+    if "voltage supervisor" in low or "supervisor circuit" in low or "reset ic" in low:
+        return "Superviseur de tension / Reset"
+
+    if "hall effect sensor" in low or "hall-effect sensor" in low:
+        return "Capteur à effet Hall"
+
+    if "transceiver" in low:
+        if "can" in low:
+            return "Transceiver CAN"
+        if "rs-485" in low or "rs485" in low:
+            return "Transceiver RS-485"
+        if "usb" in low:
+            return "Transceiver USB"
+        return "Transceiver"
+
+    if "power delivery" in low and "controller" in low:
+        return "Contrôleur USB-C / Power Delivery"
+
+    if ("usb-c" in low or "usb type-c" in low or "type-c" in low) and "controller" in low:
+        return "Contrôleur USB-C"
+
+    if "power management" in low or re.search(r"\bpmic\b", low):
+        return "Contrôleur de gestion d’alimentation"
+
+    if (
+        ("n-channel" in low or re.search(r"\bn[\s-]*ch\b", low))
+        and "mosfet" in low
+    ):
+        return "MOSFET canal N"
+
+    if (
+        ("p-channel" in low or re.search(r"\bp[\s-]*ch\b", low))
+        and "mosfet" in low
+    ):
+        return "MOSFET canal P"
+
+    if "mosfet" in low:
+        return "MOSFET"
+
+    if "transient voltage suppress" in low or ("tvs" in low and "diode" in low):
+        return "Diode TVS"
+
+    if "schottky" in low and "diode" in low:
+        return "Diode Schottky"
+
+    if (
+        "fast switching diode" in low
+        or "switching diode" in low
+        or "small signal diode" in low
+        or "high speed diode" in low
+        or "high-speed diode" in low
+    ):
+        return "Diode à commutation rapide"
+
+    if "esd protection" in low or ("esd" in low and "diode" in low):
+        return "Diode de protection ESD"
+
+    if (
+        "ferrite bead" in low
+        or "ferrite chip" in low
+        or "chip bead" in low
+        or "emi suppression ferrite" in low
+        or ("ferrite" in low and ("impedance" in low or "ohm" in low))
+    ):
+        return "Ferrite / Ferrite bead CMS"
+
+    if re.search(r"\brelay\b", low):
+        return "Relais"
+
+    if ("or gate" in low and ("2-input" in low or "quad" in low)):
+        return "Porte logique OR"
+
+    if "operational amplifier" in low or re.search(r"\bop[\s-]?amp\b", low):
+        return "Amplificateur opérationnel"
+
+    if "microcontroller" in low or re.search(r"\bmcu\b", low):
+        return "Microcontrôleur"
+
+    if "eeprom" in low:
+        return "Mémoire EEPROM"
+
+    if "flash memory" in low or "nor flash" in low or "nand flash" in low:
+        return "Mémoire Flash"
+
+    if "linear regulator" in low or re.search(r"\bldo\b", low):
+        return "Régulateur de tension LDO"
+
+    if "voltage regulator" in low:
+        return "Régulateur de tension"
+
+    # Trop générique : on préfère ne rien proposer plutôt qu'un résultat faux.
+    return ""
+
+
+def _stock_guess_function(reference, title, snippet):
+    """Propose seulement une vraie fonction électronique, jamais un titre Web."""
+    local = _stock_guess_from_reference(reference)
+    if local:
+        return local
+    return _stock_function_from_description(f"{title} {snippet}")
+
+
+def _stock_extract_bing_results_full(page):
+    """Résultats Bing HTML avec URL quand disponible."""
+    results = []
+    blocks = re.findall(r'<li[^>]+class="b_algo"[^>]*>(.*?)</li>', str(page or ""), flags=re.I | re.S)
+    for block in blocks[:15]:
+        link_m = re.search(r'<h2[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, flags=re.I | re.S)
+        if link_m:
+            link = html.unescape(link_m.group(1))
+            title = _stock_clean_search_text(link_m.group(2))
+        else:
+            link = ""
+            title_m = re.search(r"<h2[^>]*>.*?<a[^>]*>(.*?)</a>", block, flags=re.I | re.S)
+            title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        snippet_m = re.search(r"<p[^>]*>(.*?)</p>", block, flags=re.I | re.S)
+        snippet = _stock_clean_search_text(snippet_m.group(1) if snippet_m else "")
+        if title or snippet:
+            results.append((title, snippet, link))
+    return results
+
+
+def _stock_bing_html_search(query, timeout=8):
+    url = (
+        "https://www.bing.com/search?q="
+        + urllib.parse.quote_plus(str(query or ""))
+        + "&setlang=en&cc=us"
+    )
+    page = _stock_http_text(url, timeout=timeout)
+    return _stock_extract_bing_results_full(page)
+
+
+def _stock_collect_search_results(query, timeout=8):
+    """Essaie plusieurs formats : HTML Bing, RSS Bing, puis DDG."""
+    merged = []
+    seen = set()
+
+    def add(title, snippet, link=""):
+        key = (str(title).casefold(), str(link).casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        merged.append((title, snippet, link))
+
+    try:
+        for title, snippet, link in _stock_bing_html_search(query, timeout=timeout):
+            add(title, snippet, link)
+    except Exception:
+        pass
+
+    try:
+        for title, snippet, link in _stock_search_bing_rss(query, timeout=timeout):
+            add(title, snippet, link)
+    except Exception:
+        pass
+
+    if not merged:
+        try:
+            q = urllib.parse.quote_plus(str(query or ""))
+            page = _stock_http_text("https://html.duckduckgo.com/html/?q=" + q, timeout=timeout)
+            for title, snippet in _stock_extract_ddg_results(page):
+                add(title, snippet, "")
+        except Exception:
+            pass
+
+    return merged[:20]
+
+
+def _stock_aos_family_hint(reference, title, snippet):
+    """AON/AOD/AOI sont des familles MOSFET Alpha & Omega ; n'utilise ce hint
+    que si le résultat Web cite bien AOS / Alpha & Omega.
+    """
+    ref = _stock_normalize_reference(reference).upper()
+    hay = f"{title} {snippet}".casefold()
+    if re.fullmatch(r"AO(?:N|D|I|T)\\d+[A-Z0-9]*", ref):
+        if "alpha" in hay and "omega" in hay or "aos" in hay:
+            return "MOSFET"
+    return ""
+
+
+def _stock_extract_bing_results(page):
+    results = []
+    blocks = re.findall(r'<li[^>]+class="b_algo"[^>]*>(.*?)</li>', page, flags=re.I | re.S)
+    for block in blocks[:10]:
+        title_m = re.search(r"<h2[^>]*>.*?<a[^>]*>(.*?)</a>", block, flags=re.I | re.S)
+        snippet_m = re.search(r"<p[^>]*>(.*?)</p>", block, flags=re.I | re.S)
+        title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        snippet = _stock_clean_search_text(snippet_m.group(1) if snippet_m else "")
+        if title or snippet:
+            results.append((title, snippet))
+    return results
+
+
+
+def _stock_extract_bing_rss_results(page):
+    """Parse le flux RSS de Bing, plus stable que le HTML de la page de résultats."""
+    results = []
+    for item in re.findall(r"<item>(.*?)</item>", str(page or ""), flags=re.I | re.S):
+        title_m = re.search(r"<title>(.*?)</title>", item, flags=re.I | re.S)
+        link_m = re.search(r"<link>(.*?)</link>", item, flags=re.I | re.S)
+        desc_m = re.search(r"<description>(.*?)</description>", item, flags=re.I | re.S)
+        title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        link = html.unescape(_stock_clean_search_text(link_m.group(1) if link_m else ""))
+        snippet = _stock_clean_search_text(desc_m.group(1) if desc_m else "")
+        if title or snippet:
+            results.append((title, snippet, link))
+        if len(results) >= 12:
+            break
+    return results
+
+
+def _stock_search_bing_rss(query, timeout=7):
+    url = (
+        "https://www.bing.com/search?format=rss&setlang=en&q="
+        + urllib.parse.quote_plus(str(query or ""))
+    )
+    return _stock_extract_bing_rss_results(_stock_http_text(url, timeout=timeout))
+
+
+def _stock_result_source(url, title="", snippet=""):
+    hay = f"{url} {title} {snippet}".casefold()
+    sources = (
+        ("ti.com", "Texas Instruments"),
+        ("st.com", "STMicroelectronics"),
+        ("onsemi.com", "onsemi"),
+        ("infineon.com", "Infineon"),
+        ("nxp.com", "NXP"),
+        ("analog.com", "Analog Devices"),
+        ("microchip.com", "Microchip"),
+        ("monolithicpower.com", "Monolithic Power Systems"),
+        ("mps.com", "Monolithic Power Systems"),
+        ("diodes.com", "Diodes Incorporated"),
+        ("vishay.com", "Vishay"),
+        ("rohm.com", "ROHM"),
+        ("toshiba-semicon-storage.com", "Toshiba"),
+        ("renesas.com", "Renesas"),
+        ("digikey.", "DigiKey"),
+        ("mouser.", "Mouser"),
+        ("farnell.", "Farnell"),
+        ("newark.", "Newark"),
+        ("rs-online.", "RS"),
+        ("lcsc.com", "LCSC"),
+        ("alldatasheet.", "AllDataSheet"),
+        ("datasheetcatalog.", "DatasheetCatalog"),
+        ("aliexpress.", "AliExpress — à confirmer"),
+        ("aliexpress.com", "AliExpress — à confirmer"),
+    )
+    for needle, label in sources:
+        if needle in hay:
+            return label
+    return "Web"
+
+
+def _stock_reference_variants(reference):
+    """Variantes prudentes pour références complètes + suffixes de commande."""
+    raw = " ".join(str(reference or "").split()).strip()
+    norm = _stock_normalize_reference(raw)
+    variants = []
+    for value in (raw, norm):
+        if value and value not in variants:
+            variants.append(value)
+
+    # Ex. TPS22965DSGR -> TPS22965 ; suffixes de boîtier/commande courants.
+    if len(norm) >= 8:
+        stripped = re.sub(
+            r"(?:dsgr|dsgt|rger|rget|pwr|pw|dgk|dck|dbv|drb|drc|q1|tr|reel|tape)$",
+            "",
+            norm,
+            flags=re.I,
+        )
+        if len(stripped) >= 6 and stripped not in variants:
+            variants.append(stripped)
+    return variants[:4]
+
+
+def _stock_result_relevant(reference, title, snippet, link=""):
+    """Pertinence par référence exacte ou racine de famille suffisamment distinctive."""
+    hay = _stock_normalize_reference(f"{title} {snippet} {link}")
+    if not hay:
+        return False
+
+    variants = _stock_reference_variants(reference)
+    for variant in variants:
+        norm = _stock_normalize_reference(variant)
+        if len(norm) >= 4 and norm in hay:
+            return True
+
+    ref = _stock_normalize_reference(reference).upper()
+    roots = []
+
+    # HCB2012KF doit accepter HCB2012KF-121T50.
+    if re.fullmatch(r"HCB\d{4}KF[A-Z0-9]*", ref):
+        m = re.match(r"(HCB\d{4}KF)", ref)
+        if m:
+            roots.append(m.group(1))
+
+    # LL4148 doit accepter les suffixes fabricant/commande.
+    if ref.startswith("LL4148"):
+        roots.append("LL4148")
+
+    # VN820 accepte VN820-E / VN820SP-E, etc. si la racine reste présente.
+    m = re.match(r"(VN\d{3,4})", ref)
+    if m:
+        roots.append(m.group(1))
+
+    for root in roots:
+        if len(root) >= 5 and root.casefold() in hay.casefold():
+            return True
+
+    return False
+
+
+def _stock_search_candidate_queries(reference):
+    """Requêtes simples : l'exacte d'abord, spécialisées ensuite."""
+    ref = str(reference or "").strip()
+    return [
+        (f'"{ref}"', "exact"),
+        (f'"{ref}" datasheet', "datasheet"),
+        (f'"{ref}" MOSFET transistor IC', "semiconductor"),
+        (f'"{ref}" power controller power management', "power"),
+        (f'"{ref}" electronic component', "component"),
+        (f'"{ref}" site:digikey.com OR site:mouser.com OR site:lcsc.com', "distributeur"),
+        (f'"{ref}" site:aliexpress.com', "aliexpress"),
+    ]
+
+
+
+def _stock_extract_ddg_results(page):
+    results = []
+    # duckduckgo html : liens result__a et snippets result__snippet
+    blocks = re.findall(r'<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>', page, flags=re.I | re.S)
+    for block in blocks[:10]:
+        title_m = re.search(r'class="result__a"[^>]*>(.*?)</a>', block, flags=re.I | re.S)
+        snippet_m = re.search(r'class="result__snippet"[^>]*>(.*?)</(?:a|div)>', block, flags=re.I | re.S)
+        title = _stock_clean_search_text(title_m.group(1) if title_m else "")
+        snippet = _stock_clean_search_text(snippet_m.group(1) if snippet_m else "")
+        if title or snippet:
+            results.append((title, snippet))
+    return results
+
+
+def _stock_ti_marking_candidates(reference):
+    """Interroge directement l'outil officiel TI de correspondance des marquages."""
+    ref = str(reference or "").strip()
+    if not ref:
+        return []
+
+    url = (
+        "https://www.ti.com/packaging/en/docs/partlookup.tsp?partmarking="
+        + urllib.parse.quote_plus(ref)
+    )
+    try:
+        page = _stock_http_text(url, timeout=8)
+    except Exception:
+        return []
+
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", page, flags=re.I | re.S)
+    found = []
+    seen = set()
+
+    for tr in rows:
+        cells = [
+            _stock_clean_search_text(x)
+            for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.I | re.S)
+        ]
+        if len(cells) < 5:
+            continue
+
+        # Colonnes TI : Part number | Marking | Package | Pins | Status | Description
+        part = cells[0].strip()
+        marking = cells[1].strip()
+        description = cells[-1].strip()
+
+        if _stock_normalize_reference(marking) != _stock_normalize_reference(ref):
+            continue
+
+        function = _stock_function_from_description(description)
+        if not function:
+            continue
+
+        key = function.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append({
+            "function": function,
+            "details": f"{part} — {description}",
+            "title": part,
+            "source": "Texas Instruments",
+        })
+
+    return found[:5]
+
+
+def _stock_meta_description(page):
+    text = str(page or "")
+    patterns = (
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+        r'<meta[^>]+content=["\'](.*?)["\'][^>]+name=["\']description["\']',
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
+        r'<title[^>]*>(.*?)</title>',
+    )
+    parts = []
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.I | re.S)
+        if m:
+            value = _stock_clean_search_text(m.group(1))
+            if value and value not in parts:
+                parts.append(value)
+    return " — ".join(parts)
+
+
+def _stock_direct_ti(reference):
+    """Essai direct sur la page produit TI. Évite totalement les moteurs de recherche."""
+    ref = str(reference or "").strip().upper()
+    if not ref:
+        return []
+
+    # Les familles TI les plus fréquentes en dépannage.
+    likely_ti = bool(re.match(
+        r"^(TPS|TLV|LM|SN|BQ|DRV|TUSB|HD3SS|CD|UCC|INA|OPA|PCM|DP|TMP|PCA|TCA|TXS|TXB)",
+        ref,
+        re.I
+    ))
+    if not likely_ti:
+        return []
+
+    variants = _stock_reference_variants(ref)
+    # Pour les suffixes de commande, tente aussi la racine.
+    roots = []
+    for v in variants:
+        v = str(v).strip().upper()
+        if v and v not in roots:
+            roots.append(v)
+
+    results = []
+    for part in roots[:4]:
+        try:
+            url = "https://www.ti.com/product/" + urllib.parse.quote(part, safe="-")
+            page = _stock_http_text(url, timeout=10)
+        except Exception:
+            continue
+
+        clean = _stock_clean_search_text(page[:2_000_000])
+        meta = _stock_meta_description(page)
+        hay = f"{meta} {clean[:120000]}"
+        if _stock_normalize_reference(part) not in _stock_normalize_reference(hay):
+            continue
+
+        function = _stock_function_from_description(hay)
+        if not function:
+            # Certains anciens TI ont des pages pauvres : formulations connues.
+            low = hay.casefold()
+            if "power controller" in low or "power selector" in low:
+                function = "Contrôleur de gestion d’alimentation"
+            elif "load switch" in low:
+                function = "Interrupteur de charge / Load switch"
+        if function:
+            results.append({
+                "function": function,
+                "details": meta[:300] or f"Page produit TI : {part}",
+                "title": part,
+                "source": "Texas Instruments",
+            })
+            break
+    return results
+
+
+def _stock_direct_st(reference):
+    """Essai direct sur une page produit ST quand la famille est identifiable."""
+    ref = str(reference or "").strip().upper()
+    if not ref:
+        return []
+
+    if not re.fullmatch(r"(?:VN|VND|VNH|VNP|VIPER|L78|LD|STM32)[A-Z0-9._-]+", ref):
+        return []
+
+    slug = re.sub(r"[^a-z0-9-]+", "-", ref.casefold()).strip("-")
+    categories = (
+        "automotive-analog-and-power",
+        "power-management",
+        "motor-drivers",
+        "microcontrollers-microprocessors",
+    )
+
+    for category in categories:
+        url = f"https://www.st.com/en/{category}/{slug}.html"
+        try:
+            page = _stock_http_text(url, timeout=6)
+        except Exception:
+            continue
+
+        meta = _stock_meta_description(page)
+        hay = f"{meta} {_stock_clean_search_text(page[:500000])}"
+        if _stock_normalize_reference(ref) not in _stock_normalize_reference(hay):
+            continue
+
+        function = _stock_function_from_description(hay)
+        if function:
+            return [{
+                "function": function,
+                "details": meta[:300] or f"Page produit ST : {ref}",
+                "title": ref,
+                "source": "STMicroelectronics",
+            }]
+    return []
+
+
+
+def _stock_direct_aos(reference):
+    """Identification directe/famille Alpha & Omega (AON/AOD/AOI/AOT...)."""
+    ref = str(reference or "").strip().upper()
+    if not re.fullmatch(r"AO(?:N|D|I|T|C)\d+[A-Z0-9]*", ref):
+        return []
+
+    # Plusieurs chemins historiques existent chez AOS. On essaie les pages/PDF connus.
+    urls = [
+        f"https://www.aosmd.com/sites/default/files/res/data_sheets/{ref}.pdf",
+        f"https://aosmd.com/res/data_sheets/{ref}.pdf",
+        f"https://aosmd.com/pdfs/datasheet/{ref}.pdf",
+    ]
+
+    # Un PDF brut n'est pas facilement classifiable ici, mais si l'accès existe,
+    # la famille AON/AOD/AOI/AOT est bien une famille de MOSFET AOS.
+    reachable = False
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if resp.status == 200 and ("pdf" in ctype or "application/octet-stream" in ctype):
+                    reachable = True
+                    break
+        except Exception:
+            pass
+
+    # Même si le PDF constructeur a bougé, la famille est suffisamment spécifique
+    # pour proposer "MOSFET" sans inventer le canal.
+    return [{
+        "function": "MOSFET",
+        "details": "Famille MOSFET Alpha & Omega Semiconductor" + (" — fiche constructeur accessible" if reachable else ""),
+        "title": ref,
+        "source": "Alpha & Omega Semiconductor",
+    }]
+
+
+def _stock_extract_generic_engine_results(page):
+    """Extraction volontairement large pour moteurs HTML de secours."""
+    text = str(page or "")
+    results = []
+
+    # Liens + texte d'ancre.
+    for href, label in re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', text, flags=re.I | re.S):
+        title = _stock_clean_search_text(label)
+        link = html.unescape(href)
+        if not title or len(title) < 4:
+            continue
+        # Petit contexte après le lien.
+        results.append((title, "", link))
+        if len(results) >= 30:
+            break
+    return results
+
+
+def _stock_search_extra_engines(reference):
+    """Secours multi-moteur : Brave et Mojeek. Aucune dépendance à un seul moteur."""
+    ref = str(reference or "").strip()
+    queries = [f'"{ref}" datasheet', f'"{ref}" electronic component']
+    found = []
+
+    for query in queries:
+        encoded = urllib.parse.quote_plus(query)
+        urls = [
+            "https://search.brave.com/search?q=" + encoded + "&source=web",
+            "https://www.mojeek.com/search?q=" + encoded,
+        ]
+        for url in urls:
+            try:
+                page = _stock_http_text(url, timeout=8)
+            except Exception:
+                continue
+            for title, snippet, link in _stock_extract_generic_engine_results(page):
+                if _stock_result_relevant(reference, title, snippet, link):
+                    found.append((title, snippet, link))
+                    if len(found) >= 12:
+                        return found
+    return found
+
+
+def _stock_known_repair_parts(reference):
+    """Petit secours local pour références de dépannage récurrentes/non documentées publiquement."""
+    ref = _stock_normalize_reference(reference).upper()
+    known = {
+        "CD3301B": {
+            "function": "Contrôleur de gestion d’alimentation",
+            "details": "TI CD3301B / CD3301BRHHR — Power Controller / Power Selector, QFN-36",
+            "title": "CD3301B",
+            "source": "Base WOPR",
+        },
+    }
+    hit = known.get(ref)
+    return [hit] if hit else []
+
+
+
+def _stock_web_identify(reference):
+    """Identification multi-source : direct fabricant d'abord, moteurs ensuite."""
+    reference = str(reference or "").strip()
+    if not reference:
+        return {"found": False, "candidates": [], "searched_results": 0}
+
+    reference_parts = _stock_reference_parts(reference)
+    search_references = sorted(
+        reference_parts or [reference],
+        key=lambda x: (len(_stock_normalize_reference(x)), len(x))
+    )
+
+    candidates = []
+    seen = set()
+    searched_results = 0
+
+    def add_candidate(candidate):
+        if not candidate:
+            return
+        function = " ".join(str(candidate.get("function") or "").split()).strip()
+        if not function:
+            return
+        source = str(candidate.get("source") or "Web")
+        key = (function.casefold(), source.casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append({
+            "function": function,
+            "details": str(candidate.get("details") or "")[:320],
+            "title": str(candidate.get("title") or "")[:180],
+            "source": source,
+        })
+
+    # 1) Déduction locale explicite, en testant chaque référence séparément.
+    for ref_part in search_references:
+        local_guess = _stock_guess_from_reference(ref_part)
+        if local_guess:
+            add_candidate({
+                "function": local_guess,
+                "details": f"Déduit directement de la référence {ref_part}.",
+                "title": ref_part,
+                "source": "WOPR",
+            })
+
+    # 1b) Familles à forte confiance : résultat immédiat.
+    # Important pour éviter 30+ secondes de recherches Web inutiles.
+    fast_patterns = (
+        r"HCB\d{4}KF[A-Z0-9]*",
+        r"LL4148[A-Z0-9]*",
+        r"VN\d{3,4}[A-Z0-9]*",
+        r"TPS229\d+[A-Z0-9]*",
+        r"AO(?:N|D|I|T|C)\d+[A-Z0-9]*",
+        r"NCP1014[A-Z0-9]*",
+    )
+    if candidates:
+        for ref_part in search_references:
+            compact_ref = re.sub(r"[\s\-_./]+", "", ref_part).upper()
+            if any(re.fullmatch(pattern, compact_ref) for pattern in fast_patterns):
+                return {
+                    "found": True,
+                    "function": candidates[0]["function"],
+                    "details": candidates[0]["details"],
+                    "candidates": candidates[:8],
+                    "source": candidates[0]["source"],
+                    "searched_results": 0,
+                }
+
+    # 2) Sources directes, sans moteur de recherche.
+    for ref_part in search_references:
+        for c in _stock_direct_ti(ref_part):
+            add_candidate(c)
+        for c in _stock_direct_st(ref_part):
+            add_candidate(c)
+        for c in _stock_direct_aos(ref_part):
+            add_candidate(c)
+        for c in _stock_ti_marking_candidates(ref_part):
+            add_candidate(c)
+        for c in _stock_known_repair_parts(ref_part):
+            add_candidate(c)
+
+    # 3) Moteurs existants.
+    all_results = []
+    result_seen = set()
+
+    for ref_part in search_references:
+        for query, kind in _stock_search_candidate_queries(ref_part):
+            try:
+                results = _stock_collect_search_results(query, timeout=8)
+            except Exception:
+                results = []
+
+            for title, snippet, link in results:
+                if not _stock_result_relevant(ref_part, title, snippet, link):
+                    continue
+
+                key = (str(title).casefold(), str(link).casefold())
+                if key in result_seen:
+                    continue
+
+                result_seen.add(key)
+                searched_results += 1
+                all_results.append((title, snippet, link, kind, ref_part))
+
+                function = _stock_guess_function(ref_part, title, snippet)
+                if not function:
+                    function = _stock_aos_family_hint(ref_part, title, snippet)
+                if not function:
+                    continue
+
+                source = _stock_result_source(link, title, snippet)
+                if kind == "aliexpress" and source == "Web":
+                    source = "AliExpress — à confirmer"
+
+                add_candidate({
+                    "function": function,
+                    "details": " — ".join(
+                        x for x in (title, snippet) if str(x or "").strip()
+                    )[:320],
+                    "title": title,
+                    "source": source,
+                })
+
+            if len(candidates) >= 8:
+                break
+
+        if len(candidates) >= 8:
+            break
+
+    # 4) Brave/Mojeek si Bing/DDG ne donnent rien.
+    if searched_results == 0:
+        for ref_part in search_references:
+            for title, snippet, link in _stock_search_extra_engines(ref_part):
+                searched_results += 1
+                function = _stock_guess_function(ref_part, title, snippet)
+                if not function:
+                    function = _stock_aos_family_hint(ref_part, title, snippet)
+                if not function:
+                    continue
+
+                add_candidate({
+                    "function": function,
+                    "details": title,
+                    "title": title,
+                    "source": _stock_result_source(link, title, snippet),
+                })
+
+            if candidates:
+                break
+
+    priority = {
+        "WOPR": 0,
+        "Texas Instruments": 1,
+        "STMicroelectronics": 1,
+        "Alpha & Omega Semiconductor": 1,
+        "onsemi": 1,
+        "Infineon": 1,
+        "NXP": 1,
+        "Analog Devices": 1,
+        "Microchip": 1,
+        "Base WOPR": 2,
+        "DigiKey": 3,
+        "Mouser": 3,
+        "Farnell": 3,
+        "LCSC": 3,
+        "Web": 4,
+        "AliExpress — à confirmer": 5,
+    }
+    candidates.sort(key=lambda c: priority.get(c.get("source") or "", 4))
+
+    return {
+        "found": bool(candidates),
+        "function": candidates[0]["function"] if candidates else "",
+        "details": candidates[0]["details"] if candidates else "",
+        "candidates": candidates[:8],
+        "source": candidates[0]["source"] if candidates else "",
+        "searched_results": searched_results,
+    }
+
+
+def _stock_web_images(reference):
+    reference = str(reference or "").strip()
+    if not reference:
+        return []
+    query = urllib.parse.quote_plus(f"{reference} electronic component")
+    url = "https://www.bing.com/images/search?q=" + query + "&form=HDRSC2"
+    page = _stock_http_text(url)
+
+    urls = []
+    # Bing embarque les URLs originales dans les métadonnées JSON murl.
+    for raw in re.findall(r'&quot;murl&quot;:&quot;(.*?)&quot;', page, flags=re.I):
+        value = html.unescape(raw).replace("\\/", "/")
+        if value.startswith(("http://", "https://")) and value not in urls:
+            urls.append(value)
+        if len(urls) >= 12:
+            break
+
+    if not urls:
+        for raw in re.findall(r'"murl"\s*:\s*"(https?://[^"]+)"', page, flags=re.I):
+            value = raw.replace("\\/", "/")
+            if value not in urls:
+                urls.append(value)
+            if len(urls) >= 12:
+                break
+    return urls
+
+
+def _stock_remote_image_allowed(url):
+    try:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _stock_download_remote_image(url, old_name=""):
+    if not _stock_remote_image_allowed(url):
+        raise ValueError("Adresse d'image refusée.")
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        raw = resp.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise ValueError("Image trop volumineuse.")
+
+    ext_by_type = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    suffix = ext_by_type.get(content_type)
+    if not suffix:
+        # Vérifie quand même via Pillow si le serveur ne donne pas un bon MIME.
+        try:
+            img = Image.open(io.BytesIO(raw))
+            fmt = (img.format or "").upper()
+            suffix = { "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif" }.get(fmt)
+        except Exception:
+            suffix = None
+    if not suffix:
+        raise ValueError("Le résultat choisi n'est pas une image compatible.")
+
+    STOCK_IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_hex(12)}{suffix}"
+    dest = STOCK_IMAGES_ROOT / filename
+    dest.write_bytes(raw)
+
+    if old_name:
+        try:
+            old_path = STOCK_IMAGES_ROOT / Path(str(old_name)).name
+            if old_path.is_file():
+                old_path.unlink()
+        except OSError:
+            pass
+    return filename
+
+
+@app.route("/stock/lookup")
+def stock_lookup():
+    ensure_stock_table()
+    reference = str(request.args.get("reference") or "").strip()
+    if not reference:
+        return jsonify({"found": False})
+
+    normalized = _stock_normalize_reference(reference)
+    con = db()
+    rows = con.execute("""
+        SELECT reference, function
+        FROM stock_items
+        WHERE COALESCE(trim(function),'') <> ''
+        ORDER BY updated_at DESC, id DESC
+    """).fetchall()
+    con.close()
+
+    for row in rows:
+        if _stock_normalize_reference(row["reference"]) == normalized:
+            return jsonify({
+                "found": True,
+                "function": str(row["function"] or "").strip(),
+                "source": "stock",
+            })
+    return jsonify({"found": False})
+
+
+@app.route("/stock/identify")
+def stock_identify():
+    reference = str(request.args.get("reference") or "").strip()
+    if not reference:
+        return jsonify({"found": False, "error": "Référence vide.", "candidates": []}), 400
+
+    # Valeur actuelle éventuelle, uniquement informative.
+    current_function = ""
+    try:
+        normalized = _stock_normalize_reference(reference)
+        con = db()
+        rows = con.execute("""
+            SELECT reference, function
+            FROM stock_items
+            WHERE COALESCE(trim(function),'') <> ''
+            ORDER BY updated_at DESC, id DESC
+        """).fetchall()
+        con.close()
+        for row in rows:
+            if _stock_normalize_reference(row["reference"]) == normalized:
+                current_function = str(row["function"] or "").strip()
+                break
+    except Exception:
+        pass
+
+    try:
+        result = _stock_web_identify(reference)
+        result["current_function"] = current_function
+        if current_function:
+            candidates = list(result.get("candidates") or [])
+            if not any(
+                str(c.get("function") or "").strip().casefold() == current_function.casefold()
+                for c in candidates
+            ):
+                candidates.insert(0, {
+                    "function": current_function,
+                    "details": "Fonction déjà enregistrée dans le stock WOPR.",
+                    "title": reference,
+                    "source": "Stock",
+                })
+            result["candidates"] = candidates[:8]
+            result["found"] = True
+            result["function"] = current_function
+            result["source"] = "Stock"
+            if not result.get("details"):
+                result["details"] = "Fonction déjà enregistrée dans le stock WOPR."
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({
+            "found": False,
+            "current_function": current_function,
+            "candidates": [],
+            "error": "Recherche Internet impossible pour le moment.",
+            "detail": str(exc)[:160],
+        }), 502
+
+
+@app.route("/stock/images")
+def stock_images_search():
+    reference = str(request.args.get("reference") or "").strip()
+    if not reference:
+        return jsonify({"images": [], "error": "Référence vide."}), 400
+    try:
+        return jsonify({"images": _stock_web_images(reference)})
+    except Exception as exc:
+        return jsonify({
+            "images": [],
+            "error": "Recherche d'images impossible pour le moment.",
+            "detail": str(exc)[:160],
+        }), 502
+
+
+@app.route("/stock/<int:item_id>/identify", methods=["POST"])
+def stock_identify_existing(item_id):
+    ensure_stock_table()
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    con.close()
+    if not row:
+        return jsonify({"ok": False, "error": "Article introuvable."}), 404
+
+    try:
+        result = _stock_web_identify(row["reference"])
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": "Recherche Internet impossible.",
+            "detail": str(exc)[:160],
+            "candidates": [],
+        }), 502
+
+    current_function = str(row["function"] or "").strip()
+    candidates = list(result.get("candidates") or [])
+    if current_function and not any(
+        str(c.get("function") or "").strip().casefold() == current_function.casefold()
+        for c in candidates
+    ):
+        candidates.insert(0, {
+            "function": current_function,
+            "details": "Fonction déjà enregistrée dans le stock WOPR.",
+            "title": str(row["reference"] or ""),
+            "source": "Stock",
+        })
+
+    found = bool(candidates)
+    return jsonify({
+        "ok": found,
+        "current_function": current_function,
+        "candidates": candidates[:8],
+        "error": "" if found else "Aucune fonction trouvée.",
+    })
+
+
+@app.route("/stock/<int:item_id>/function", methods=["POST"])
+def stock_apply_function(item_id):
+    ensure_stock_table()
+    function = " ".join(str(request.form.get("function") or "").split()).strip()
+    if not function:
+        return jsonify({"ok": False, "error": "Fonction vide."}), 400
+
+    con = db()
+    row = con.execute("SELECT id FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return jsonify({"ok": False, "error": "Article introuvable."}), 404
+
+    con.execute(
+        "UPDATE stock_items SET function=?, updated_at=? WHERE id=?",
+        (function, now().isoformat(timespec="seconds"), item_id),
+    )
+    con.commit()
+    con.close()
+    audit_event("STOCK_FUNCTION", f"id={item_id} -> {function}", request.remote_addr)
+    return jsonify({"ok": True, "function": function})
+
+
+@app.route("/stock/<int:item_id>/image-url", methods=["POST"])
+def stock_set_remote_image(item_id):
+    ensure_stock_table()
+    image_url = str(request.form.get("image_url") or "").strip()
+    if not image_url:
+        return jsonify({"ok": False, "error": "Image non sélectionnée."}), 400
+
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return jsonify({"ok": False, "error": "Article introuvable."}), 404
+
+    try:
+        image_name = _stock_download_remote_image(image_url, str(row["image_name"] or ""))
+    except ValueError as exc:
+        con.close()
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        con.close()
+        return jsonify({"ok": False, "error": "Téléchargement de l'image impossible.", "detail": str(exc)[:160]}), 502
+
+    con.execute(
+        "UPDATE stock_items SET image_name=?, updated_at=? WHERE id=?",
+        (image_name, now().isoformat(timespec="seconds"), item_id),
+    )
+    con.commit()
+    con.close()
+    audit_event("STOCK_IMAGE_WEB", f"id={item_id}", request.remote_addr)
+    return jsonify({"ok": True, "image_url": url_for("stock_image", item_id=item_id)})
+
+
+@app.route("/stock")
+def stock_page():
+    ensure_stock_table()
+    q = str(request.args.get("q") or "").strip()
+    edit_id = request.args.get("edit", type=int)
+
+    con = db()
+    if q:
+        like = f"%{q}%"
+        items = con.execute("""
+            SELECT *
+            FROM stock_items
+            WHERE reference LIKE ? COLLATE NOCASE
+               OR function LIKE ? COLLATE NOCASE
+               OR quantity LIKE ? COLLATE NOCASE
+               OR remarks LIKE ? COLLATE NOCASE
+            ORDER BY reference COLLATE NOCASE, id
+        """, (like, like, like, like)).fetchall()
+    else:
+        items = con.execute("""
+            SELECT *
+            FROM stock_items
+            ORDER BY reference COLLATE NOCASE, id
+        """).fetchall()
+
+    edit_item = None
+    if edit_id:
+        edit_item = con.execute("SELECT * FROM stock_items WHERE id=?", (edit_id,)).fetchone()
+    con.close()
+
+    return render_template(
+        "stock.html",
+        items=items,
+        q=q,
+        edit_item=edit_item,
+    )
+
+
+@app.route("/stock/add", methods=["POST"])
+def stock_add():
+    ensure_stock_table()
+    reference = str(request.form.get("reference") or "").strip()
+    if not reference:
+        flash("Le composant / la référence est obligatoire.")
+        return redirect(url_for("stock_page"))
+
+    try:
+        image_name = _stock_save_image(request.files.get("image"))
+        if not image_name:
+            selected_image_url = str(request.form.get("selected_image_url") or "").strip()
+            if selected_image_url:
+                image_name = _stock_download_remote_image(selected_image_url)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for("stock_page"))
+    except Exception:
+        flash("Impossible de récupérer l'image sélectionnée.")
+        return redirect(url_for("stock_page"))
+
+    stamp = now().isoformat(timespec="seconds")
+    con = db()
+    con.execute("""
+        INSERT INTO stock_items(
+            reference, function, quantity, remarks, image_name, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?)
+    """, (
+        reference,
+        str(request.form.get("function") or "").strip(),
+        str(request.form.get("quantity") or "").strip(),
+        str(request.form.get("remarks") or "").strip(),
+        image_name,
+        stamp, stamp,
+    ))
+    con.commit()
+    con.close()
+    audit_event("STOCK_ADD", reference, request.remote_addr)
+    flash("Article ajouté au stock.")
+    return redirect(url_for("stock_page"))
+
+
+@app.route("/stock/<int:item_id>/edit", methods=["POST"])
+def stock_edit(item_id):
+    ensure_stock_table()
+    reference = str(request.form.get("reference") or "").strip()
+    if not reference:
+        flash("Le composant / la référence est obligatoire.")
+        return redirect(url_for("stock_page", edit=item_id))
+
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Article introuvable", 404
+
+    old_image = str(row["image_name"] or "")
+    image_name = old_image
+
+    if request.form.get("remove_image") == "1" and old_image:
+        try:
+            old_path = STOCK_IMAGES_ROOT / Path(old_image).name
+            if old_path.is_file():
+                old_path.unlink()
+        except OSError:
+            pass
+        image_name = ""
+
+    upload = request.files.get("image")
+    if upload and getattr(upload, "filename", ""):
+        try:
+            image_name = _stock_save_image(upload, image_name)
+        except ValueError as exc:
+            con.close()
+            flash(str(exc))
+            return redirect(url_for("stock_page", edit=item_id))
+    else:
+        selected_image_url = str(request.form.get("selected_image_url") or "").strip()
+        if selected_image_url:
+            try:
+                image_name = _stock_download_remote_image(selected_image_url, image_name)
+            except ValueError as exc:
+                con.close()
+                flash(str(exc))
+                return redirect(url_for("stock_page", edit=item_id))
+            except Exception:
+                con.close()
+                flash("Impossible de récupérer l'image sélectionnée.")
+                return redirect(url_for("stock_page", edit=item_id))
+
+    con.execute("""
+        UPDATE stock_items
+        SET reference=?, function=?, quantity=?, remarks=?, image_name=?, updated_at=?
+        WHERE id=?
+    """, (
+        reference,
+        str(request.form.get("function") or "").strip(),
+        str(request.form.get("quantity") or "").strip(),
+        str(request.form.get("remarks") or "").strip(),
+        image_name,
+        now().isoformat(timespec="seconds"),
+        item_id,
+    ))
+    con.commit()
+    con.close()
+    audit_event("STOCK_EDIT", f"id={item_id} {reference}", request.remote_addr)
+    flash("Article modifié.")
+    return redirect(url_for("stock_page"))
+
+
+
+@app.route("/stock/<int:item_id>/quantity", methods=["POST"])
+def stock_quantity_adjust(item_id):
+    ensure_stock_table()
+    try:
+        delta = int(request.form.get("delta") or 0)
+    except Exception:
+        delta = 0
+    if delta not in (-1, 1):
+        return "Variation invalide", 400
+
+    con = db()
+    row = con.execute("SELECT reference, quantity FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Article introuvable", 404
+
+    raw = str(row["quantity"] or "").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        con.close()
+        flash(f"Quantité '{raw or 'vide'}' non numérique : utilise Modifier pour cet article.")
+        return redirect(url_for("stock_page"))
+
+    new_value = max(0, value + delta)
+    con.execute(
+        "UPDATE stock_items SET quantity=?, updated_at=? WHERE id=?",
+        (str(new_value), now().isoformat(timespec="seconds"), item_id)
+    )
+    con.commit()
+    con.close()
+
+    audit_event("STOCK_QUANTITY", f"id={item_id} delta={delta} -> {new_value}", request.remote_addr)
+    return redirect(url_for("stock_page"))
+
+
+@app.route("/stock/<int:item_id>/delete", methods=["POST"])
+def stock_delete(item_id):
+    ensure_stock_table()
+    backup_database(force=True, tag="avant_suppression_stock")
+    con = db()
+    row = con.execute("SELECT * FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Article introuvable", 404
+
+    image_name = str(row["image_name"] or "")
+    reference = str(row["reference"] or "")
+    con.execute("DELETE FROM stock_items WHERE id=?", (item_id,))
+    con.commit()
+    con.close()
+
+    if image_name:
+        try:
+            image_path = STOCK_IMAGES_ROOT / Path(image_name).name
+            if image_path.is_file():
+                image_path.unlink()
+        except OSError:
+            pass
+
+    audit_event("STOCK_DELETE", f"id={item_id} {reference}", request.remote_addr)
+    flash("Article supprimé du stock.")
+    return redirect(url_for("stock_page"))
+
+
+
+@app.route("/stock/export.csv")
+def stock_export_csv():
+    ensure_stock_table()
+    con = db()
+    rows = con.execute("""
+        SELECT reference, function, quantity, remarks
+        FROM stock_items
+        ORDER BY reference COLLATE NOCASE, id
+    """).fetchall()
+    con.close()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";", lineterminator="\n")
+    writer.writerow(["Composant / Référence", "Fonction", "Quantité", "Remarques"])
+    for row in rows:
+        writer.writerow([
+            str(row["reference"] or ""),
+            str(row["function"] or ""),
+            str(row["quantity"] or ""),
+            str(row["remarks"] or ""),
+        ])
+
+    data = ("\ufeff" + output.getvalue()).encode("utf-8")
+    return Response(
+        data,
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="WOPR-Stock.csv"'
+        },
+    )
+
+
+
+def _stock_pdf_wrap(text, font_name, font_size, max_width, max_lines=4):
+    value = " ".join(str(text or "").split())
+    if not value:
+        return [""]
+    words = value.split()
+    lines = []
+    current = ""
+
+    for word in words:
+        candidate = word if not current else current + " " + word
+        if pdfmetrics.stringWidth(candidate, font_name, font_size) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            if len(lines) >= max_lines:
+                break
+
+        if pdfmetrics.stringWidth(word, font_name, font_size) <= max_width:
+            current = word
+            continue
+
+        part = ""
+        for char in word:
+            test = part + char
+            if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
+                part = test
+            else:
+                if part:
+                    lines.append(part)
+                    if len(lines) >= max_lines:
+                        break
+                part = char
+        current = part
+        if len(lines) >= max_lines:
+            break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if len(lines) == max_lines:
+        joined = " ".join(lines)
+        if len(joined) < len(value):
+            last = lines[-1]
+            while last and pdfmetrics.stringWidth(last + "...", font_name, font_size) > max_width:
+                last = last[:-1]
+            lines[-1] = last.rstrip() + "..."
+
+    return lines or [""]
+
+
+@app.route("/stock/export.pdf")
+def stock_export_pdf():
+    ensure_stock_table()
+    con = db()
+    rows = con.execute("""
+        SELECT id, reference, function, quantity, remarks, image_name
+        FROM stock_items
+        ORDER BY reference COLLATE NOCASE, id
+    """).fetchall()
+    con.close()
+
+    buffer = io.BytesIO()
+    page_w, page_h = A4[1], A4[0]  # A4 paysage
+    pdf = canvas.Canvas(buffer, pagesize=(page_w, page_h))
+    pdf.setTitle("WOPR - Stock composants")
+    pdf.setAuthor(str(cfg().get("business_name") or "Foul-Fix"))
+
+    # Palette sobre, proche de WOPR.
+    ink = colors.HexColor("#10202D")
+    muted = colors.HexColor("#60717E")
+    line = colors.HexColor("#CBD5DC")
+    header_bg = colors.HexColor("#EAF2F8")
+    zebra = colors.HexColor("#F8FAFB")
+    accent = colors.HexColor("#2E78A6")
+    qty_bg = colors.HexColor("#E5F5E9")
+    qty_fg = colors.HexColor("#20623A")
+
+    margin_x = 11 * mm
+    top_margin = 10 * mm
+    bottom_margin = 10 * mm
+    content_w = page_w - 2 * margin_x
+
+    # Colonnes : photo / référence / fonction / quantité / remarques
+    widths = [31 * mm, 58 * mm, 58 * mm, 22 * mm, content_w - (31 + 58 + 58 + 22) * mm]
+    x = [margin_x]
+    for w in widths:
+        x.append(x[-1] + w)
+
+    table_top = page_h - 34 * mm
+    header_h = 9 * mm
+    row_h = 27 * mm
+    usable_h = table_top - bottom_margin - 10 * mm - header_h
+    rows_per_page = max(1, int(usable_h // row_h))
+    total_pages = max(1, (len(rows) + rows_per_page - 1) // rows_per_page)
+
+    def draw_page_header(page_no):
+        # Bandeau titre
+        pdf.setFillColor(ink)
+        pdf.roundRect(margin_x, page_h - 28 * mm, content_w, 18 * mm, 3 * mm, fill=1, stroke=0)
+
+        # Logo Foul-Fix si disponible
+        logo = invoice_logo_path()
+        logo_right = margin_x
+        if logo and logo.is_file():
+            try:
+                img = ImageReader(str(logo))
+                iw, ih = img.getSize()
+                max_w, max_h = 34 * mm, 12 * mm
+                scale = min(max_w / float(iw), max_h / float(ih))
+                dw, dh = iw * scale, ih * scale
+                pdf.drawImage(
+                    img,
+                    margin_x + 4 * mm,
+                    page_h - 25 * mm + (12 * mm - dh) / 2,
+                    width=dw, height=dh,
+                    preserveAspectRatio=True, mask="auto",
+                )
+                logo_right = margin_x + 4 * mm + dw + 6 * mm
+            except Exception:
+                logo_right = margin_x + 4 * mm
+
+        pdf.setFillColor(colors.white)
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(logo_right, page_h - 17.2 * mm, "STOCK COMPOSANTS")
+
+        pdf.setFont("Helvetica", 8.5)
+        pdf.setFillColor(colors.HexColor("#D9E7F0"))
+        pdf.drawString(logo_right, page_h - 22 * mm, "Références, fonctions, quantités et repères visuels")
+
+        # Infos à droite
+        pdf.setFillColor(colors.white)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawRightString(page_w - margin_x - 4 * mm, page_h - 16.5 * mm, f"{len(rows)} référence{'s' if len(rows) != 1 else ''}")
+        pdf.setFont("Helvetica", 7.8)
+        pdf.setFillColor(colors.HexColor("#D9E7F0"))
+        pdf.drawRightString(page_w - margin_x - 4 * mm, page_h - 21.5 * mm, now().strftime("Export du %d/%m/%Y à %H:%M"))
+
+        # En-tête du tableau
+        y = table_top
+        pdf.setFillColor(header_bg)
+        pdf.roundRect(margin_x, y - header_h, content_w, header_h, 1.5 * mm, fill=1, stroke=0)
+        pdf.setFillColor(ink)
+        pdf.setFont("Helvetica-Bold", 8.2)
+        headers = ["IMAGE", "COMPOSANT / RÉFÉRENCE", "FONCTION", "QTÉ", "REMARQUES"]
+        for i, title in enumerate(headers):
+            pdf.drawString(x[i] + 2.2 * mm, y - 5.8 * mm, title)
+
+        # Pagination en bas
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica", 7.5)
+        pdf.drawString(margin_x, 6 * mm, "Foul-Fix  •  WOPR  •  Stock interne")
+        pdf.drawRightString(page_w - margin_x, 6 * mm, f"Page {page_no}/{total_pages}")
+        return y - header_h
+
+    def draw_text_cell(value, x0, y_top, width, bold=False, size=8.2, max_lines=5, color=ink):
+        font = "Helvetica-Bold" if bold else "Helvetica"
+        lines = _stock_pdf_wrap(value, font, size, width - 5 * mm, max_lines=max_lines)
+        pdf.setFillColor(color)
+        pdf.setFont(font, size)
+        line_h = 3.8 * mm
+        block_h = len(lines) * line_h
+        ty = y_top - (row_h - block_h) / 2 - 2.5 * mm
+        for txt in lines:
+            pdf.drawString(x0 + 2.4 * mm, ty, txt)
+            ty -= line_h
+
+    page_no = 1
+    y = draw_page_header(page_no)
+
+    for idx, row in enumerate(rows):
+        if idx and idx % rows_per_page == 0:
+            pdf.showPage()
+            page_no += 1
+            y = draw_page_header(page_no)
+
+        # Fond alterné + contour
+        row_bg = colors.white if idx % 2 == 0 else zebra
+        pdf.setFillColor(row_bg)
+        pdf.setStrokeColor(line)
+        pdf.setLineWidth(0.4)
+        pdf.roundRect(margin_x, y - row_h, content_w, row_h, 1.5 * mm, fill=1, stroke=1)
+
+        # Séparateurs
+        pdf.setStrokeColor(colors.HexColor("#DFE6EA"))
+        for xx in x[1:-1]:
+            pdf.line(xx, y - row_h + 1.5 * mm, xx, y - 1.5 * mm)
+
+        # Photo dans une carte blanche
+        photo_x = x[0] + 3 * mm
+        photo_y = y - row_h + 3 * mm
+        photo_w = widths[0] - 6 * mm
+        photo_h = row_h - 6 * mm
+        pdf.setFillColor(colors.white)
+        pdf.setStrokeColor(colors.HexColor("#D8E0E5"))
+        pdf.roundRect(photo_x, photo_y, photo_w, photo_h, 1.5 * mm, fill=1, stroke=1)
+
+        image_name = str(row["image_name"] or "").strip()
+        image_drawn = False
+        if image_name:
+            image_path = STOCK_IMAGES_ROOT / Path(image_name).name
+            if image_path.is_file():
+                try:
+                    img = ImageReader(str(image_path))
+                    iw, ih = img.getSize()
+                    max_w, max_h = photo_w - 4 * mm, photo_h - 4 * mm
+                    scale = min(max_w / float(iw), max_h / float(ih))
+                    dw, dh = iw * scale, ih * scale
+                    pdf.drawImage(
+                        img,
+                        photo_x + (photo_w - dw) / 2,
+                        photo_y + (photo_h - dh) / 2,
+                        width=dw, height=dh,
+                        preserveAspectRatio=True, mask="auto",
+                    )
+                    image_drawn = True
+                except Exception:
+                    pass
+
+        if not image_drawn:
+            pdf.setFillColor(colors.HexColor("#A8B4BC"))
+            pdf.setFont("Helvetica", 7)
+            pdf.drawCentredString(photo_x + photo_w / 2, photo_y + photo_h / 2 - 2, "Pas d'image")
+
+        # Référence / fonction
+        draw_text_cell(row["reference"], x[1], y, widths[1], bold=True, size=9.2, max_lines=4)
+        draw_text_cell(row["function"], x[2], y, widths[2], size=8.2, max_lines=5, color=colors.HexColor("#324653"))
+
+        # Badge quantité
+        qty = str(row["quantity"] or "").strip() or "-"
+        badge_w = min(widths[3] - 6 * mm, max(12 * mm, pdfmetrics.stringWidth(qty, "Helvetica-Bold", 9) + 7 * mm))
+        badge_h = 8 * mm
+        bx = x[3] + (widths[3] - badge_w) / 2
+        by = y - row_h / 2 - badge_h / 2
+        pdf.setFillColor(qty_bg)
+        pdf.setStrokeColor(colors.HexColor("#B8DFC3"))
+        pdf.roundRect(bx, by, badge_w, badge_h, 4 * mm, fill=1, stroke=1)
+        pdf.setFillColor(qty_fg)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawCentredString(bx + badge_w / 2, by + 2.6 * mm, qty)
+
+        # Remarques
+        draw_text_cell(row["remarks"], x[4], y, widths[4], size=7.8, max_lines=5, color=muted)
+
+        y -= row_h
+
+    if not rows:
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica", 11)
+        pdf.drawCentredString(page_w / 2, table_top - 28 * mm, "Aucun article dans le stock.")
+
+    pdf.save()
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="WOPR-Stock.pdf",
+    )
+
+
+@app.route("/stock/<int:item_id>/image")
+def stock_image(item_id):
+    ensure_stock_table()
+    con = db()
+    row = con.execute("SELECT image_name FROM stock_items WHERE id=?", (item_id,)).fetchone()
+    con.close()
+    if not row or not str(row["image_name"] or "").strip():
+        abort(404)
+
+    filename = Path(str(row["image_name"])).name
+    path = STOCK_IMAGES_ROOT / filename
+    if not path.is_file():
+        abort(404)
+    return send_file(path, as_attachment=False, max_age=3600)
+
+
+@app.route("/achats-ventes")
+def achats_ventes_page():
+    # Garde-fou : si l'application a été lancée d'une manière qui n'exécute pas init_db(),
+    # on vérifie ici aussi que l'historique ODS a bien été injecté.
+    con_seed = db()
+    inserted_now = seed_legacy_ledger_entries(con_seed)
+    con_seed.commit()
+    con_seed.close()
+    if inserted_now:
+        flash(f"Historique Achats/Ventes chargé : {inserted_now} ligne(s) ajoutée(s).")
+
+    # L'année principale suit automatiquement l'année civile courante.
+    # Les années déjà présentes dans le registre restent accessibles comme archives.
+    current_year = datetime.now().year
+    con_years = db()
+    stored_year_rows = con_years.execute("""
+        SELECT DISTINCT substr(entry_date,1,4) AS y
+        FROM ledger_entries
+        WHERE entry_date GLOB '[0-9][0-9][0-9][0-9]-*'
+        ORDER BY y DESC
+    """).fetchall()
+    con_years.close()
+
+    available_years = sorted(
+        {current_year} | {int(r["y"]) for r in stored_year_rows if str(r["y"] or "").isdigit()},
+        reverse=True,
+    )
+
+    try:
+        year = int(request.args.get("year", current_year))
+    except (TypeError, ValueError):
+        year = current_year
+    if year not in available_years:
+        year = current_year
+
+    archive_years = [y for y in available_years if y != current_year]
+
+    # V2.3.98 — recherche manuelle uniquement : aucun rattachement automatique.
+    search_q = str(request.args.get("q", "") or "").strip()
+
+    try:
+        selected_month = int(request.args.get("month") or 0)
+    except (TypeError, ValueError):
+        selected_month = 0
+    if selected_month not in range(1, 13) or search_q:
+        selected_month = 0
+
+    # V2.3.96 — auto-répare les liens morts créés pendant les premières versions
+    # des justificatifs fournisseurs, sans toucher aux fichiers eux-mêmes.
+    repair_dead_supplier_document_links()
+
+    con = db()
+    all_entries_all_years = con.execute("""
+        SELECT *
+        FROM ledger_entries
+        ORDER BY entry_date DESC, id DESC
+    """).fetchall()
+    all_entries = [
+        row for row in all_entries_all_years
+        if str(row["entry_date"] or "").startswith(f"{year:04d}-")
+    ]
+    supplier_docs_count = sum(
+        1 for row in all_entries
+        if (row["operation"] or "").casefold() == "achat" and str(row["document_path"] or "").strip()
+    )
+    supplier_docs_missing = sum(
+        1 for row in all_entries
+        if (row["operation"] or "").casefold() == "achat" and not str(row["document_path"] or "").strip()
+    )
+
+    # V2.3.100 — pour une ligne Vente, le justificatif est la facture client.
+    # Aucun PDF n'est copié : on pointe vers la facture déjà générée par WOPR.
+    invoice_rows = con.execute("""
+        SELECT r.id, r.invoice_no, r.legacy_imported, r.accounting_date,
+               r.service_amount, r.goods_amount, r.received_date,
+               c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.invoice_no),'')<>''
+        ORDER BY r.id
+    """).fetchall()
+    con.close()
+
+    invoice_groups = {}
+    for inv_row in invoice_rows:
+        key = str(inv_row["invoice_no"] or "").strip()
+        if key:
+            invoice_groups.setdefault(key, []).append(inv_row)
+
+    sale_invoice_rids = {}
+    for row in all_entries_all_years:
+        if (row["operation"] or "").casefold() != "vente":
+            continue
+        inv_no = str(row["invoice_no"] or "").strip()
+        members = invoice_groups.get(inv_no, [])
+        if not inv_no or not members:
+            continue
+        # V2.3.101 — un même numéro peut exister dans plusieurs dossiers historiques.
+        # La ligne Achats/Ventes connaît le client dans `party` : on privilégie donc
+        # impérativement le dossier dont le nom client correspond, avant tout autre critère.
+        party_key = normalize_history_name(row["party"] or "")
+
+        def _client_match_score(member):
+            client_key = normalize_history_name(member["client_name"] or "")
+            if not party_key or not client_key:
+                return 0
+            if party_key == client_key:
+                return 100
+            # Gère les civilités / préfixes : "Mme Jacquement" ↔ "Jacquement".
+            if party_key.endswith(" " + client_key) or client_key.endswith(" " + party_key):
+                return 90
+            if client_key in party_key or party_key in client_key:
+                return 80
+            party_words = set(party_key.split())
+            client_words = set(client_key.split())
+            common = party_words & client_words
+            return 10 * len(common) if common else 0
+
+        best_client_score = max((_client_match_score(x) for x in members), default=0)
+        client_members = [x for x in members if _client_match_score(x) == best_client_score] if best_client_score else members
+
+        editable = next((x for x in client_members if not x["legacy_imported"]), None)
+        representative = editable or max(
+            client_members,
+            key=lambda x: (
+                bool(x["accounting_date"]),
+                float(x["service_amount"] or 0) + float(x["goods_amount"] or 0),
+                str(x["received_date"] or ""),
+                int(x["id"] or 0),
+            )
+        )
+        sale_invoice_rids[int(row["id"])] = int(representative["id"])
+
+    # v2.3.103 — SOURCE DE VÉRITÉ FINANCIÈRE : LE SUIVI.
+    # Les PDF ne servent qu'à ouvrir un justificatif et ne participent JAMAIS
+    # au calcul du CA. Les montants de ventes officiels sont lus dans repairs,
+    # exactement comme la page CA / Déclarations et le tableau de bord Atelier.
+    con = db()
+    suivi_sales_rows = accounting_monthly_totals(con, year)
+    con.close()
+    suivi_sales_by_month = {
+        int(r["m"]): float(r["service_total"] or 0) + float(r["goods_total"] or 0)
+        for r in suivi_sales_rows
+    }
+    sales_total = sum(suivi_sales_by_month.values())
+
+    entries = all_entries
+    if selected_month:
+        entries = [
+            row for row in all_entries
+            if str(row["entry_date"] or "").startswith(f"{year:04d}-{selected_month:02d}-")
+        ]
+    if search_q:
+        needle = search_q.casefold()
+        def _ledger_search_text(row):
+            values = [
+                row["operation"], row["party"], row["entry_date"], row["description"],
+                row["payment_type"], row["invoice_no"], row["remarks"],
+                row["document_original_name"], row["document_path"],
+                f"{float(row['amount_ttc'] or 0):.2f}",
+                f"{float(row['amount_ttc'] or 0):.2f}".replace('.', ','),
+            ]
+            return " ".join(str(v or "") for v in values).casefold()
+        entries = [row for row in all_entries_all_years if needle in _ledger_search_text(row)]
+
+    months = []
+    # Les achats restent issus du registre Achats/Ventes ; ils ne constituent pas le CA.
+    purchases_total = sum(
+        float(row["amount_ttc"] or 0) for row in all_entries
+        if (row["operation"] or "").casefold() == "achat"
+    )
+
+    for month in range(12, 0, -1):
+        if selected_month and month != selected_month:
+            continue
+        month_entries = []
+        month_purchases = 0.0
+
+        for row in entries:
+            try:
+                row_month = int(str(row["entry_date"])[5:7])
+            except Exception:
+                row_month = 0
+            if row_month != month:
+                continue
+
+            month_entries.append(row)
+
+        # Totaux mensuels officiels indépendants de la recherche affichée.
+        for row in all_entries:
+            try:
+                row_month = int(str(row["entry_date"])[5:7])
+            except Exception:
+                row_month = 0
+            if row_month == month and (row["operation"] or "").casefold() == "achat":
+                month_purchases += float(row["amount_ttc"] or 0)
+
+        months.append({
+            "number": month,
+            "name": ledger_month_name(month),
+            "entries": month_entries,
+            "purchases": month_purchases,
+            "sales": suivi_sales_by_month.get(month, 0.0),
+        })
+
+    return render_template(
+        "achats_ventes.html",
+        year=year,
+        current_year=current_year,
+        archive_years=archive_years,
+        selected_month=selected_month,
+        month_names={1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",7:"Juillet",8:"Août",9:"Septembre",10:"Octobre",11:"Novembre",12:"Décembre"},
+        months=months,
+        purchases_total=purchases_total,
+        sales_total=sales_total,
+        balance_total=sales_total - purchases_total,
+        today=datetime.now().strftime("%Y-%m-%d"),
+        supplier_docs_count=supplier_docs_count,
+        supplier_docs_missing=supplier_docs_missing,
+        sale_invoice_rids=sale_invoice_rids,
+        search_q=search_q,
+        search_count=len(entries),
+        search_all_years=bool(search_q),
+    )
+
+
+@app.route("/achats-ventes/add", methods=["POST"])
+def achats_ventes_add():
+    operation = request.form.get("operation", "").strip().capitalize()
+    if operation not in {"Achat", "Vente"}:
+        flash("Opération invalide.")
+        return redirect(url_for("achats_ventes_page"))
+
+    entry_date = request.form.get("entry_date", "").strip()
+    if not ledger_valid_date(entry_date):
+        flash("Date invalide.")
+        return redirect(url_for("achats_ventes_page"))
+
+    try:
+        amount = parse_money_input(request.form.get("amount_ttc"))
+    except Exception:
+        flash("Montant TTC invalide.")
+        return redirect(url_for("achats_ventes_page", year=entry_date[:4], month=int(entry_date[5:7]) if len(entry_date) >= 7 and entry_date[5:7].isdigit() else None))
+
+    created = now().isoformat(timespec="seconds")
+    con = db()
+    cur = con.execute("""
+        INSERT INTO ledger_entries(
+            operation, party, entry_date, description, amount_ttc,
+            payment_type, invoice_no, remarks, created_at, updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        operation,
+        request.form.get("party", "").strip(),
+        entry_date,
+        request.form.get("description", "").strip(),
+        amount,
+        request.form.get("payment_type", "").strip(),
+        request.form.get("invoice_no", "").strip(),
+        request.form.get("remarks", "").strip(),
+        created,
+        created,
+    ))
+    entry_id = int(cur.lastrowid)
+    con.commit()
+    con.close()
+
+    document = request.files.get("supplier_document")
+    document_msg = ""
+    if document and str(document.filename or "").strip():
+        if operation != "Achat":
+            document_msg = " La pièce n'a pas été rangée : elle est réservée aux achats fournisseurs."
+        else:
+            try:
+                saved = save_ledger_document(entry_id, document)
+                if saved:
+                    document_msg = " Facture fournisseur rangée et liée à l'achat."
+            except ValueError as exc:
+                document_msg = f" Achat enregistré, mais pièce non jointe : {exc}"
+
+    audit_event("LEDGER_ADD", f"{operation} {entry_date} {amount:.2f}", request.remote_addr)
+    flash("Ligne ajoutée." + document_msg)
+    return redirect(url_for("achats_ventes_page", year=entry_date[:4], month=int(entry_date[5:7]) if len(entry_date) >= 7 and entry_date[5:7].isdigit() else None))
+
+
+@app.route("/achats-ventes/<int:entry_id>/document", methods=["POST"])
+def achats_ventes_document_add(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+    year = str(row["entry_date"] or now().strftime("%Y-%m-%d"))[:4]
+    if str(row["operation"] or "").casefold() != "achat":
+        flash("Les factures fournisseurs peuvent être liées uniquement à un achat.")
+        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    storage = request.files.get("supplier_document")
+    if not storage or not str(storage.filename or "").strip():
+        flash("Choisis une facture à joindre.")
+        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    try:
+        dest = save_ledger_document(entry_id, storage)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    audit_event("LEDGER_DOCUMENT_ADD", f"id={entry_id} file={dest.name if dest else ''}", request.remote_addr)
+    flash("Facture fournisseur liée et rangée automatiquement.")
+    return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+
+
+@app.route("/achats-ventes/<int:entry_id>/document/view")
+def achats_ventes_document_view(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+    path = ledger_document_file(row)
+    if not path:
+        return "Pièce justificative introuvable", 404
+    # Si le résolveur a retrouvé l'original sous un autre nom, on corrige le lien pour de bon.
+    try:
+        resolved_rel = str(path.relative_to(DOCUMENTS_ROOT))
+        if resolved_rel != str(row["document_path"] or ""):
+            con_fix = db()
+            con_fix.execute(
+                "UPDATE ledger_entries SET document_path=?, updated_at=? WHERE id=?",
+                (resolved_rel, now().isoformat(timespec="seconds"), entry_id),
+            )
+            con_fix.commit()
+            con_fix.close()
+    except Exception:
+        pass
+    return send_file(path, as_attachment=False, download_name=path.name)
+
+
+@app.route("/achats-ventes/<int:entry_id>/edit", methods=["POST"])
+def achats_ventes_edit(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Ligne introuvable", 404
+
+    operation = request.form.get("operation", "").strip().capitalize()
+    if operation not in {"Achat", "Vente"}:
+        con.close()
+        flash("Opération invalide.")
+        return redirect(url_for("achats_ventes_page", year=str(row["entry_date"])[:4], month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+
+    entry_date = request.form.get("entry_date", "").strip()
+    if not ledger_valid_date(entry_date):
+        con.close()
+        flash("Date invalide.")
+        return redirect(url_for("achats_ventes_page", year=str(row["entry_date"])[:4], month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+
+    try:
+        amount = parse_money_input(request.form.get("amount_ttc"))
+    except Exception:
+        con.close()
+        flash("Montant TTC invalide.")
+        return redirect(url_for("achats_ventes_page", year=str(row["entry_date"])[:4], month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+
+    con.execute("""
+        UPDATE ledger_entries SET
+            operation=?, party=?, entry_date=?, description=?, amount_ttc=?,
+            payment_type=?, invoice_no=?, remarks=?, updated_at=?
+        WHERE id=?
+    """, (
+        operation,
+        request.form.get("party", "").strip(),
+        entry_date,
+        request.form.get("description", "").strip(),
+        amount,
+        request.form.get("payment_type", "").strip(),
+        request.form.get("invoice_no", "").strip(),
+        request.form.get("remarks", "").strip(),
+        now().isoformat(timespec="seconds"),
+        entry_id,
+    ))
+    con.commit()
+    con.close()
+
+    audit_event("LEDGER_EDIT", f"id={entry_id}", request.remote_addr)
+    flash("Ligne modifiée.")
+    return redirect(url_for("achats_ventes_page", year=entry_date[:4], month=int(entry_date[5:7]) if len(entry_date) >= 7 and entry_date[5:7].isdigit() else None))
+
+
+@app.route("/achats-ventes/<int:entry_id>/delete", methods=["POST"])
+def achats_ventes_delete(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    if not row:
+        con.close()
+        return "Ligne introuvable", 404
+
+    year = str(row["entry_date"])[:4]
+    month = int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None
+    backup_database(force=True, tag="avant_suppression_achat_vente")
+    con.execute("DELETE FROM ledger_entries WHERE id=?", (entry_id,))
+    con.commit()
+    con.close()
+
+    audit_event("LEDGER_DELETE", f"id={entry_id}", request.remote_addr)
+    flash("Ligne supprimée.")
+    return redirect(url_for("achats_ventes_page", year=year, month=month))
+
+
+@app.route("/total")
+def total_page():
+    """
+    CA / Déclarations :
+    - calcul automatique depuis le Suivi,
+    - correction manuelle possible par cellule.
+    """
+    con = db()
+
+    rows = accounting_monthly_totals(con)
+
+    override_rows = con.execute("""
+        SELECT year, month, category, amount
+        FROM ca_overrides
+    """).fetchall()
+    con.close()
+
+    bnc_auto = {
+        2024: {7: 500.0},
+        2025: {7: 450.0},
+        2026: {},
+    }
+
+    bic_auto = {}
+    for row in rows:
+        y = int(row["y"])
+        m = int(row["m"])
+        bic_auto.setdefault(y, {})[m] = {
+            "service": float(row["service_total"] or 0),
+            "goods": float(row["goods_total"] or 0),
+        }
+
+    overrides = {
+        (int(row["year"]), int(row["month"]), row["category"]): float(row["amount"] or 0)
+        for row in override_rows
+    }
+
+    years_set = set(bnc_auto) | set(bic_auto) | {key[0] for key in overrides}
+    years_set.add(now().year)
+
+    today = now()
+    years = []
+    for year in sorted(years_set):
+        auto_bnc = [0.0] * 12
+        auto_service = [0.0] * 12
+        auto_goods = [0.0] * 12
+
+        for month, value in bnc_auto.get(year, {}).items():
+            auto_bnc[month-1] = float(value)
+
+        for month, values in bic_auto.get(year, {}).items():
+            auto_service[month-1] = float(values.get("service", 0))
+            auto_goods[month-1] = float(values.get("goods", 0))
+
+        bnc, service, goods = [], [], []
+        overridden = {"bnc": [], "service": [], "goods": []}
+
+        for month in range(1, 13):
+            for category, auto_values, result_values in (
+                ("bnc", auto_bnc, bnc),
+                ("service", auto_service, service),
+                ("goods", auto_goods, goods),
+            ):
+                key = (year, month, category)
+                if key in overrides:
+                    result_values.append(overrides[key])
+                    overridden[category].append(True)
+                else:
+                    result_values.append(auto_values[month-1])
+                    overridden[category].append(False)
+
+        total_months = [bnc[i] + service[i] + goods[i] for i in range(12)]
+
+        is_current_year = year == today.year
+        current_month_total = total_months[today.month - 1] if is_current_year else 0.0
+        closed_month_total = sum(total_months[:today.month - 1]) if is_current_year else 0.0
+
+        years.append({
+            "year": year,
+            "bnc": bnc,
+            "service": service,
+            "goods": goods,
+            "auto_bnc": auto_bnc,
+            "auto_service": auto_service,
+            "auto_goods": auto_goods,
+            "overridden": overridden,
+            "total": total_months,
+            "bnc_total": sum(bnc),
+            "service_total": sum(service),
+            "goods_total": sum(goods),
+            "grand_total": sum(total_months),
+            "is_current_year": is_current_year,
+            "current_month_name": ledger_month_name(today.month) if is_current_year else "",
+            "current_month_total": current_month_total,
+            "closed_month_name": ledger_month_name(today.month - 1) if is_current_year and today.month > 1 else "",
+            "closed_month_total": closed_month_total,
+        })
+
+    return render_template("ca_declarations.html", years=years)
+
+
+@app.route("/total/audit")
+def total_audit():
+    """Contrôle CA en lecture seule : cohérence des encaissements et corrections."""
+    con = db()
+    totals = [dict(row) for row in accounting_monthly_totals(con)]
+    bnc_auto = {(2024, 7): 500.0, (2025, 7): 450.0}
+    for row in totals:
+        row["bnc_total"] = bnc_auto.get((int(row["y"]), int(row["m"])), 0.0)
+    overrides = [dict(row) for row in con.execute("""
+        SELECT year, month, category, amount
+        FROM ca_overrides
+        ORDER BY year, month, category
+    """).fetchall()]
+    duplicate_rows = [dict(row) for row in con.execute("""
+        SELECT invoice_no,
+               SUM(CASE WHEN COALESCE(accounting_service_amount, 0)
+                              + COALESCE(accounting_goods_amount, 0)
+                              + COALESCE(service_amount, 0)
+                              + COALESCE(goods_amount, 0) > 0
+                        THEN 1 ELSE 0 END) AS occurrences,
+               GROUP_CONCAT(id, ', ') AS repair_ids
+        FROM repairs
+        WHERE paid=1 AND TRIM(COALESCE(invoice_no, '')) <> ''
+        GROUP BY invoice_no
+        HAVING SUM(
+            CASE WHEN COALESCE(accounting_service_amount, 0)
+                      + COALESCE(accounting_goods_amount, 0)
+                      + COALESCE(service_amount, 0)
+                      + COALESCE(goods_amount, 0) > 0
+                 THEN 1 ELSE 0 END
+        ) > 1
+        ORDER BY invoice_no
+    """).fetchall()]
+    missing_period_rows = [dict(row) for row in con.execute("""
+        SELECT id, invoice_no, accounting_date, paid
+        FROM repairs
+        WHERE paid=1
+          AND TRIM(COALESCE(accounting_date, '')) = ''
+          AND (accounting_year IS NULL OR accounting_year < 2000
+               OR accounting_month IS NULL OR accounting_month NOT BETWEEN 1 AND 12)
+          AND COALESCE(accounting_service_amount, 0)
+              + COALESCE(accounting_goods_amount, 0)
+              + COALESCE(service_amount, 0)
+              + COALESCE(goods_amount, 0) > 0
+        ORDER BY id
+    """).fetchall()]
+    con.close()
+
+    return render_template(
+        "ca_audit.html",
+        totals=totals,
+        overrides=overrides,
+        duplicate_rows=duplicate_rows,
+        missing_period_rows=missing_period_rows,
+        ledger_month_name=ledger_month_name,
+    )
+
+
+@app.route("/total/save", methods=["POST"])
+def total_save():
+    """
+    Ne garde en base que les cellules différentes du calcul automatique.
+    Si une valeur est remise sur l'auto, la correction est supprimée.
+    """
+    con = db()
+
+    reset_year = request.form.get("reset_year", "").strip()
+    if reset_year.isdigit():
+        year = int(reset_year)
+        con.execute("DELETE FROM ca_overrides WHERE year=?", (year,))
+        con.commit()
+        con.close()
+        flash(f"{year} remis entièrement en automatique depuis le Suivi.")
+        return redirect(url_for("total_page"))
+
+    auto_rows = accounting_monthly_totals(con)
+
+    auto_map = {}
+    for row in auto_rows:
+        auto_map[(int(row["y"]), int(row["m"]), "service")] = float(row["service_total"] or 0)
+        auto_map[(int(row["y"]), int(row["m"]), "goods")] = float(row["goods_total"] or 0)
+
+    bnc_auto = {
+        (2024, 7, "bnc"): 500.0,
+        (2025, 7, "bnc"): 450.0,
+    }
+
+    changed = 0
+    removed = 0
+    stamp = now().isoformat(timespec="seconds")
+
+    for key, raw_value in request.form.items():
+        match = re.fullmatch(r"ca_(bnc|service|goods)_(\d{4})_(\d{1,2})", key)
+        if not match:
+            continue
+
+        category = match.group(1)
+        year = int(match.group(2))
+        month = int(match.group(3))
+        if not 1 <= month <= 12:
+            continue
+
+        try:
+            value = parse_money_input(raw_value)
+        except Exception:
+            continue
+
+        if category == "bnc":
+            auto_value = bnc_auto.get((year, month, category), 0.0)
+        else:
+            auto_value = auto_map.get((year, month, category), 0.0)
+
+        if abs(value - auto_value) < 0.005:
+            cur = con.execute("""
+                DELETE FROM ca_overrides
+                WHERE year=? AND month=? AND category=?
+            """, (year, month, category))
+            removed += cur.rowcount
+        else:
+            con.execute("""
+                INSERT INTO ca_overrides(year,month,category,amount,updated_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(year,month,category)
+                DO UPDATE SET amount=excluded.amount, updated_at=excluded.updated_at
+            """, (year, month, category, value, stamp))
+            changed += 1
+
+    con.commit()
+    con.close()
+
+    if changed or removed:
+        flash(f"CA enregistré : {changed} correction(s), {removed} retour(s) en automatique.")
+    else:
+        flash("Aucune correction manuelle nécessaire.")
+
+    return redirect(url_for("total_page"))
+
+
+@app.route("/total/reset/<int:year>", methods=["POST"])
+def total_reset_year(year):
+    con = db()
+    con.execute("DELETE FROM ca_overrides WHERE year=?", (year,))
+    con.commit()
+    con.close()
+    flash(f"{year} remis en synchronisation automatique avec le Suivi.")
+    return redirect(url_for("total_page"))
+
+
+@app.get("/repair/client-search")
+def repair_client_search():
+    """Recherche limitée de clients pour le formulaire de prise en charge."""
+    query = request.args.get("q", "").strip()
+    normalized = normalize_global_search(query)
+    if len(normalized) < 2:
+        return jsonify([])
+
+    words = [word for word in normalized.split() if len(word) >= 2]
+    if not words:
+        return jsonify([])
+
+    searchable = ("first_name", "last_name", "name", "company", "phone", "phone_secondary", "email")
+    clauses = []
+    params = []
+    for word in words:
+        clauses.append("(" + " OR ".join(
+            f"WOPR_NORM(COALESCE({field},'')) LIKE ?" for field in searchable
+        ) + ")")
+        params.extend([f"%{word}%"] * len(searchable))
+
+    con = db()
+    try:
+        rows = con.execute(
+            f"""
+            SELECT id, name, first_name, last_name, company,
+                   address_street, postal_code, city, phone, phone_secondary, email
+            FROM clients
+            WHERE COALESCE(archived,0)=0
+              AND {' AND '.join(clauses)}
+            ORDER BY
+                COALESCE(first_name,'') COLLATE NOCASE,
+                COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
+                id
+            LIMIT 12
+            """,
+            params,
+        ).fetchall()
+    finally:
+        con.close()
+
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route("/repair/new", methods=["GET", "POST"])
+def repair_new():
+    # Une nouvelle prise en charge reste un écran Atelier normal.
+    # Nettoie un éventuel ancien Mode Client resté en session.
+    if request.method == "GET":
+        session.pop("client_mode", None)
+        session.pop("client_mode_rid", None)
+
+    if request.method == "POST":
+        selected_client_id_raw = request.form.get("client_id", "").strip()
+
+        first_name = request.form.get("first_name","").strip()
+        last_name = request.form.get("last_name","").strip()
+        company = request.form.get("company","").strip()
+        contact_name = compose_client_name(last_name, first_name).strip()
+
+        if not (contact_name or company):
+            flash("Renseigne au moins un nom/prénom ou le nom de l’entreprise.")
+            return render_template(
+                "repair_form.html",
+                today=now().strftime("%Y-%m-%d")
+            )
+
+        address_street = request.form.get("address_street","").strip()
+        postal_code = request.form.get("postal_code","").strip()
+        city = request.form.get("city","").strip()
+        address = "\n".join(
+            [x for x in [address_street, (postal_code + " " + city).strip()] if x]
+        )
+        phone = request.form.get("phone","").strip()
+        phone_secondary = request.form.get("phone_secondary","").strip()
+        email = request.form.get("email","").strip()
+        email_secondary = request.form.get("email_secondary","").strip()
+        created = now().isoformat(timespec="seconds")
+
+        con = db()
+        client = None
+
+        # Si un ancien client a été choisi explicitement, on réutilise toujours
+        # cette fiche plutôt que de rechercher/créer un doublon.
+        if selected_client_id_raw.isdigit():
+            client = con.execute("""
+                SELECT * FROM clients
+                WHERE id=? AND COALESCE(archived,0)=0
+            """, (int(selected_client_id_raw),)).fetchone()
+
+        # Sans sélection explicite, conserve la détection historique e-mail/téléphone.
+        if not client and not selected_client_id_raw:
+            if email:
+                client = con.execute("""
+                    SELECT * FROM clients
+                    WHERE COALESCE(archived,0)=0
+                      AND lower(email)=lower(?)
+                """, (email,)).fetchone()
+            if not client and phone:
+                client = con.execute("""
+                    SELECT * FROM clients
+                    WHERE COALESCE(archived,0)=0
+                      AND phone=?
+                """, (phone,)).fetchone()
+
+        if selected_client_id_raw and not client:
+            con.close()
+            flash("Le client sélectionné est introuvable ou archivé.")
+            return render_template(
+                "repair_form.html",
+                today=request.form.get("received_date") or now().strftime("%Y-%m-%d")
+            )
+
+        if client:
+            # Pour un client existant, une société seule ne doit pas recopier
+            # automatiquement sa raison sociale dans le champ historique `name`.
+            # On conserve la valeur existante tant qu'aucun nom/prénom de contact
+            # n'est renseigné.
+            name = contact_name if contact_name else str(client["name"] or "").strip()
+
+            # Seuls les champs réellement visibles dans le formulaire déterminent
+            # si la fiche client a changé. Le champ interne `address` est dérivé de
+            # adresse/CP/ville et ne doit jamais provoquer à lui seul un faux
+            # « À synchroniser ».
+            visible_contact_fields = {
+                "last_name": last_name,
+                "first_name": first_name,
+                "company": company,
+                "address_street": address_street,
+                "postal_code": postal_code,
+                "city": city,
+                "phone": phone,
+                "phone_secondary": phone_secondary,
+                "email": email,
+                "email_secondary": email_secondary,
+            }
+            contact_changed = any(
+                str(client[field] or "").strip() != str(value or "").strip()
+                for field, value in visible_contact_fields.items()
+            )
+
+            if contact_changed:
+                con.execute("""
+                    UPDATE clients
+                    SET name=?, last_name=?, first_name=?, company=?,
+                        address=?, address_street=?, postal_code=?, city=?,
+                        phone=?, phone_secondary=?, email=?, email_secondary=?,
+                        google_sync_status='À synchroniser',
+                        google_sync_error='',
+                        updated_at=?
+                    WHERE id=?
+                """, (
+                    name, last_name, first_name, company,
+                    address, address_street, postal_code, city, phone, phone_secondary, email, email_secondary,
+                    created, client["id"]
+                ))
+            client_id = int(client["id"])
+        else:
+            # Nouveau client : on garde la compatibilité historique en utilisant
+            # la raison sociale comme `name` lorsqu'il n'y a pas de personne.
+            name = contact_name or company
+            cur = con.execute("""
+                INSERT INTO clients(
+                    name,last_name,first_name,company,
+                    address,address_street,postal_code,city,phone,phone_secondary,email,email_secondary,created_at,updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                name,last_name,first_name,company,
+                address,address_street,postal_code,city,phone,phone_secondary,email,email_secondary,created,created
+            ))
+            client_id = int(cur.lastrowid)
+
+        dossier = make_dossier_no()
+        public_tracking_code = make_public_tracking_code(con)
+        token = secrets.token_urlsafe(18)
+        received_date = request.form.get("received_date") or now().strftime("%Y-%m-%d")
+        try:
+            received_dt = datetime.strptime(received_date, "%Y-%m-%d")
+            followup_year = received_dt.year
+            followup_month = received_dt.month
+        except Exception:
+            followup_year = now().year
+            followup_month = now().month
+
+        con.execute("""
+            INSERT INTO repairs(
+                dossier_no, client_id, created_at, received_date,
+                device_type, brand_model, serial_no, system_name, system_password,
+                accessories, device_state, problem, remarks, status, signature_token,
+                followup_year, followup_month, accounting_status,
+                public_tracking_code
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            dossier, client_id, created,
+            received_date,
+            request.form.get("device_type",""),
+            request.form.get("brand_model",""),
+            request.form.get("serial_no",""),
+            request.form.get("system_name",""),
+            encrypt_repair_password(request.form.get("system_password","")),
+            request.form.get("accessories",""),
+            request.form.get("device_state",""),
+            request.form.get("problem",""),
+            request.form.get("remarks",""),
+            "Reçu", token,
+            followup_year, followup_month, "normal", public_tracking_code
+        ))
+        rid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        record_repair_status_change(con, rid, "", "Reçu", "Dossier créé")
+        con.commit()
+        con.close()
+
+        session.pop("client_mode", None)
+        session.pop("client_mode_rid", None)
+        # Publie le dossier initial si la synchronisation portail est activée.
+        publish_tracking_snapshot(rid)
+        try:
+            sent, detail, channel = send_tracking_notification(rid, "initial")
+        except Exception as exc:
+            audit_event("TRACKING_INITIAL_NOTIFICATION_ERROR", f"repair_id={rid}: {type(exc).__name__}")
+            sent, detail, channel = False, f"notification indisponible ({type(exc).__name__})", ""
+        if sent:
+            flash(f"Code de suivi envoyé par {'SMS' if channel == 'sms' else 'e-mail'}.")
+        else:
+            flash(f"Dossier créé, mais notification non envoyée : {detail}. Code : {public_tracking_code}")
+
+        # V2.3.215 : aucune écriture Google automatique.
+        return redirect(url_for("repair_detail", rid=rid))
+
+    return render_template(
+        "repair_form.html",
+        today=now().strftime("%Y-%m-%d")
+    )
+
+
+
+def kdeconnect_available_devices():
+    """Retourne les appareils KDE Connect appairés ET joignables."""
+    cli = kdeconnect_cli_path()
+    if not cli:
+        return []
+    try:
+        proc = subprocess.run(
+            [cli, "--list-available", "--id-name-only"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    if proc.returncode != 0:
+        return []
+
+    devices = []
+    for raw in (proc.stdout or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        dev_id = parts[0].strip()
+        dev_name = parts[1].strip() if len(parts) > 1 else dev_id
+        if dev_id:
+            devices.append({"id": dev_id, "name": dev_name})
+    return devices
+
+
+def normalize_sms_phone(phone):
+    """Normalise les numéros FR courants pour KDE Connect."""
+    value = re.sub(r"[^0-9+]", "", str(phone or "").strip())
+    if value.startswith("00"):
+        value = "+" + value[2:]
+    if re.fullmatch(r"0[1-9][0-9]{8}", value):
+        value = "+33" + value[1:]
+    return value
+
+
+@app.route("/kdeconnect/sms/send", methods=["POST"])
+def kdeconnect_send_sms():
+    """Envoie réellement le SMS via le téléphone Android connecté à KDE Connect."""
+    phone = normalize_sms_phone(request.form.get("phone", ""))
+    message = str(request.form.get("message", "")).strip()
+    device_id = str(request.form.get("device_id", "")).strip()
+    return_url = str(request.form.get("return_url", "")).strip()
+
+    if not re.fullmatch(r"\+?[0-9]{6,15}", phone):
+        flash("Numéro de téléphone invalide pour l'envoi SMS.")
+        return redirect(return_url or url_for("contacts_page"))
+    if not message:
+        flash("Le message est vide.")
+        return redirect(return_url or url_for("contacts_page"))
+
+    cli = kdeconnect_cli_path()
+    if not cli:
+        flash("KDE Connect CLI introuvable : installe/active kdeconnect-cli.")
+        return redirect(return_url or url_for("contacts_page"))
+
+    devices = kdeconnect_available_devices()
+    available_ids = {d["id"] for d in devices}
+    if not device_id and len(devices) == 1:
+        device_id = devices[0]["id"]
+
+    if not device_id or device_id not in available_ids:
+        flash("Aucun téléphone KDE Connect joignable, ou téléphone sélectionné indisponible.")
+        return redirect(return_url or url_for("contacts_page"))
+
+    try:
+        proc = subprocess.run(
+            [
+                cli,
+                "--send-sms", message,
+                "--destination", phone,
+                "--device", device_id,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        flash("KDE Connect n'a pas répondu à temps. Vérifie que le téléphone est joignable.")
+        return redirect(return_url or url_for("contacts_page"))
+    except Exception as exc:
+        flash(f"Erreur KDE Connect : {exc}")
+        return redirect(return_url or url_for("contacts_page"))
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "Erreur inconnue").strip()
+        flash(f"Échec envoi SMS via KDE Connect : {detail}")
+        return redirect(return_url or url_for("contacts_page"))
+
+    audit_event(
+        "KDECONNECT_SMS",
+        f"SMS envoyé via KDE Connect vers {phone} avec device={device_id}",
+        request.remote_addr,
+    )
+    flash(f"SMS envoyé via KDE Connect à {phone}.")
+    return redirect(return_url or url_for("contacts_page"))
+
+
+@app.route("/client/<int:client_id>/message")
+def client_message_from_client(client_id):
+    """Prépare un message à partir de la fiche client, sans dossier obligatoire."""
+    con = db()
+    row = con.execute("""
+        SELECT id, name, first_name, last_name, company, phone
+        FROM clients
+        WHERE id=?
+    """, (client_id,)).fetchone()
+    con.close()
+
+    if not row:
+        return "Client introuvable", 404
+
+    c = dict(row)
+    first_name = str(c.get("first_name") or "").strip()
+    last_name = str(c.get("last_name") or "").strip()
+    company = str(c.get("company") or "").strip()
+    raw_name = str(c.get("name") or "").strip()
+
+    # Ne jamais saluer un client avec son adresse e-mail.
+    # Priorité : prénom -> prénom+nom -> nom/raison sociale -> formule générique.
+    if first_name:
+        display_name = first_name
+    elif last_name:
+        display_name = last_name
+    elif company:
+        display_name = company
+    elif raw_name and "@" not in raw_name:
+        display_name = raw_name
+    else:
+        display_name = ""
+
+    salutation = "Bonjour,"
+    ident = business_identity()
+    footer = message_signature()
+
+    templates = {
+        "libre": f"{salutation}\n\n\n\n{footer}",
+        "rappel": (
+            f"{salutation}\n\n"
+            f"Je vous contacte au sujet de votre matériel chez {ident['name']}. "
+            "Vous pouvez simplement me répondre à ce message.\n\n"
+            f"{footer}"
+        ),
+        "dispo": (
+            f"{salutation}\n\n"
+            "Je suis disponible si vous souhaitez faire le point concernant votre matériel.\n\n"
+            f"{footer}"
+        ),
+    }
+
+    phone_raw = str(c.get("phone") or "").strip()
+    phone_sms = re.sub(r"[^0-9+]", "", phone_raw)
+
+    return render_template(
+        "client_message.html",
+        r=None,
+        client=c,
+        templates=templates,
+        auto_key="libre",
+        phone_raw=phone_raw,
+        phone_sms=phone_sms,
+        from_client=True,
+        kde_devices=kdeconnect_available_devices(),
+    )
+
+
+@app.route("/repair/<int:rid>/message-client")
+def client_message(rid):
+    """Prépare un SMS/message client sans l'envoyer automatiquement."""
+    con = db()
+    row = con.execute("""
+        SELECT r.*,
+               c.name client_name,
+               c.first_name client_first_name,
+               c.last_name client_last_name,
+               c.phone client_phone
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not row:
+        return "Dossier introuvable", 404
+
+    r = dict(row)
+    first_name = str(r.get("client_first_name") or "").strip()
+    display_name = first_name or str(r.get("client_name") or "").strip()
+    salutation = "Bonjour,"
+
+    device_bits = [
+        str(r.get("device_type") or "").strip(),
+        str(r.get("brand_model") or "").strip(),
+    ]
+    device = " ".join(x for x in device_bits if x).strip() or "votre matériel"
+
+    ident = business_identity()
+    footer = message_signature()
+    status = str(r.get("status") or "").strip()
+
+    templates = {
+        "auto": "",
+        "diagnostic": (
+            f"{salutation}\n\n"
+            f"Le diagnostic de votre {device} est en cours. "
+            "Je reviens vers vous dès que j'ai plus d'informations.\n\n"
+            f"{footer}"
+        ),
+        "accord": (
+            f"{salutation}\n\n"
+            f"Le diagnostic de votre {device} est terminé. "
+            "Je vous contacte afin d'avoir votre accord avant intervention. "
+            "Vous pouvez simplement me répondre à ce message.\n\n"
+            f"{footer}"
+        ),
+        "piece": (
+            f"{salutation}\n\n"
+            f"La pièce nécessaire pour votre {device} a été commandée. "
+            "Je vous tiens au courant dès sa réception.\n\n"
+            f"{footer}"
+        ),
+        "termine": (
+            f"{salutation}\n\n"
+            f"Votre {device} est prêt. Vous pouvez venir le récupérer chez {ident['name']}.\n\n"
+            f"{footer}"
+        ),
+        "pieces": (
+            f"{salutation}\n\n"
+            f"Comme convenu, votre matériel est laissé à {ident['name']} pour pièces "
+            "en remplacement du forfait diagnostic de 30 €.\n\n"
+            f"{footer}"
+        ),
+        "libre": (
+            f"{salutation}\n\n"
+            "\n\n"
+            f"{footer}"
+        ),
+    }
+
+    auto_key = {
+        "Diagnostic": "diagnostic",
+        "En attente accord": "accord",
+        "En attente pièce": "piece",
+        "Terminé": "termine",
+        "Laissé pour pièces": "pieces",
+    }.get(status, "libre")
+
+    templates["auto"] = templates[auto_key]
+
+    phone_raw = str(r.get("client_phone") or "").strip()
+    phone_sms = re.sub(r"[^0-9+]", "", phone_raw)
+
+    return render_template(
+        "client_message.html",
+        r=r,
+        templates=templates,
+        auto_key=auto_key,
+        phone_raw=phone_raw,
+        phone_sms=phone_sms,
+        kde_devices=kdeconnect_available_devices(),
+    )
+
+
+@app.route("/repair/<int:rid>")
+def repair_detail(rid):
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               c.name client_name,
+               c.first_name client_first_name,
+               c.last_name client_last_name,
+               c.company client_company,
+               c.address client_address,
+               c.address_street client_address_street,
+               c.postal_code client_postal_code,
+               c.city client_city,
+               c.phone client_phone,
+               c.phone_secondary client_phone_secondary,
+               c.email client_email,
+               c.email_secondary client_email_secondary,
+               r.tracking_notification_channel,
+               r.tracking_initial_notification_sent,
+               r.tracking_completion_notification_sent,
+               r.tracking_completion_sms_sent
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+    if not r:
+        return "Dossier introuvable", 404
+    r = dict(r)
+    r["has_system_password"] = bool(r.get("system_password"))
+    r["system_password"] = ""  # jamais injecté en clair dans le HTML initial
+    sign_url = f"http://{local_ip()}:5000/sign/{r['signature_token']}"
+    return render_template("repair_detail.html", r=r, sign_url=sign_url)
+
+
+
+@app.route("/repair/<int:rid>/tracking-preview")
+def repair_tracking_preview(rid):
+    con = db()
+    row = con.execute(
+        "SELECT public_tracking_code FROM repairs WHERE id=?",
+        (rid,),
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return "Dossier introuvable", 404
+
+    code = str(row["public_tracking_code"] or "").strip()
+    if not code:
+        flash("Aucun code de suivi public pour ce dossier.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    tracking_site = str(cfg().get("tracking_portal_url") or "").strip().rstrip("/")
+    if not tracking_site:
+        flash("Portail de suivi non configuré.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    query = urllib.parse.urlencode({"code": code, "preview": "1"})
+    return redirect(f"{tracking_site}/suivi.html?{query}")
+
+
+@app.route("/repair/<int:rid>/delete", methods=["GET", "POST"])
+def repair_delete(rid):
+    """Supprime uniquement un dossier/réparation, jamais le client.
+
+    Sécurité :
+    - sauvegarde forcée avant suppression ;
+    - suppression strictement par repair_id ;
+    - aucun fichier PDF/signature n'est effacé automatiquement ;
+    - le client et ses autres dossiers restent intacts.
+    """
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               c.name AS client_name,
+               c.first_name AS client_first_name,
+               c.last_name AS client_last_name,
+               c.company AS client_company
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+
+    counts = {
+        "invoice_lines": int(con.execute(
+            "SELECT COUNT(*) FROM invoice_lines WHERE repair_id=?", (rid,)
+        ).fetchone()[0] or 0),
+        "invoice_payments": int(con.execute(
+            "SELECT COUNT(*) FROM invoice_payments WHERE repair_id=?", (rid,)
+        ).fetchone()[0] or 0),
+        "status_history": int(con.execute(
+            "SELECT COUNT(*) FROM repair_status_history WHERE repair_id=?", (rid,)
+        ).fetchone()[0] or 0),
+    }
+
+    if request.method == "POST":
+        if request.form.get("confirm_delete", "").strip() != "SUPPRIMER":
+            con.close()
+            flash("Suppression annulée : tape SUPPRIMER pour confirmer.")
+            return redirect(url_for("repair_delete", rid=rid))
+
+        # Filet de sécurité avant toute suppression.
+        backup = backup_database(
+            force=True,
+            tag=f"avant_suppression_dossier_{rid}",
+            only_if_changed=False
+        )
+
+        dossier_no = str(r["dossier_no"] or "")
+        invoice_no = str(r["invoice_no"] or "")
+        client_id = int(r["client_id"])
+        followup_year = int(r["followup_year"] or 0) or None
+
+        try:
+            con.execute("BEGIN")
+            con.execute("DELETE FROM invoice_payments WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM repair_status_history WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM repairs WHERE id=?", (rid,))
+            con.commit()
+        except Exception:
+            con.rollback()
+            con.close()
+            raise
+
+        con.close()
+
+        audit_event(
+            "REPAIR_DELETE",
+            (
+                f"repair_id={rid}; dossier={dossier_no}; invoice={invoice_no}; "
+                f"client_id={client_id}; invoice_lines={counts['invoice_lines']}; "
+                f"payments={counts['invoice_payments']}; "
+                f"status_history={counts['status_history']}; "
+                f"backup={backup.name if backup else 'none'}"
+            ),
+            request.remote_addr
+        )
+
+        flash(
+            f"Dossier {dossier_no} supprimé. "
+            "Le client, ses autres dossiers et les fichiers PDF/signatures ont été conservés."
+        )
+        if followup_year:
+            return redirect(url_for("index", year=followup_year))
+        return redirect(url_for("index"))
+
+    con.close()
+    return render_template(
+        "repair_delete.html",
+        r=dict(r),
+        counts=counts,
+    )
+
+
+@app.route("/repair/<int:rid>/signature.png")
+def repair_signature(rid):
+    """Sert la signature client uniquement à l'atelier authentifié."""
+    con = db()
+    row = con.execute("SELECT signature_path FROM repairs WHERE id=?", (rid,)).fetchone()
+    con.close()
+    if not row:
+        return "Dossier introuvable", 404
+    signature_file = resolve_signature_path(row["signature_path"])
+    if not signature_file:
+        return "Signature introuvable", 404
+    return send_file(signature_file, mimetype="image/png", max_age=0)
+
+
+@app.route("/repair/<int:rid>/notify-completion", methods=["POST"])
+def repair_notify_completion(rid):
+    """Envoie manuellement la notification de fin, après validation atelier."""
+    try:
+        sent, detail, channel = send_tracking_notification(rid, "completion")
+    except Exception as exc:
+        audit_event("TRACKING_COMPLETION_NOTIFICATION_ERROR", f"repair_id={rid}: {type(exc).__name__}")
+        sent, detail, channel = False, f"notification indisponible ({type(exc).__name__})", ""
+    if sent:
+        flash(f"Client prévenu par {'SMS' if channel == 'sms' else 'e-mail'}.")
+    else:
+        flash(f"Notification non envoyée : {detail}.")
+    return redirect(url_for("repair_detail", rid=rid))
+
+
+@app.route("/repair/<int:rid>/reveal-system-password", methods=["POST"])
+def reveal_system_password(rid):
+    con = db()
+    row = con.execute("SELECT system_password FROM repairs WHERE id=?", (rid,)).fetchone()
+    con.close()
+    if not row:
+        return {"error": "Dossier introuvable"}, 404
+    try:
+        value = decrypt_repair_password(row["system_password"])
+    except RuntimeError as exc:
+        return {"error": str(exc)}, 500
+    audit_event("REVEAL_REPAIR_PASSWORD", f"repair_id={rid}", request.remote_addr)
+    return {"system_password": value}
+
+
+@app.route("/repair/<int:rid>/quick-edit", methods=["POST"])
+def repair_quick_edit(rid):
+    """
+    Edition directe d'une ligne depuis le tableau Suivi.
+    Reprend les colonnes principales du ODS sans obliger à ouvrir la fiche complète.
+    """
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               c.name client_name,
+               c.first_name client_first_name,
+               c.last_name client_last_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+
+    # V2.3.21 : l'identité client n'est plus modifiable depuis le Suivi.
+    # Prénom / Nom restent gérés uniquement dans la fiche Clients pour éviter
+    # les inversions et les incohérences de synchronisation.
+    received_date = request.form.get("received_date", "").strip() or r["received_date"]
+
+    try:
+        rd = datetime.strptime(received_date, "%Y-%m-%d")
+        followup_year, followup_month = rd.year, rd.month
+    except Exception:
+        followup_year = int(r["followup_year"] or now().year)
+        followup_month = int(r["followup_month"] or now().month)
+
+    followup_period = request.form.get("followup_period", "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}", followup_period):
+        fy, fm = followup_period.split("-")
+        if 1 <= int(fm) <= 12:
+            followup_year, followup_month = int(fy), int(fm)
+
+    try:
+        service_amount = parse_money_input(request.form.get("service_amount", "0"))
+    except Exception:
+        service_amount = float(r["service_amount"] or 0)
+
+    try:
+        goods_amount = parse_money_input(request.form.get("goods_amount", "0"))
+    except Exception:
+        goods_amount = float(r["goods_amount"] or 0)
+
+    invoice_text = request.form.get("legacy_invoice_text", "").strip()
+    normalized_invoice = re.sub(r"\s", "", invoice_text)
+    invoice_no = normalized_invoice if re.fullmatch(r"\d{10,14}(?:-\d+)?", normalized_invoice) else ""
+
+    accounting_status = request.form.get("accounting_status", "normal").strip()
+    if accounting_status not in {"normal", "yellow", "red"}:
+        accounting_status = "normal"
+
+    accounting_year = r["accounting_year"]
+    accounting_month = r["accounting_month"]
+    accounting_date = request.form.get("accounting_date", "").strip()
+
+    if accounting_date:
+        try:
+            ad = datetime.strptime(accounting_date, "%Y-%m-%d")
+            accounting_year, accounting_month = ad.year, ad.month
+        except Exception:
+            accounting_date = r["accounting_date"] or ""
+
+    non_facture = "non factur" in invoice_text.casefold()
+
+    if non_facture:
+        accounting_status = "yellow"
+        accounting_year = None
+        accounting_month = None
+        accounting_date = ""
+        accounting_service_amount = 0.0
+        accounting_goods_amount = 0.0
+        paid = 0
+    elif accounting_status == "red":
+        accounting_year = None
+        accounting_month = None
+        accounting_date = ""
+        accounting_service_amount = 0.0
+        accounting_goods_amount = 0.0
+        paid = 0
+    else:
+        # Si l'utilisateur fait passer une attente en payé et n'a pas choisi
+        # de période, on prend le mois courant : encaissement réel.
+        if not accounting_date:
+            payment_dt = now()
+            accounting_date = payment_dt.strftime("%Y-%m-%d")
+            accounting_year, accounting_month = payment_dt.year, payment_dt.month
+
+        accounting_service_amount = service_amount
+        accounting_goods_amount = goods_amount
+        paid = 1
+
+        # Si le mois de déclaration diffère du mois du suivi, la ligne doit être jaune.
+        if (accounting_year, accounting_month) != (followup_year, followup_month):
+            accounting_status = "yellow"
+
+    # V2.3.85 — logique atelier simplifiée : un règlement enregistré signifie
+    # que le client repart avec son matériel. On marque donc automatiquement
+    # le dossier Restitué, sans bouton de restitution séparé dans le Suivi.
+    quick_status = r["status"]
+    quick_returned_at = r["returned_at"] if "returned_at" in r.keys() else None
+    if paid:
+        quick_status = "Restitué"
+        if r["status"] != "Restitué" or not quick_returned_at:
+            quick_returned_at = now().date().isoformat()
+
+    quick_payment_mode = normalize_payment_mode(request.form.get("payment_mode", ""))
+    if r["legacy_imported"]:
+        quick_payment_method = r["payment_method"] or ""
+        quick_payment_detail = r["payment_detail"] or ""
+    elif paid and quick_payment_mode == "MIXTE":
+        quick_payment_mode, quick_payment_method, quick_payment_detail, pay_error = payment_data_from_form(
+            service_amount + goods_amount, r["payment_mode"], r["payment_method"], r["payment_detail"]
+        )
+        if pay_error:
+            con.close()
+            flash(pay_error)
+            return redirect(url_for("index", year=followup_year, edit=rid) + f"#edit-{rid}")
+    else:
+        quick_payment_method = quick_payment_mode
+        quick_payment_detail = ""
+
+    con.execute("""
+        UPDATE repairs SET
+            received_date=?,
+            problem=?,
+            legacy_call_note=?,
+            legacy_invoice_text=?,
+            invoice_no=?,
+            service_amount=?,
+            goods_amount=?,
+            payment_method=?,
+            payment_mode=?,
+            payment_detail=?,
+            sent_via=?,
+            remarks=?,
+            paid=?,
+            followup_year=?,
+            followup_month=?,
+            accounting_year=?,
+            accounting_month=?,
+            accounting_date=?,
+            accounting_status=?,
+            accounting_service_amount=?,
+            accounting_goods_amount=?,
+            status=?,
+            returned_at=?
+        WHERE id=?
+    """, (
+        received_date,
+        request.form.get("problem", "").strip(),
+        r["legacy_call_note"] or "",
+        invoice_text,
+        invoice_no,
+        service_amount,
+        goods_amount,
+        quick_payment_method,
+        quick_payment_mode,
+        quick_payment_detail,
+        request.form.get("sent_via", "").strip(),
+        request.form.get("remarks", "").strip(),
+        paid,
+        followup_year,
+        followup_month,
+        accounting_year,
+        accounting_month,
+        accounting_date,
+        accounting_status,
+        accounting_service_amount,
+        accounting_goods_amount,
+        quick_status,
+        quick_returned_at,
+        rid,
+    ))
+
+    record_repair_status_change(con, rid, r["status"], quick_status, "Règlement enregistré depuis le Suivi" if paid else "")
+    con.commit()
+    con.close()
+
+    tracking_published = publish_tracking_snapshot(rid)
+    if read_tracking_settings().get("enabled"):
+        flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
+    flash("Ligne du suivi enregistrée.")
+    return redirect(url_for("index", year=followup_year) + f"#suivi-{rid}")
+
+
+@app.route("/repair/<int:rid>/edit", methods=["GET", "POST"])
+def repair_edit(rid):
+    """Édition du suivi/réparation uniquement.
+
+    V2.3.121 : la facturation, les règlements et la comptabilité ne sont plus
+    modifiables depuis cet écran. Ils restent gérés par l'écran Facture.
+    """
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               c.name client_name,
+               c.first_name client_first_name,
+               c.last_name client_last_name,
+               c.company client_company,
+               c.address client_address,
+               c.address_street client_address_street,
+               c.postal_code client_postal_code,
+               c.city client_city,
+               c.phone client_phone,
+               c.phone_secondary client_phone_secondary,
+               c.email client_email,
+               c.email_secondary client_email_secondary
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+
+    if request.method == "POST":
+        first_name = request.form.get("first_name", "").strip()
+        last_name = request.form.get("last_name", "").strip()
+        company = request.form.get("company", "").strip()
+
+        name = compose_client_name(last_name, first_name).strip()
+        if not name:
+            name = company or str(r["client_name"] or "").strip()
+
+        address_street = request.form.get("address_street", "").strip()
+        postal_code = request.form.get("postal_code", "").strip()
+        city = request.form.get("city", "").strip()
+        address = "\n".join([x for x in [address_street, (postal_code + " " + city).strip()] if x])
+        phone_secondary = request.form.get("phone_secondary", "").strip()
+        email_secondary = request.form.get("email_secondary", "").strip()
+
+        received_date = request.form.get("received_date", "").strip() or r["received_date"]
+        try:
+            rd = datetime.strptime(received_date, "%Y-%m-%d")
+            followup_year, followup_month = rd.year, rd.month
+        except Exception:
+            followup_year = r["followup_year"] or now().year
+            followup_month = r["followup_month"] or now().month
+
+        # IMPORTANT : une modification du suivi ne doit PAS désynchroniser le client Google.
+        # On ne touche à la fiche client (et à google_sync_status) que si une vraie
+        # donnée de contact a effectivement changé dans le formulaire.
+        phone = request.form.get("phone", "").strip()
+        email = request.form.get("email", "").strip()
+        contact_values = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "company": company,
+            "address_street": address_street,
+            "postal_code": postal_code,
+            "city": city,
+            "phone": phone,
+            "phone_secondary": phone_secondary,
+            "email": email,
+            "email_secondary": email_secondary,
+        }
+        current_contact_values = {
+            "first_name": str(r["client_first_name"] or "").strip(),
+            "last_name": str(r["client_last_name"] or "").strip(),
+            "company": str(r["client_company"] or "").strip(),
+            "address_street": str(r["client_address_street"] or "").strip(),
+            "postal_code": str(r["client_postal_code"] or "").strip(),
+            "city": str(r["client_city"] or "").strip(),
+            "phone": str(r["client_phone"] or "").strip(),
+            "phone_secondary": str(r["client_phone_secondary"] or "").strip(),
+            "email": str(r["client_email"] or "").strip(),
+            "email_secondary": str(r["client_email_secondary"] or "").strip(),
+        }
+        contact_changed = any(
+            current_contact_values[field] != str(value or "").strip()
+            for field, value in contact_values.items()
+        )
+
+        if contact_changed:
+            con.execute("""
+                UPDATE clients SET
+                    first_name=?, last_name=?, name=?, company=?, address=?, address_street=?,
+                    postal_code=?, city=?, phone=?, phone_secondary=?, email=?, email_secondary=?,
+                    google_sync_status='À synchroniser', google_sync_error='', updated_at=?
+                WHERE id=?
+            """, (
+                first_name, last_name, name, company, address, address_street,
+                postal_code, city, phone, phone_secondary, email, email_secondary,
+                now().isoformat(timespec="seconds"), r["client_id"]
+            ))
+
+        new_status = request.form.get("status", "Reçu")
+        finished_at = r["finished_at"]
+        if new_status in {"Terminé", "Restitué"}:
+            if not finished_at:
+                finished_at = now().isoformat(timespec="seconds")
+        else:
+            finished_at = None
+
+        # Sur l'écran Suivi, le statut est volontairement manuel.
+        # La logique "paiement = Restitué" reste dans les écrans d'encaissement/facture.
+        returned_at = r["returned_at"] if "returned_at" in r.keys() else None
+        requested_returned_at = request.form.get("returned_at", "").strip()
+        if new_status == "Restitué":
+            if requested_returned_at:
+                try:
+                    datetime.strptime(requested_returned_at, "%Y-%m-%d")
+                    returned_at = requested_returned_at
+                except ValueError:
+                    flash("Date de restitution invalide.")
+                    con.close()
+                    return redirect(url_for("repair_edit", rid=rid))
+            elif r["status"] != "Restitué" or not returned_at:
+                returned_at = now().date().isoformat()
+        else:
+            returned_at = None
+
+        # V2.3.212 — dans WOPR, matériel restitué = règlement encaissé.
+        # Si la date de restitution change sur un dossier déjà payé, la date
+        # d'encaissement suit automatiquement, sauf si elle a été modifiée
+        # explicitement dans le formulaire.
+        accounting_date = str(r["accounting_date"] or "")[:10]
+        accounting_year = r["accounting_year"]
+        accounting_month = r["accounting_month"]
+        accounting_status = r["accounting_status"] or "normal"
+        requested_accounting_date = request.form.get("accounting_date", accounting_date).strip()
+
+        if r["paid"]:
+            if requested_accounting_date:
+                try:
+                    datetime.strptime(requested_accounting_date, "%Y-%m-%d")
+                except ValueError:
+                    flash("Date d'encaissement invalide.")
+                    con.close()
+                    return redirect(url_for("repair_edit", rid=rid))
+
+            old_returned_at = str(r["returned_at"] or "")[:10]
+            returned_day = str(returned_at or "")[:10]
+            returned_changed = returned_day != old_returned_at
+            accounting_changed = requested_accounting_date != accounting_date
+
+            if accounting_changed:
+                accounting_date = requested_accounting_date
+            elif returned_changed and returned_day:
+                accounting_date = returned_day
+            elif not accounting_date and returned_day:
+                accounting_date = returned_day
+
+            if accounting_date:
+                ad = datetime.strptime(accounting_date, "%Y-%m-%d")
+                accounting_year, accounting_month = ad.year, ad.month
+                accounting_status = (
+                    "yellow"
+                    if (accounting_year, accounting_month) != (int(followup_year), int(followup_month))
+                    else "normal"
+                )
+
+        con.execute("""
+            UPDATE repairs SET
+                received_date=?, device_type=?, brand_model=?, serial_no=?,
+                system_name=?, system_password=?, accessories=?, device_state=?,
+                problem=?, diagnosis=?, work_done=?, tests_validation=?, remarks=?,
+                status=?, finished_at=?, returned_at=?, legacy_call_note=?,
+                followup_year=?, followup_month=?, accounting_year=?, accounting_month=?,
+                accounting_date=?, accounting_status=?
+            WHERE id=?
+        """, (
+            received_date,
+            request.form.get("device_type", ""),
+            request.form.get("brand_model", ""),
+            request.form.get("serial_no", ""),
+            request.form.get("system_name", ""),
+            (encrypt_repair_password(request.form.get("system_password", ""))
+             if request.form.get("system_password", "") else r["system_password"]),
+            request.form.get("accessories", ""),
+            request.form.get("device_state", ""),
+            request.form.get("problem", ""),
+            request.form.get("diagnosis", ""),
+            "",
+            request.form.get("tests_validation", ""),
+            request.form.get("remarks", ""),
+            new_status,
+            finished_at,
+            returned_at,
+            r["legacy_call_note"] or "",
+            followup_year,
+            followup_month,
+            accounting_year,
+            accounting_month,
+            accounting_date,
+            accounting_status,
+            rid
+        ))
+
+        record_repair_status_change(con, rid, r["status"], new_status)
+        con.commit()
+        con.close()
+        # V2.3.215 : aucune écriture Google automatique.
+        tracking_published = publish_tracking_snapshot(rid)
+        if read_tracking_settings().get("enabled"):
+            flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
+        flash("Suivi modifié.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    con.close()
+    r = dict(r)
+    r["has_system_password"] = bool(r.get("system_password"))
+    r["system_password"] = ""
+    return render_template("repair_edit.html", r=r)
+
+@app.route("/repair/<int:rid>/restituer", methods=["POST"])
+def repair_return_now(rid):
+    """V2.3.83 : restitution en un clic depuis le Suivi."""
+    con = db()
+    r = con.execute("SELECT * FROM repairs WHERE id=?", (rid,)).fetchone()
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+    if r["status"] != "Terminé":
+        con.close()
+        flash("Ce dossier n'est pas en attente de restitution.")
+        return redirect(url_for("index", year=r["followup_year"] or now().year))
+
+    stamp = now()
+    updates = [
+        "status='Restitué'",
+        "returned_at=?",
+        "finished_at=COALESCE(finished_at,?)",
+    ]
+    params = [stamp.isoformat(timespec="seconds"), stamp.isoformat(timespec="seconds")]
+
+    total = float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+    if r["accounting_status"] == "red" and str(r["invoice_no"] or "").strip() and total > 0:
+        pay_mode = normalize_payment_mode(request.form.get("payment_mode", ""))
+        if not pay_mode:
+            con.close()
+            flash("Choisis le mode de règlement avant de restituer ce dossier.")
+            return redirect(url_for("index", year=r["followup_year"] or now().year, a_restituer=1) + f"#suivi-{rid}")
+        fy = int(r["followup_year"] or stamp.year)
+        fm = int(r["followup_month"] or stamp.month)
+        acc_status = "yellow" if (fy, fm) != (stamp.year, stamp.month) else "normal"
+        updates.extend([
+            "payment_mode=?", "payment_method=?", "paid=1",
+            "accounting_year=?", "accounting_month=?", "accounting_date=?",
+            "accounting_status=?",
+            "accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0))",
+            "accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))",
+        ])
+        params.extend([pay_mode, pay_mode, stamp.year, stamp.month, stamp.strftime("%Y-%m-%d"), acc_status])
+
+    params.append(rid)
+    con.execute(f"UPDATE repairs SET {', '.join(updates)} WHERE id=?", params)
+    record_repair_status_change(con, rid, r["status"], "Restitué", "Restitution rapide depuis le Suivi")
+    con.commit()
+    con.close()
+    flash("Matériel marqué Restitué." + (" Règlement encaissé aujourd'hui." if r["accounting_status"] == "red" and r["invoice_no"] and total > 0 else ""))
+    return redirect(url_for("index", year=r["followup_year"] or now().year, a_restituer=1))
+
+
+@app.route("/repair/<int:rid>/encaisser", methods=["POST"])
+def repair_cash_now(rid):
+    """V2.3.82 : encaisse une facture rouge à la date du jour, sans déplacer le suivi d'origine."""
+    con = db()
+    r = con.execute("SELECT * FROM repairs WHERE id=?", (rid,)).fetchone()
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+
+    total = float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+    if not str(r["invoice_no"] or "").strip() or total <= 0:
+        con.close()
+        flash("Impossible d'encaisser : facture ou montant manquant.")
+        return redirect(url_for("index", year=r["followup_year"] or now().year))
+
+    pay_dt = now()
+    fy = r["followup_year"]
+    fm = r["followup_month"]
+    status = "yellow" if (fy, fm) != (pay_dt.year, pay_dt.month) else "normal"
+    pay_mode, pay_method, pay_detail, pay_error = payment_data_from_form(
+        total, r["payment_mode"], r["payment_method"], r["payment_detail"]
+    )
+    if pay_error:
+        con.close()
+        flash(pay_error)
+        return redirect(url_for("repair_detail", rid=rid))
+    if not pay_mode:
+        con.close()
+        flash("Choisis un mode de règlement.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    con.execute("""
+        UPDATE repairs SET
+            paid=1,
+            payment_mode=?,
+            payment_method=?,
+            payment_detail=?,
+            accounting_year=?, accounting_month=?, accounting_date=?,
+            accounting_status=?,
+            accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+            accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
+        WHERE id=?
+    """, (
+        pay_mode, pay_method, pay_detail,
+        pay_dt.year, pay_dt.month, pay_dt.strftime("%Y-%m-%d"), status, rid
+    ))
+    con.commit()
+    con.close()
+    flash(f"Règlement enregistré au {pay_dt.strftime('%d/%m/%Y')} — il est comptabilisé sur ce mois.")
+    return redirect(url_for("index", year=fy or pay_dt.year) + f"#suivi-{rid}")
+
+
+@app.route("/repair/<int:rid>/update", methods=["POST"])
+def repair_update(rid):
+    con = db()
+    current = con.execute(
+        "SELECT status, finished_at, returned_at, followup_year, followup_month, service_amount, goods_amount, payment_mode, payment_method, payment_detail, paid, accounting_year, accounting_month, accounting_date, accounting_status FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    if not current:
+        con.close()
+        return "Dossier introuvable", 404
+
+    new_status = request.form.get("status","Reçu")
+    finished_at = current["finished_at"]
+
+    # V2.3.52 — date de fin cohérente avec l'état réel du dossier.
+    if new_status in {"Terminé", "Restitué"}:
+        if not finished_at:
+            finished_at = now().isoformat(timespec="seconds")
+    else:
+        finished_at = None
+
+    returned_at = current["returned_at"]
+    requested_returned_at = request.form.get("returned_at", "").strip()
+    if new_status == "Restitué":
+        if requested_returned_at:
+            try:
+                datetime.strptime(requested_returned_at, "%Y-%m-%d")
+                returned_at = requested_returned_at
+            except ValueError:
+                con.close()
+                flash("Date de restitution invalide.")
+                return redirect(url_for("repair_detail", rid=rid))
+        elif current["status"] != "Restitué" or not returned_at:
+            returned_at = now().date().isoformat()
+    else:
+        returned_at = None
+
+    payment_received_now = request.form.get("payment_received_now") == "1"
+    if payment_received_now:
+        # V2.3.85 — encaisser signifie que le matériel a été rendu au client.
+        new_status = "Restitué"
+        if not returned_at:
+            returned_at = now().date().isoformat()
+        if not finished_at:
+            finished_at = now().isoformat(timespec="seconds")
+        pay_dt = now()
+        if returned_at:
+            try:
+                pay_day = datetime.strptime(str(returned_at)[:10], "%Y-%m-%d").date()
+                pay_dt = datetime.combine(pay_day, pay_dt.time())
+            except ValueError:
+                pass
+        invoice_total = float(current["service_amount"] or 0) + float(current["goods_amount"] or 0)
+        pay_mode, pay_method, pay_detail, pay_error = payment_data_from_form(
+            invoice_total, current["payment_mode"], current["payment_method"], current["payment_detail"]
+        )
+        if pay_error:
+            con.close()
+            flash(pay_error)
+            return redirect(url_for("repair_detail", rid=rid))
+        if not pay_mode:
+            con.close()
+            flash("Choisis un mode de règlement.")
+            return redirect(url_for("repair_detail", rid=rid))
+        followup_year = current["followup_year"] if "followup_year" in current.keys() else None
+        followup_month = current["followup_month"] if "followup_month" in current.keys() else None
+        accounting_status = "normal"
+        if (followup_year, followup_month) != (pay_dt.year, pay_dt.month):
+            accounting_status = "yellow"
+        con.execute("""
+            UPDATE repairs SET
+                diagnosis=?, work_done=?, tests_validation=?, remarks=?, status=?, finished_at=?, returned_at=?,
+                payment_mode=?, payment_method=?, payment_detail=?, paid=1,
+                accounting_year=?, accounting_month=?, accounting_date=?, accounting_status=?,
+                accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
+            WHERE id=?
+        """, (
+            request.form.get("diagnosis",""), "",
+            request.form.get("tests_validation",""), request.form.get("remarks",""),
+            new_status, finished_at, returned_at,
+            pay_mode, pay_method, pay_detail,
+            pay_dt.year, pay_dt.month, pay_dt.strftime("%Y-%m-%d"), accounting_status,
+            rid
+        ))
+    else:
+        accounting_date = str(current["accounting_date"] or "")[:10]
+        accounting_year = current["accounting_year"]
+        accounting_month = current["accounting_month"]
+        accounting_status = current["accounting_status"] or "normal"
+
+        if current["paid"]:
+            requested_accounting_date = request.form.get("accounting_date", accounting_date).strip()
+            if requested_accounting_date:
+                try:
+                    datetime.strptime(requested_accounting_date, "%Y-%m-%d")
+                except ValueError:
+                    con.close()
+                    flash("Date d'encaissement invalide.")
+                    return redirect(url_for("repair_detail", rid=rid))
+
+            old_returned_at = str(current["returned_at"] or "")[:10]
+            returned_day = str(returned_at or "")[:10]
+            returned_changed = returned_day != old_returned_at
+            accounting_changed = requested_accounting_date != accounting_date
+
+            if accounting_changed:
+                accounting_date = requested_accounting_date
+            elif returned_changed and returned_day:
+                accounting_date = returned_day
+            elif not accounting_date and returned_day:
+                accounting_date = returned_day
+
+            if accounting_date:
+                ad = datetime.strptime(accounting_date, "%Y-%m-%d")
+                accounting_year, accounting_month = ad.year, ad.month
+                fy = current["followup_year"]
+                fm = current["followup_month"]
+                accounting_status = (
+                    "yellow"
+                    if fy and fm and (accounting_year, accounting_month) != (int(fy), int(fm))
+                    else "normal"
+                )
+
+        con.execute("""
+            UPDATE repairs SET
+                diagnosis=?, work_done=?, tests_validation=?, remarks=?, status=?, finished_at=?, returned_at=?,
+                accounting_year=?, accounting_month=?, accounting_date=?, accounting_status=?
+            WHERE id=?
+        """, (
+            request.form.get("diagnosis",""),
+            "",
+            request.form.get("tests_validation",""),
+            request.form.get("remarks",""),
+            new_status,
+            finished_at,
+            returned_at,
+            accounting_year,
+            accounting_month,
+            accounting_date,
+            accounting_status,
+            rid
+        ))
+    record_repair_status_change(con, rid, current["status"], new_status)
+    con.commit()
+    con.close()
+    tracking_published = publish_tracking_snapshot(rid)
+    if read_tracking_settings().get("enabled"):
+        flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
+    flash("Dossier mis à jour.")
+    return redirect(url_for("repair_detail", rid=rid))
+
+@app.route("/repair/<int:rid>/facturer", methods=["GET", "POST"])
+@app.route("/repair/<int:rid>/close", methods=["GET", "POST"])
+def repair_close(rid):
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name, c.email client_email, c.email_secondary client_email_secondary, c.phone client_phone,
+               c.phone_secondary client_phone_secondary,
+               c.address_street client_address_street, c.postal_code client_postal_code,
+               c.city client_city
+        FROM repairs r JOIN clients c ON c.id=r.client_id WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+
+    if request.method == "POST":
+        quantities = request.form.getlist("line_qty[]")
+        descriptions = request.form.getlist("line_desc[]")
+        prices = request.form.getlist("line_price[]")
+        types = request.form.getlist("line_type[]")
+
+        lines = []
+        for i in range(max(len(descriptions), len(quantities), len(prices), len(types))):
+            desc = descriptions[i].strip() if i < len(descriptions) else ""
+            if not desc:
+                continue
+            try:
+                qty = float((quantities[i] if i < len(quantities) else "1").replace(",", ".") or 1)
+            except Exception:
+                qty = 1.0
+            try:
+                price = float((prices[i] if i < len(prices) else "0").replace(",", ".") or 0)
+            except Exception:
+                price = 0.0
+            line_type = types[i] if i < len(types) and types[i] in ("service", "goods") else "service"
+            lines.append({
+                "position": len(lines),
+                "line_type": line_type,
+                "quantity": qty,
+                "description": desc,
+                "unit_price": price
+            })
+
+        no_invoice_parts = request.form.get("no_invoice_parts") == "on"
+
+        # V2.3.135 — Cas métier : le client laisse le matériel pour pièces
+        # à la place du forfait diagnostic. Aucun règlement, aucune facture, aucun CA.
+        # On autorise donc zéro ligne de facture uniquement dans ce cas explicite.
+        if no_invoice_parts:
+            if r["invoice_no"]:
+                con.close()
+                flash("Ce dossier possède déjà une facture. Le mode « laissé pour pièces » n'est disponible que sans facture existante.")
+                return redirect(url_for("repair_close", rid=rid))
+
+            finished = r["finished_at"] or now().isoformat(timespec="seconds")
+            close_status = "Laissé pour pièces"
+            parts_sent_via = (request.form.get("parts_sent_via") or "Suivi Papier").strip()
+
+            con.execute("""
+                UPDATE repairs SET
+                    service_amount=0, goods_amount=0,
+                    payment_method='', payment_mode='', payment_detail='',
+                    paid=0, sent_via=?,
+                    tests_validation=?, remarks=?,
+                    finished_at=?, invoice_no=NULL,
+                    status=?, returned_at=NULL,
+                    service_description='', goods_description='',
+                    legacy_invoice_text='',
+                    accounting_year=NULL, accounting_month=NULL, accounting_date='',
+                    accounting_status='normal',
+                    accounting_service_amount=0, accounting_goods_amount=0,
+                    deposit_amount=0, deposit_payment_mode='', deposit_payment_detail='',
+                    deposit_date='', deposit_accounting_year=NULL, deposit_accounting_month=NULL,
+                    deposit_service_amount=0, deposit_goods_amount=0,
+                    followup_year=COALESCE(followup_year, CAST(substr(received_date,1,4) AS INTEGER)),
+                    followup_month=COALESCE(followup_month, CAST(substr(received_date,6,2) AS INTEGER))
+                WHERE id=?
+            """, (
+                parts_sent_via,
+                request.form.get("tests_validation",""),
+                (r["remarks"] or ""),
+                finished, close_status, rid
+            ))
+            record_repair_status_change(
+                con, rid, r["status"], close_status,
+                "Matériel laissé pour pièces — aucune facture"
+            )
+            con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
+            con.execute("DELETE FROM invoice_payments WHERE repair_id=?", (rid,))
+            con.commit()
+            con.close()
+            flash("Dossier clôturé : matériel laissé pour pièces. Aucune facture, aucun règlement et aucun CA enregistrés.")
+
+            if request.form.get("return_to") == "suivi":
+                return redirect(url_for("index", year=(r["followup_year"] or int(r["received_date"][:4]))) + f"#suivi-{rid}")
+            if request.form.get("return_to") == "factures":
+                return redirect(url_for("invoices_page"))
+            return redirect(url_for("repair_detail", rid=rid))
+
+        if not lines:
+            con.close()
+            flash("Ajoute au moins une ligne de facture, ou coche « Matériel laissé pour pièces — aucune facture ».")
+            return redirect(url_for("repair_close", rid=rid))
+
+        service_total = sum(x["quantity"] * x["unit_price"] for x in lines if x["line_type"] == "service")
+        goods_total = sum(x["quantity"] * x["unit_price"] for x in lines if x["line_type"] == "goods")
+        service_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "service")
+        goods_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "goods")
+
+        requested_invoice_no = str(request.form.get("invoice_no") or "").strip()
+        if requested_invoice_no:
+            requested_invoice_no = re.sub(r"\s+", "", requested_invoice_no)
+            if not re.fullmatch(r"\d{12}", requested_invoice_no):
+                con.close()
+                flash("Numéro de facture invalide : 12 chiffres attendus (JJMMYYYYHHMM).")
+                return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
+
+            current_invoice_no = re.sub(r"\s+", "", str(r["invoice_no"] or "").strip())
+
+            # Une simple modification de date, montant, règlement, désignation, etc.
+            # ne doit jamais être bloquée par l'anti-doublon si le numéro actuel
+            # de la facture n'a pas changé.
+            if requested_invoice_no != current_invoice_no:
+                duplicate_invoice = con.execute("""
+                    SELECT id
+                    FROM repairs
+                    WHERE trim(COALESCE(invoice_no,''))=?
+                      AND id<>?
+                    LIMIT 1
+                """, (requested_invoice_no, rid)).fetchone()
+                if duplicate_invoice:
+                    con.close()
+                    flash(f"Le numéro de facture {requested_invoice_no} existe déjà dans WOPR.")
+                    return redirect(url_for("repair_close", rid=rid, **({"return": request.args.get("return")} if request.args.get("return") else {})))
+
+            inv = requested_invoice_no
+        else:
+            inv = r["invoice_no"] or make_invoice_no()
+
+        # Références commerciales facultatives : purement informatives.
+        quote_no = str(request.form.get("quote_no") or "").strip()
+        order_no = str(request.form.get("order_no") or "").strip()
+
+        # V2.3.287 — date de facture éditable depuis FACTURE / MODIFIER FACTURE.
+        invoice_date_raw = request.form.get("invoice_date", "").strip()
+        try:
+            invoice_day = datetime.strptime(invoice_date_raw, "%Y-%m-%d").date()
+        except ValueError:
+            con.close()
+            flash("Date de facture invalide.")
+            return redirect(url_for("repair_close", rid=rid))
+
+        if r["finished_at"]:
+            try:
+                invoice_time = datetime.fromisoformat(str(r["finished_at"])).time().replace(microsecond=0)
+            except Exception:
+                invoice_time = now().time().replace(microsecond=0)
+        else:
+            invoice_time = now().time().replace(microsecond=0)
+
+        finished = datetime.combine(invoice_day, invoice_time).isoformat(timespec="seconds")
+
+        is_historical_invoice = bool(r["legacy_imported"])
+        invoice_total = round(service_total + goods_total, 2)
+
+        def parsed_accounting_day(raw_value, fallback_value=""):
+            value = str(raw_value or fallback_value or "").strip()[:10]
+            if not value:
+                return None
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                return None
+
+        # Acompte : il est enregistré séparément du solde final et reste
+        # comptabilisé à sa propre date d'encaissement.
+        raw_deposit = request.form.get("deposit_amount", "").strip()
+        if raw_deposit == "" and r["invoice_no"]:
+            deposit_amount = max(0.0, float(r["deposit_amount"] or 0))
+        else:
+            try:
+                deposit_amount = parse_money_input(raw_deposit or "0")
+            except Exception:
+                con.close()
+                flash("Montant d'acompte invalide.")
+                return redirect(url_for("repair_close", rid=rid))
+        if deposit_amount < 0 or deposit_amount > invoice_total + 0.009:
+            con.close()
+            flash("L'acompte doit être compris entre 0 € et le total de la facture.")
+            return redirect(url_for("repair_close", rid=rid))
+        deposit_amount = round(min(deposit_amount, invoice_total), 2)
+
+        deposit_mode, deposit_method, deposit_detail, deposit_error = payment_data_from_prefixed_form(
+            "deposit_", deposit_amount
+        )
+        if not deposit_mode and r["deposit_payment_mode"]:
+            # En modification d'une facture existante, conserver le mode de
+            # l'acompte déjà enregistré si le champ n'est pas resélectionné.
+            deposit_mode = normalize_payment_mode(r["deposit_payment_mode"])
+            deposit_method = deposit_mode
+            deposit_detail = r["deposit_payment_detail"] or deposit_mode
+        # Lorsqu'on ajoute un nouveau règlement via payment_add_*, son mode
+        # est validé plus bas ; ne pas exiger à tort de resélectionner le mode
+        # de l'ancien acompte cumulé.
+        adding_payment = bool(request.form.get("payment_add_amount", "").strip())
+        if deposit_amount > 0 and not deposit_mode and not adding_payment:
+            con.close()
+            flash("Choisis un mode de règlement pour l'acompte.")
+            return redirect(url_for("repair_close", rid=rid))
+        if deposit_error:
+            con.close()
+            flash(deposit_error)
+            return redirect(url_for("repair_close", rid=rid))
+
+        if deposit_amount > 0:
+            deposit_date_raw = request.form.get("deposit_date", "").strip()
+            deposit_day = parsed_accounting_day(
+                deposit_date_raw,
+                r["deposit_date"] or now().date().isoformat(),
+            )
+            if deposit_day is None:
+                try:
+                    deposit_day = datetime.strptime(
+                        deposit_date_raw or r["deposit_date"] or now().date().isoformat(),
+                        "%Y-%m-%d",
+                    ).date()
+                except ValueError:
+                    con.close()
+                    flash("Date d'acompte invalide.")
+                    return redirect(url_for("repair_close", rid=rid))
+            deposit_date = deposit_day.isoformat()
+            deposit_year, deposit_month = deposit_day.year, deposit_day.month
+            deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
+                deposit_amount, service_total, goods_total
+            )
+        else:
+            deposit_date = ""
+            deposit_year = deposit_month = None
+            deposit_service_amount = deposit_goods_amount = 0.0
+            deposit_mode = deposit_method = deposit_detail = ""
+
+        # Ajout optionnel d'un règlement supplémentaire sur la même facture.
+        # Le montant cumulé reste dans les anciennes colonnes pour préserver
+        # les factures existantes ; le détail de chaque versement est conservé
+        # dans invoice_payments.
+        payment_add_amount = 0.0
+        payment_add_mode = ""
+        payment_add_detail = request.form.get("payment_add_detail", "").strip()
+        payment_add_date = request.form.get("payment_add_date", "").strip()
+        raw_payment_add = request.form.get("payment_add_amount", "").strip()
+        if raw_payment_add:
+            try:
+                payment_add_amount = parse_money_input(raw_payment_add)
+            except Exception:
+                con.close()
+                flash("Montant du règlement supplémentaire invalide.")
+                return redirect(url_for("repair_close", rid=rid))
+            if payment_add_amount <= 0:
+                con.close()
+                flash("Le montant du règlement supplémentaire doit être positif.")
+                return redirect(url_for("repair_close", rid=rid))
+            payment_add_mode = normalize_payment_mode(request.form.get("payment_add_mode", ""))
+            if not payment_add_mode:
+                con.close()
+                flash("Choisis un mode pour le règlement supplémentaire.")
+                return redirect(url_for("repair_close", rid=rid))
+            payment_add_day = parsed_accounting_day(payment_add_date, now().date().isoformat())
+            if payment_add_day is None:
+                con.close()
+                flash("Date du règlement supplémentaire invalide.")
+                return redirect(url_for("repair_close", rid=rid))
+            payment_add_date = payment_add_day.isoformat()
+            if deposit_amount + payment_add_amount > invoice_total + 0.009:
+                con.close()
+                flash("Le total des règlements ne peut pas dépasser le total de la facture.")
+                return redirect(url_for("repair_close", rid=rid))
+            deposit_amount = round(deposit_amount + payment_add_amount, 2)
+            deposit_date = payment_add_date
+            deposit_year, deposit_month = payment_add_day.year, payment_add_day.month
+            # On conserve le mode du premier acompte pour les anciennes
+            # factures ; l'historique détaillé porte le mode de chaque ajout.
+            deposit_mode = payment_add_mode if not r["deposit_amount"] else (
+                r["deposit_payment_mode"] or "MULTI"
+            )
+            deposit_method = deposit_mode
+            deposit_detail = payment_add_detail or payment_add_mode
+            deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
+                deposit_amount, service_total, goods_total
+            )
+
+        # V2.3.214 — la date d'encaissement appartient à la facture.
+        # Elle reste éditable, y compris sur une facture historique, sans toucher
+        # aux montants historiques. Si elle est vide, on privilégie la restitution.
+        accounting_date_raw = request.form.get("accounting_date", "").strip()
+
+        if is_historical_invoice:
+            paid_flag = int(r["paid"] or 0)
+            accounting_service_amount = float(r["accounting_service_amount"] or 0)
+            accounting_goods_amount = float(r["accounting_goods_amount"] or 0)
+            accounting_status = r["accounting_status"] or "normal"
+
+            if paid_flag:
+                fallback = r["accounting_date"] or r["returned_at"] or now().date().isoformat()
+                accounting_day = parsed_accounting_day(accounting_date_raw, fallback)
+                if accounting_date_raw and not accounting_day:
+                    con.close()
+                    flash("Date d'encaissement invalide.")
+                    return redirect(url_for("repair_close", rid=rid))
+                accounting_day = accounting_day or now().date()
+                accounting_date = accounting_day.isoformat()
+                accounting_year = accounting_day.year
+                accounting_month = accounting_day.month
+                try:
+                    rd = datetime.strptime(r["received_date"], "%Y-%m-%d")
+                    accounting_status = (
+                        "yellow"
+                        if (rd.year, rd.month) != (accounting_year, accounting_month)
+                        else "normal"
+                    )
+                except Exception:
+                    accounting_status = "normal"
+            else:
+                accounting_year = r["accounting_year"]
+                accounting_month = r["accounting_month"]
+                accounting_date = r["accounting_date"] or ""
+        else:
+            paid_flag = 1 if request.form.get("paid") == "on" else 0
+            # Un acompte couvrant 100 % de la facture règle automatiquement
+            # la facture, même si la case « Paiement reçu » n'est pas cochée.
+            if invoice_total > 0 and deposit_amount >= invoice_total - 0.009:
+                paid_flag = 1
+
+            if paid_flag:
+                fallback = r["accounting_date"] or r["returned_at"] or now().date().isoformat()
+                accounting_day = parsed_accounting_day(accounting_date_raw, fallback)
+                if accounting_date_raw and not accounting_day:
+                    con.close()
+                    flash("Date d'encaissement invalide.")
+                    return redirect(url_for("repair_close", rid=rid))
+                accounting_day = accounting_day or now().date()
+                accounting_date = accounting_day.isoformat()
+                accounting_year = accounting_day.year
+                accounting_month = accounting_day.month
+                final_amount = max(0.0, invoice_total - deposit_amount)
+                accounting_service_amount, accounting_goods_amount = allocate_payment_amount(
+                    final_amount, service_total, goods_total
+                )
+
+                try:
+                    rd = datetime.strptime(r["received_date"], "%Y-%m-%d")
+                    accounting_status = (
+                        "yellow"
+                        if (rd.year, rd.month) != (accounting_year, accounting_month)
+                        else "normal"
+                    )
+                except Exception:
+                    accounting_status = "normal"
+            else:
+                # Facture créée mais pas encore payée : rouge et exclue du CA.
+                accounting_year = None
+                accounting_month = None
+                accounting_date = ""
+                accounting_service_amount = 0.0
+                accounting_goods_amount = 0.0
+                accounting_status = "red"
+
+        # V2.3.119 — paiement mixte : ventilation exacte par mode.
+        if is_historical_invoice:
+            close_payment_mode = r["payment_mode"] or ""
+            close_payment_method = r["payment_method"] or ""
+            close_payment_detail = r["payment_detail"] or ""
+        elif paid_flag:
+            final_amount = max(0.0, invoice_total - deposit_amount)
+            if final_amount <= 0:
+                close_payment_mode = deposit_mode or ""
+                close_payment_method = deposit_method or close_payment_mode
+                close_payment_detail = deposit_detail or ""
+            else:
+                # Modification d'une facture déjà réglée : si les montants n'ont
+                # pas changé et qu'aucun nouveau mode n'est saisi, conserver les
+                # informations de règlement existantes. Une simple correction de
+                # désignation ne doit pas imposer de ressaisir un ancien paiement.
+                previous_total = round(
+                    float(r["service_amount"] or 0) + float(r["goods_amount"] or 0),
+                    2,
+                )
+                payment_mode_submitted = bool(str(request.form.get("payment_mode", "") or "").strip())
+                preserve_existing_payment = (
+                    bool(r["invoice_no"])
+                    and bool(int(r["paid"] or 0))
+                    and abs(previous_total - invoice_total) <= 0.009
+                    and not payment_mode_submitted
+                    and payment_add_amount <= 0
+                )
+
+                if preserve_existing_payment:
+                    close_payment_mode = r["payment_mode"] or ""
+                    close_payment_method = r["payment_method"] or ""
+                    close_payment_detail = r["payment_detail"] or ""
+                else:
+                    close_payment_mode, close_payment_method, close_payment_detail, pay_error = payment_data_from_form(
+                        final_amount, r["payment_mode"], r["payment_method"], r["payment_detail"]
+                    )
+                    if pay_error:
+                        con.close()
+                        flash(pay_error)
+                        return redirect(url_for("repair_close", rid=rid))
+                    if not close_payment_mode:
+                        con.close()
+                        flash("Choisis un mode de règlement avant d'enregistrer le solde.")
+                        return redirect(url_for("repair_close", rid=rid))
+        else:
+            close_payment_mode = deposit_mode or normalize_payment_mode(request.form.get("payment_mode", ""))
+            close_payment_method = deposit_method or close_payment_mode
+            close_payment_detail = deposit_detail or ""
+
+        # V2.6.2 — la facturation est indépendante de l'état Atelier.
+        # Créer/modifier/encaisser une facture ne signifie pas que la réparation
+        # est terminée ni que le matériel a été restitué.
+        # Le statut reste donc exactement celui du dossier avant facturation.
+        close_status = str(r["status"] or "").strip() or "Reçu"
+        close_returned_at = r["returned_at"]
+
+        close_sent_via = (
+            request.form.get("sent_via")
+            or r["sent_via"]
+            or "Facture + Suivi Papier"
+        ).strip()
+
+        con.execute("""
+            UPDATE repairs SET
+                service_amount=?, goods_amount=?, payment_method=?, payment_mode=?, payment_detail=?,
+                deposit_amount=?, deposit_payment_mode=?, deposit_payment_detail=?, deposit_date=?,
+                deposit_accounting_year=?, deposit_accounting_month=?,
+                deposit_service_amount=?, deposit_goods_amount=?,
+                paid=?, sent_via=?, work_done=?, tests_validation=?,
+                remarks=?, finished_at=?, invoice_no=?, status=?, returned_at=?,
+                service_description=?, goods_description=?,
+                quote_no=?, order_no=?,
+                legacy_invoice_text=?,
+                accounting_year=?, accounting_month=?, accounting_date=?, accounting_status=?,
+                accounting_service_amount=?, accounting_goods_amount=?,
+                followup_year=COALESCE(followup_year, CAST(substr(received_date,1,4) AS INTEGER)),
+                followup_month=COALESCE(followup_month, CAST(substr(received_date,6,2) AS INTEGER))
+            WHERE id=?
+        """, (
+            service_total, goods_total,
+            close_payment_method, close_payment_mode, close_payment_detail,
+            deposit_amount, deposit_mode, deposit_detail, deposit_date,
+            deposit_year, deposit_month, deposit_service_amount, deposit_goods_amount,
+            paid_flag,
+            close_sent_via,
+            r["work_done"] or "",
+            request.form.get("tests_validation",""),
+            (r["remarks"] or ""),
+            finished, inv, close_status, close_returned_at, service_desc, goods_desc,
+            quote_no, order_no,
+            inv,
+            accounting_year, accounting_month, accounting_date, accounting_status,
+            accounting_service_amount, accounting_goods_amount,
+            rid
+        ))
+
+        if payment_add_amount > 0:
+            con.execute("""
+                INSERT INTO invoice_payments(
+                    repair_id, amount, payment_date, payment_mode, payment_detail, created_at
+                ) VALUES(?,?,?,?,?,?)
+            """, (
+                rid, payment_add_amount, payment_add_date, payment_add_mode,
+                payment_add_detail, now().isoformat(timespec="seconds")
+            ))
+
+        # Le règlement final coché sur cette page est lui aussi conservé dans
+        # l'historique, sans le mélanger avec les acomptes déjà enregistrés.
+        if paid_flag and not r["paid"]:
+            final_payment_amount = round(max(0.0, invoice_total - deposit_amount), 2)
+            if final_payment_amount > 0 and close_payment_mode:
+                con.execute("""
+                    INSERT INTO invoice_payments(
+                        repair_id, amount, payment_date, payment_mode, payment_detail, created_at
+                    ) VALUES(?,?,?,?,?,?)
+                """, (
+                    rid, final_payment_amount,
+                    accounting_date or now().date().isoformat(),
+                    close_payment_mode, close_payment_detail,
+                    now().isoformat(timespec="seconds")
+                ))
+
+        if paid_flag:
+            con.execute("UPDATE repairs SET sumup_payment_url='' WHERE id=?", (rid,))
+
+        record_repair_status_change(con, rid, r["status"], close_status, "Facturation")
+
+        con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
+        for line in lines:
+            con.execute("""
+                INSERT INTO invoice_lines(repair_id,position,line_type,quantity,description,unit_price)
+                VALUES(?,?,?,?,?,?)
+            """, (rid, line["position"], line["line_type"], line["quantity"], line["description"], line["unit_price"]))
+
+        con.commit()
+        con.close()
+        tracking_published = publish_tracking_snapshot(rid)
+        if r["invoice_no"] and str(r["invoice_no"]) != str(inv):
+            flash(f"Facture modifiée : numéro {r['invoice_no']} → {inv}.")
+        else:
+            flash("Facture modifiée." if r["invoice_no"] else "Facture créée.")
+        if read_tracking_settings().get("enabled"):
+            flash("Suivi publié sur Foul-Fix." if tracking_published else f"Suivi local enregistré, mais publication Foul-Fix échouée : {publish_tracking_snapshot.last_error or 'erreur inconnue'}.")
+
+        if request.form.get("return_to") == "suivi":
+            try:
+                followup_year = int(r["followup_year"] or str(r["received_date"] or "")[:4] or now().year)
+            except Exception:
+                followup_year = now().year
+            return redirect(url_for("index", year=followup_year) + f"#suivi-{rid}")
+
+        if request.form.get("return_to") == "factures":
+            return redirect(url_for("invoices_page"))
+
+        return redirect(url_for("repair_detail", rid=rid))
+
+    # Les lignes SQLite sont converties en dictionnaires : le reste de cet
+    # écran manipule volontairement les lignes avec ``.get(...)`` afin de
+    # rester compatible avec les factures reconstruites/historiques.
+    lines = [dict(row) for row in con.execute("""
+        SELECT * FROM invoice_lines WHERE repair_id=? ORDER BY position,id
+    """, (rid,)).fetchall()]
+
+    invoice_was_reconstructed = bool(lines)
+    original_invoice_pdf = None
+    if r["legacy_imported"] and r["invoice_no"]:
+        original_invoice_pdf = find_document_recursive(
+            FACTURES_ROOT,
+            document_no=r["invoice_no"]
+        )
+
+    # Compatibilité avec les factures créées avant la V1.7 et les factures ODS.
+    if not lines:
+        legacy = []
+
+        source_rows = [r]
+        if r["legacy_imported"] and r["invoice_no"]:
+            source_rows = con.execute("""
+                SELECT *
+                FROM repairs
+                WHERE client_id=?
+                  AND invoice_no=?
+                ORDER BY
+                    CASE WHEN COALESCE(accounting_date,'')<>'' THEN 1 ELSE 0 END DESC,
+                    id DESC
+            """, (r["client_id"], r["invoice_no"])).fetchall() or [r]
+
+        # Les lignes "Paiement du..." peuvent dupliquer les montants de la facture.
+        # On prend donc la meilleure valeur connue par catégorie au lieu de les sommer.
+        service_source = max(
+            source_rows,
+            key=lambda x: max(
+                float(x["service_amount"] or 0),
+                float(x["accounting_service_amount"] or 0)
+            )
+        )
+        goods_source = max(
+            source_rows,
+            key=lambda x: max(
+                float(x["goods_amount"] or 0),
+                float(x["accounting_goods_amount"] or 0)
+            )
+        )
+
+        service_value = max(
+            float(service_source["service_amount"] or 0),
+            float(service_source["accounting_service_amount"] or 0)
+        )
+        goods_value = max(
+            float(goods_source["goods_amount"] or 0),
+            float(goods_source["accounting_goods_amount"] or 0)
+        )
+
+        if service_value:
+            legacy.append({
+                "line_type": "service",
+                "quantity": 1,
+                "description": (
+                    service_source["service_description"]
+                    or service_source["tests_validation"]
+                    or service_source["problem"]
+                    or "Prestation de service"
+                ),
+                "unit_price": service_value
+            })
+
+        if goods_value:
+            legacy.append({
+                "line_type": "goods",
+                "quantity": 1,
+                "description": (
+                    goods_source["goods_description"]
+                    or goods_source["problem"]
+                    or "Pièce / marchandise"
+                ),
+                "unit_price": goods_value
+            })
+
+        lines = legacy
+
+    # Nouvelle facture issue d'un suivi : reprend la désignation déjà saisie
+    # sans automatiser le prix.
+    if not lines and not r["invoice_no"] and not r["simple_invoice"]:
+        draft_description = next((
+            str(value or "").strip()
+            for value in (
+                r["service_description"],
+                r["work_done"],
+                r["tests_validation"],
+                r["diagnosis"],
+                r["problem"],
+            )
+            if str(value or "").strip()
+        ), "")
+        if draft_description:
+            lines = [{
+                "line_type": "service",
+                "quantity": 1,
+                "description": draft_description,
+                "unit_price": 0,
+            }]
+
+    current_invoice_total = round(sum(
+        float(line.get("quantity") or 0) * float(line.get("unit_price") or 0)
+        for line in lines
+    ), 2)
+    payment_summary = payment_summary_for_repair(con, rid, current_invoice_total)
+    payment_rows = invoice_payment_rows(con, rid)
+    con.close()
+    return render_template(
+        "close.html",
+        r=r,
+        invoice_lines=lines,
+        invoice_was_reconstructed=invoice_was_reconstructed,
+        original_invoice_pdf=bool(original_invoice_pdf and original_invoice_pdf.exists()),
+        payment_split=payment_split_values(r["payment_detail"], r["payment_method"]),
+        invoice_date_value=(
+            invoice_no_date(r["invoice_no"])
+            or str(r["finished_at"] or "")[:10]
+            or now().date().isoformat()
+        ),
+        accounting_date_value=(
+            (r["accounting_date"] or r["returned_at"] or now().date().isoformat())[:10]
+            if r["paid"] else ""
+        ),
+        payment_summary=payment_summary,
+        payment_rows=payment_rows,
+        today_date=now().date().isoformat(),
+    )
+
+@app.route("/sign/<token>", methods=["GET", "POST"])
+def sign(token):
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.signature_token=?
+    """, (token,)).fetchone()
+    if not r:
+        con.close()
+        return "Lien de signature invalide.", 404
+
+    if request.method == "POST":
+        if r["signature_at"]:
+            con.close()
+            return jsonify({"ok": False, "error": "Ce dossier a déjà été signé."}), 409
+        data = request.get_json(silent=True) or {}
+        img = data.get("image","")
+        if not img.startswith("data:image/png;base64,"):
+            con.close()
+            return jsonify({"ok":False, "error":"Format invalide"}), 400
+        raw = base64.b64decode(img.split(",",1)[1])
+        date_sig = now().strftime("%Y%m%d_%H%M")
+        client_name = safe_filename(r["client_name"])
+        path = SIGNATURES / f"{r['dossier_no']}_{client_name}_{date_sig}.png"
+        path.write_bytes(raw)
+        signed_at = now().isoformat(timespec="seconds")
+        con.execute(
+            "UPDATE repairs SET signature_path=?, signature_at=? WHERE id=?",
+            (path.name, signed_at, r["id"])
+        )
+        con.commit()
+        con.close()
+        return jsonify({"ok":True})
+
+    con.close()
+    return render_template("sign.html", r=r, already_signed=bool(r["signature_at"]))
+
+@app.route("/qr/<int:rid>.png")
+def qr_png(rid):
+    con = db()
+    r = con.execute("SELECT signature_token FROM repairs WHERE id=?", (rid,)).fetchone()
+    con.close()
+    if not r:
+        return "introuvable", 404
+    target = f"http://{local_ip()}:5000/sign/{r['signature_token']}"
+    img = qrcode.make(target)
+    bio = io.BytesIO()
+    img.save(bio, "PNG")
+    bio.seek(0)
+    return send_file(bio, mimetype="image/png")
+
+
+def draw_wrapped(c, text, x, y, max_chars=95, line_h=5*mm, font=None, size=9):
+    font = font or PDF_FONTS["regular"]
+    c.setFont(font, size)
+    words = (text or "").split()
+    lines, current = [], ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        if len(candidate) > max_chars:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    for line in lines[:6]:
+        c.drawString(x, y, line)
+        y -= line_h
+    return y
+
+def fr_datetime(value):
+    if not value:
+        return ""
+    try:
+        d = datetime.fromisoformat(value)
+        return d.strftime("%d/%m/%Y à %H:%M")
+    except Exception:
+        return str(value)
+
+def fr_date(value):
+    if not value:
+        return ""
+    try:
+        if "T" in str(value):
+            d = datetime.fromisoformat(value)
+        else:
+            d = datetime.strptime(str(value)[:10], "%Y-%m-%d")
+        return d.strftime("%d/%m/%Y")
+    except Exception:
+        return str(value)
+
+def fit_text(c, text, x, y, max_width, font=None, size=9, min_size=6):
+    text = str(text or "")
+    font = font or PDF_FONTS["regular"]
+    cur = size
+    c.setFont(font, cur)
+    while cur > min_size and c.stringWidth(text, font, cur) > max_width:
+        cur -= .5
+        c.setFont(font, cur)
+    c.drawString(x, y, text)
+    return cur
+
+
+def wrap_pdf_text(text, font, size, max_width):
+    """Retourne des lignes qui tiennent dans max_width sans jamais réduire la police."""
+    text = str(text or "").replace("\r", "")
+    result = []
+    paragraphs = text.split("\n") or [""]
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:
+            result.append("")
+            continue
+
+        words = paragraph.split()
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if pdfmetrics.stringWidth(candidate, font, size) <= max_width:
+                current = candidate
+                continue
+
+            if current:
+                result.append(current)
+                current = ""
+
+            # Mot/URL exceptionnellement trop long : découpe caractère par caractère.
+            if pdfmetrics.stringWidth(word, font, size) > max_width:
+                chunk = ""
+                for ch in word:
+                    test = chunk + ch
+                    if chunk and pdfmetrics.stringWidth(test, font, size) > max_width:
+                        result.append(chunk)
+                        chunk = ch
+                    else:
+                        chunk = test
+                current = chunk
+            else:
+                current = word
+
+        if current:
+            result.append(current)
+
+    return result or [""]
+
+@app.route("/repair/<int:rid>/intake.pdf")
+def intake_pdf(rid):
+    lang = pdf_lang(request.values.get("lang", "fr"))
+    force_download = request.args.get("download") == "1" and request.args.get("inline") != "1"
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               c.name client_name,
+               c.first_name client_first_name,
+               c.last_name client_last_name,
+               c.company client_company,
+               c.address client_address,
+               c.address_street client_address_street, c.postal_code client_postal_code,
+               c.city client_city, c.phone client_phone, c.email client_email
+        FROM repairs r JOIN clients c ON c.id=r.client_id WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+    if not r:
+        return "introuvable", 404
+
+    bio = io.BytesIO()
+    c = canvas.Canvas(bio, pagesize=A4)
+    c.setTitle(
+        f"Suivi {r['dossier_no']} - {r['client_name']}"
+        if r["dossier_no"] else f"Suivi - {r['client_name']}"
+    )
+    W, H = A4
+    BLUE = colors.HexColor("#3399FF")
+    BLACK = colors.black
+    x0, x1 = 5*mm, W-5*mm
+
+    # Logo à gauche + bandeau haut, comme la feuille d'origine
+    logo = invoice_logo_path()
+    if logo:
+        c.drawImage(str(logo), 6*mm, H-37*mm, width=44*mm, height=26*mm,
+                    preserveAspectRatio=True, mask='auto')
+
+    bx = 52*mm
+    bw = W - bx - 5*mm
+    c.setStrokeColor(BLUE); c.setLineWidth(1.2)
+    c.rect(bx, H-21*mm, bw, 7*mm, fill=0, stroke=1)
+    c.setFont(PDF_FONTS["bold"], 10)
+    c.drawCentredString(bx+bw/2, H-18.7*mm,
+        f"{cfg().get('website','')}  -  {cfg().get('email','')}  -  {cfg().get('phone','')}")
+    c.rect(bx, H-34*mm, bw, 9*mm, fill=0, stroke=1)
+    c.setFont(PDF_FONTS["bold"], 16)
+    c.drawCentredString(bx+bw/2, H-31.5*mm, pdf_t("intake_title", lang))
+
+    def section_title(y, title):
+        # V2.3.57 : 5,5 mm au lieu de 6 mm.
+        # Le texte garde la même taille ; on récupère juste un peu de hauteur
+        # pour permettre un vrai bloc multi-lignes Tests et Validation.
+        h = 5.5*mm
+        c.setStrokeColor(BLUE); c.setLineWidth(1)
+        c.rect(x0, y-h, x1-x0, h, fill=0, stroke=1)
+        c.setFont(PDF_FONTS["bold"], 10.5)
+        c.drawCentredString((x0+x1)/2, y-h+1.7*mm, title)
+        return y-h
+
+    def field_row(y, label, value, h=6*mm, label_w=43*mm, size=9.2, label_size=None):
+        c.setStrokeColor(BLUE); c.setLineWidth(.7)
+        c.rect(x0, y-h, x1-x0, h, fill=0, stroke=1)
+        c.line(x0+label_w, y, x0+label_w, y-h)
+        c.setFillColor(BLACK)
+
+        lbl_size = label_size or size
+        # V2.3.33 : les libellés longs doivent s'adapter à la largeur
+        # de la colonne gauche au lieu de déborder.
+        fit_text(
+            c, str(label or ''), x0+1*mm, y-h+1.7*mm,
+            label_w-2*mm, PDF_FONTS["regular"], lbl_size, 6.8
+        )
+
+        fit_text(c, str(value or ''), x0+label_w+1*mm, y-h+1.7*mm,
+                 x1-(x0+label_w)-2*mm, PDF_FONTS["regular"], size, 6)
+        return y-h
+
+    y = H-37*mm
+    y = section_title(y, pdf_t("client_info", lang))
+    y = field_row(y, pdf_t("first_name", lang) + " :", r['client_first_name'] or "")
+    y = field_row(y, pdf_t("last_name", lang) + " :", r['client_last_name'] or r['client_name'] or "")
+    client_company = str(r['client_company'] or "").strip()
+    if client_company and client_company.casefold() != str(r['client_name'] or "").strip().casefold():
+        y = field_row(y, "Entreprise :", client_company)
+    y = field_row(y, pdf_t("address", lang) + " :", r['client_address_street'] or "")
+    y = field_row(y, pdf_t("postal_city", lang) + " :", " ".join(x for x in [r['client_postal_code'] or "", r['client_city'] or ""] if x))
+    y = field_row(y, pdf_t("phone", lang) + " :", r['client_phone'])
+    y = field_row(y, pdf_t("email", lang) + " :", r['client_email'])
+    y = field_row(y, pdf_t("date", lang) + " :", fr_date(r['received_date']))
+
+    y -= 1*mm
+    y = section_title(y, pdf_t("device_details", lang))
+    y = field_row(y, pdf_t("device_type", lang) + " :", r['device_type'])
+    y = field_row(y, pdf_t("brand_model", lang) + " :", r['brand_model'])
+    y = field_row(y, pdf_t("serial", lang) + " :", r['serial_no'])
+    y = field_row(y, pdf_t("system", lang) + " :", r['system_name'])
+    y = field_row(y, pdf_t("password", lang) + " :", decrypt_repair_password(r['system_password']))
+    y = field_row(y, pdf_t("accessories", lang) + " :", r['accessories'])
+    y = field_row(y, pdf_t("condition", lang) + " :", r['device_state'])
+
+    y -= 1*mm
+    y = section_title(y, pdf_t("problem_desc", lang))
+
+    # V2.3.40 : afficher aussi le Diagnostic dans le PDF Suivi.
+    # Deux lignes dans le même bloc afin de conserver la mise en page A4.
+    h = 24*mm
+    row_h = h / 2
+
+    c.setStrokeColor(BLUE)
+    c.setLineWidth(.7)
+    c.rect(x0, y-h, x1-x0, h, fill=0, stroke=1)
+    c.line(x0+43*mm, y, x0+43*mm, y-h)
+    c.line(x0, y-row_h, x1, y-row_h)
+
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["regular"], 9)
+
+    c.drawString(x0+1*mm, y-5*mm, pdf_t("problem", lang) + " :")
+    draw_wrapped(
+        c, translate_pdf_text(r['problem'], lang),
+        x0+44*mm, y-4.5*mm,
+        max_chars=88,
+        line_h=3.8*mm,
+        size=8.0
+    )
+
+    c.drawString(x0+1*mm, y-row_h-5*mm, pdf_t("diagnosis", lang) + " :")
+
+    # V2.3.63 — Diagnostic en vrai multi-lignes, selon la largeur réelle
+    # du cadre, comme Tests et Validation.
+    diag_text = translate_pdf_text(r['diagnosis'], lang).replace("\r", "").strip()
+    diag_x = x0 + 44*mm
+    diag_width = x1 - diag_x - 1.5*mm
+    diag_font = 8.0
+    diag_lines = []
+
+    while diag_font >= 6.5:
+        candidate = []
+        source_lines = diag_text.split("\n") if diag_text else [""]
+        for source_line in source_lines:
+            wrapped = wrap_pdf_text(
+                source_line,
+                PDF_FONTS["regular"],
+                diag_font,
+                diag_width
+            )
+            candidate.extend(wrapped or [""])
+        diag_lines = candidate
+        if len(diag_lines) <= 3:
+            break
+        diag_font -= 0.3
+
+    # Le demi-bloc Diagnostic fait 12 mm : 3 lignes max, alignées en haut.
+    diag_y = y - row_h - 3.8*mm
+    diag_line_h = 3.4*mm
+    c.setFont(PDF_FONTS["regular"], diag_font)
+    for line in diag_lines[:3]:
+        c.drawString(diag_x, diag_y, line)
+        diag_y -= diag_line_h
+
+    y -= h
+
+    y -= 1*mm
+    y = section_title(y, pdf_t("repair_authorization", lang))
+    h = 22*mm
+    c.setStrokeColor(BLUE); c.rect(x0, y-h, x1-x0, h, fill=0, stroke=1)
+    c.line(x0+43*mm, y, x0+43*mm, y-h)
+    c.setFont(PDF_FONTS["regular"], 9)
+    c.drawString(x0+1*mm, y-5*mm, pdf_t("client_signature", lang) + " :")
+    signature_file = resolve_signature_path(r['signature_path'])
+    if signature_file:
+        c.drawImage(str(signature_file), x0+45*mm, y-h+2*mm, width=58*mm, height=20*mm,
+                    preserveAspectRatio=True, mask='auto')
+        c.setFont(PDF_FONTS["bold"], 8)
+        c.drawString(x0+108*mm, y-7*mm, "Client : " + (r['client_name'] or ''))
+        c.setFont(PDF_FONTS["regular"], 8)
+        c.drawString(x0+108*mm, y-13*mm, pdf_t("signed_on", lang) + " " + fr_datetime(r['signature_at']))
+    y -= h
+
+    y -= 1*mm
+    y = section_title(y, pdf_t("validation_return", lang))
+
+    # V2.3.57 — vrai bloc multi-lignes.
+    # L'ancien field_row plaçait tout sur UNE ligne de base située en bas du cadre,
+    # d'où le texte minuscule qui partait à droite et dépassait.
+    tests_h = 16*mm
+    label_w = 43*mm
+    c.setStrokeColor(BLUE)
+    c.setLineWidth(.7)
+    c.rect(x0, y-tests_h, x1-x0, tests_h, fill=0, stroke=1)
+    c.line(x0+label_w, y, x0+label_w, y-tests_h)
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["regular"], 9)
+    c.drawString(x0+1*mm, y-5*mm, pdf_t("tests_validation", lang) + " :")
+
+    tests_text = translate_pdf_text(r['tests_validation'], lang).replace("\r", "").strip()
+    tests_x = x0 + label_w + 1*mm
+    tests_width = x1 - tests_x - 1.5*mm
+
+    # On conserve les retours à la ligne saisis par l'atelier et on replie
+    # également les lignes trop longues selon la largeur réelle du cadre.
+    tests_font = 8.2
+    tests_lines = []
+    while tests_font >= 6.4:
+        candidate = []
+        source_lines = tests_text.split("\n") if tests_text else [""]
+        for source_line in source_lines:
+            wrapped = wrap_pdf_text(
+                source_line,
+                PDF_FONTS["regular"],
+                tests_font,
+                tests_width
+            )
+            candidate.extend(wrapped or [""])
+        tests_lines = candidate
+        if len(tests_lines) <= 6:
+            break
+        tests_font -= 0.3
+
+    # Jusqu'à 6 lignes tiennent dans le bloc de 16 mm.
+    # 5 lignes (cas courant) restent autour de 8 pt, donc bien lisibles.
+    line_h = 2.7*mm if len(tests_lines) <= 5 else 2.15*mm
+    tests_y = y - 3.4*mm
+    c.setFont(PDF_FONTS["regular"], tests_font)
+    for line in tests_lines:
+        c.drawString(tests_x, tests_y, line)
+        tests_y -= line_h
+
+    y -= tests_h
+
+    # Signature du technicien préremplie
+    h = 9*mm
+    c.setStrokeColor(BLUE); c.setLineWidth(.7)
+    c.rect(x0, y-h, x1-x0, h, fill=0, stroke=1)
+    c.line(x0+43*mm, y, x0+43*mm, y-h)
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["regular"], 9)
+    c.drawString(x0+1*mm, y-h+1.7*mm, pdf_t("technician_signature", lang) + " :")
+    if TECH_SIGNATURE.exists():
+        # V2.3.177 : signature réellement plus visible sur papier.
+        # L'image source contient souvent beaucoup de marge vide : on recadre
+        # automatiquement autour des traits, puis on épaissit légèrement l'encre.
+        try:
+            with Image.open(TECH_SIGNATURE) as _sig_src:
+                _sig_rgba = _sig_src.convert("RGBA")
+                _alpha = _sig_rgba.getchannel("A")
+                _gray = ImageOps.grayscale(_sig_rgba)
+
+                # Masque des vrais traits : pixel suffisamment opaque ET pas blanc.
+                _ink = Image.eval(_gray, lambda p: 255 if p < 245 else 0)
+                _ink = Image.composite(_ink, Image.new("L", _ink.size, 0), _alpha)
+                _bbox = _ink.getbbox()
+                if _bbox:
+                    _l, _t, _r, _b = _bbox
+                    _pad = max(2, int(max(_sig_rgba.size) * 0.01))
+                    _bbox = (
+                        max(0, _l - _pad), max(0, _t - _pad),
+                        min(_sig_rgba.width, _r + _pad),
+                        min(_sig_rgba.height, _b + _pad),
+                    )
+                    _gray = _gray.crop(_bbox)
+
+                # V2.3.178 : contraste + épaississement, MAIS fond transparent.
+                # La V2.3.177 recréait un rectangle blanc derrière la signature,
+                # ce qui masquait la ligne bleue supérieure du cadre.
+                _gray = ImageOps.autocontrast(_gray)
+                _gray = _gray.filter(ImageFilter.MinFilter(3))
+
+                # Alpha basé sur l'encre : blanc = transparent, noir = opaque.
+                _alpha_sig = Image.eval(_gray, lambda p: max(0, min(255, (245 - p) * 8)))
+                _sig_img = Image.new("RGBA", _gray.size, (0, 0, 0, 0))
+                _black = Image.new("RGBA", _gray.size, (20, 20, 20, 255))
+                _sig_img.paste(_black, (0, 0), _alpha_sig)
+
+                _sig_buf = io.BytesIO()
+                _sig_img.save(_sig_buf, format="PNG", optimize=True)
+                _sig_buf.seek(0)
+
+                # Signature grande, mais entièrement contenue dans la ligne de 9 mm.
+                c.drawImage(
+                    ImageReader(_sig_buf),
+                    x0 + 44*mm,
+                    y - h + 0.25*mm,
+                    width=58*mm,
+                    height=8.5*mm,
+                    preserveAspectRatio=True,
+                    mask='auto'
+                )
+        except Exception:
+            # Repli sûr : on garde au minimum une signature agrandie.
+            c.drawImage(
+                str(TECH_SIGNATURE),
+                x0 + 44*mm,
+                y - h + 0.25*mm,
+                width=58*mm,
+                height=8.5*mm,
+                preserveAspectRatio=True,
+                mask='auto'
+            )
+    y = y-h
+
+    # V2.3.138 — date finale du suivi.
+    # Pour "Laissé pour pièces", le dossier est bien clôturé même sans facture :
+    # la date doit donc toujours être présente sur le PDF.
+    final_date = r["finished_at"]
+    if not final_date and r["status"] == "Laissé pour pièces":
+        final_date = now().isoformat(timespec="seconds")
+    y = field_row(y, pdf_t("date", lang) + " :", fr_date(final_date) if final_date else "")
+
+    y -= 1*mm
+    y = section_title(y, pdf_t("warranty", lang))
+    gh = 19*mm
+    c.setStrokeColor(BLUE); c.rect(x0, y-gh, x1-x0, gh, fill=0, stroke=1)
+    c.line(x0+43*mm, y, x0+43*mm, y-gh)
+    c.setFont(PDF_FONTS["bold"], 8.5); c.drawString(x0+6*mm, y-5*mm, pdf_t("warranty_duration", lang))
+    c.setFont(PDF_FONTS["bold"], 8.5); c.drawString(x0+44*mm, y-5*mm, pdf_t("six_months", lang))
+    c.setFont(PDF_FONTS["regular"], 7.2)
+    warranty = pdf_t("warranty_text", lang)
+    draw_wrapped(
+        c, warranty,
+        x0+44*mm, y-9.5*mm,
+        max_chars=92,
+        line_h=3.2*mm,
+        size=7.2
+    )
+    y -= gh
+    y = field_row(y, pdf_t("warranty_conditions", lang), pdf_t("warranty_only", lang), h=6*mm)
+
+    y -= 1*mm
+    y = section_title(y, pdf_t("remarks", lang))
+
+    # V2.3.35 : cadre Remarques entièrement visible + vrai espace dessous.
+    rh = 13*mm
+    c.setStrokeColor(BLUE)
+    c.rect(x0, y-rh, x1-x0, rh, fill=0, stroke=1)
+
+    remarks_text = translate_pdf_text(r['remarks'], lang).strip()
+    if remarks_text.casefold() == "merci de votre confiance.":
+        remarks_text = ""
+
+    draw_wrapped(
+        c, remarks_text,
+        x0+2*mm, y-4.5*mm,
+        max_chars=115,
+        line_h=3.8*mm,
+        size=8
+    )
+
+    # Positionné relativement au bas du cadre pour garantir qu'il soit dessous.
+    footer_y = y - rh - 7*mm
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["regular"], 12)
+    c.drawString(x0+2*mm, footer_y, pdf_t("thanks", lang))
+
+    c.save()
+    pdf_bytes = bio.getvalue()
+
+    # V2.3.238 — classement automatique du suivi selon la date réelle
+    # de prise en charge, pas selon le jour où l'utilisateur reclique sur PDF.
+    suivi_date = str(r["received_date"] or "")[:10]
+    try:
+        suivi_dt = datetime.strptime(suivi_date, "%Y-%m-%d")
+    except Exception:
+        suivi_dt = now()
+        suivi_date = suivi_dt.strftime("%Y-%m-%d")
+
+    suivi_filename = (
+        f"{safe_filename(r['client_name'])}_"
+        f"{suivi_dt.strftime('%d%m%Y')}_"
+        f"{pdf_language_suffix(lang)}.pdf"
+    )
+
+    suivi_folder = year_month_folder(
+        SUIVI_REPARATIONS_ROOT,
+        suivi_date,
+        create=True
+    )
+    suivi_saved_path = suivi_folder / safe_document_name(suivi_filename)
+    try:
+        suivi_saved_path.write_bytes(pdf_bytes)
+    except Exception as exc:
+        app.logger.warning(
+            "Impossible d'enregistrer le suivi dans %s: %s",
+            suivi_saved_path, exc
+        )
+
+    bio.seek(0)
+    return send_file(
+        bio,
+        mimetype="application/pdf",
+        # Le PDF reste archivé dans private/documents, mais ?download=1
+        # permet aussi de le télécharger directement depuis le suivi.
+        as_attachment=force_download,
+        download_name=suivi_filename
+    )
+
+
+@app.route("/invoice/simple", methods=["GET", "POST"])
+def simple_invoice_new():
+    con = db()
+
+    if request.method == "POST":
+        sync_new_client_id = None
+        selected_client_id = request.form.get("client_id", "").strip()
+        client = None
+        if selected_client_id.isdigit():
+            client = con.execute(
+                "SELECT * FROM clients WHERE id=?",
+                (int(selected_client_id),)
+            ).fetchone()
+
+        if client:
+            client_id = int(client["id"])
+        else:
+            first_name = request.form.get("first_name", "").strip()
+            last_name = request.form.get("last_name", "").strip()
+            company = request.form.get("company", "").strip()
+
+            if not first_name and not last_name and not company:
+                last_name = "Client de passage"
+
+            name = compose_client_name(last_name, first_name).strip()
+            if not name:
+                name = company or "Client de passage"
+
+            address_street = request.form.get("address_street", "").strip()
+            postal_code = request.form.get("postal_code", "").strip()
+            city = request.form.get("city", "").strip()
+            phone = request.form.get("phone", "").strip()
+            phone_secondary = request.form.get("phone_secondary", "").strip()
+            email = request.form.get("email", "").strip()
+            email_secondary = request.form.get("email_secondary", "").strip()
+            address = "\n".join(
+                x for x in [address_street, (postal_code + " " + city).strip()] if x
+            )
+
+            existing = None
+            if name.casefold() == "client de passage" and not any(
+                [address_street, postal_code, city, phone, phone_secondary, email, email_secondary, company]
+            ):
+                existing = con.execute(
+                    "SELECT * FROM clients WHERE lower(trim(name))='client de passage' ORDER BY id LIMIT 1"
+                ).fetchone()
+
+            if existing:
+                client_id = int(existing["id"])
+            else:
+                stamp_client = now().isoformat(timespec="seconds")
+                cur = con.execute("""
+                    INSERT INTO clients(
+                        name,last_name,first_name,company,
+                        address,address_street,postal_code,city,
+                        phone,phone_secondary,email,email_secondary,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    name,last_name,first_name,company,
+                    address,address_street,postal_code,city,
+                    phone,phone_secondary,email,email_secondary,stamp_client,stamp_client
+                ))
+                client_id = int(cur.lastrowid)
+
+                # Un vrai nouveau client saisi depuis Facture simple rejoint
+                # automatiquement Google Contacts. Le client générique anonyme
+                # "Client de passage" reste local pour éviter de polluer les contacts.
+                is_generic_passage = (
+                    name.casefold() == "client de passage"
+                    and not any([address_street, postal_code, city, phone, phone_secondary, email, email_secondary, company])
+                )
+                if not is_generic_passage:
+                    sync_new_client_id = client_id
+
+        quantities = request.form.getlist("line_qty[]")
+        descriptions = request.form.getlist("line_desc[]")
+        prices = request.form.getlist("line_price[]")
+        types = request.form.getlist("line_type[]")
+
+        lines = []
+        for i in range(max(len(descriptions), len(quantities), len(prices), len(types))):
+            desc = descriptions[i].strip() if i < len(descriptions) else ""
+            if not desc:
+                continue
+            try:
+                qty = float((quantities[i] if i < len(quantities) else "1").replace(",", ".") or 1)
+            except Exception:
+                qty = 1.0
+            try:
+                price = float((prices[i] if i < len(prices) else "0").replace(",", ".") or 0)
+            except Exception:
+                price = 0.0
+            line_type = types[i] if i < len(types) and types[i] in ("service", "goods") else "service"
+            lines.append({
+                "position": len(lines),
+                "line_type": line_type,
+                "quantity": qty,
+                "description": desc,
+                "unit_price": price,
+            })
+
+        if not lines:
+            con.close()
+            flash("Ajoute au moins une ligne de facture.")
+            return redirect(url_for("simple_invoice_new"))
+
+        service_total = sum(x["quantity"] * x["unit_price"] for x in lines if x["line_type"] == "service")
+        goods_total = sum(x["quantity"] * x["unit_price"] for x in lines if x["line_type"] == "goods")
+        service_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "service")
+        goods_desc = " + ".join(x["description"] for x in lines if x["line_type"] == "goods")
+
+        stamp = now()
+        finished = stamp.isoformat(timespec="seconds")
+        invoice_no = make_invoice_no()
+        paid_flag = 1 if request.form.get("paid") == "on" else 0
+        payment_mode = normalize_payment_mode(request.form.get("payment_mode", ""))
+        sent_via = request.form.get("sent_via", "").strip()
+        invoice_total = round(service_total + goods_total, 2)
+        try:
+            deposit_amount = parse_money_input(request.form.get("deposit_amount", "0") or "0")
+        except Exception:
+            con.close()
+            flash("Montant d'acompte invalide.")
+            return redirect(url_for("simple_invoice_new"))
+        if deposit_amount < 0 or deposit_amount > invoice_total + 0.009:
+            con.close()
+            flash("L'acompte doit être compris entre 0 € et le total de la facture.")
+            return redirect(url_for("simple_invoice_new"))
+        deposit_amount = round(min(deposit_amount, invoice_total), 2)
+        deposit_mode, deposit_method, deposit_detail, deposit_error = payment_data_from_prefixed_form(
+            "deposit_", deposit_amount
+        )
+        if deposit_amount > 0 and not deposit_mode:
+            con.close()
+            flash("Choisis un mode de règlement pour l'acompte.")
+            return redirect(url_for("simple_invoice_new"))
+        if deposit_error:
+            con.close()
+            flash(deposit_error)
+            return redirect(url_for("simple_invoice_new"))
+        if deposit_amount > 0:
+            try:
+                deposit_day = datetime.strptime(
+                    request.form.get("deposit_date", "").strip() or stamp.date().isoformat(),
+                    "%Y-%m-%d",
+                ).date()
+            except ValueError:
+                con.close()
+                flash("Date d'acompte invalide.")
+                return redirect(url_for("simple_invoice_new"))
+            deposit_date = deposit_day.isoformat()
+            deposit_year, deposit_month = deposit_day.year, deposit_day.month
+            deposit_service_amount, deposit_goods_amount = allocate_payment_amount(
+                deposit_amount, service_total, goods_total
+            )
+        else:
+            deposit_date = ""
+            deposit_year = deposit_month = None
+            deposit_service_amount = deposit_goods_amount = 0.0
+            deposit_mode = deposit_method = deposit_detail = ""
+        if deposit_amount >= invoice_total - 0.009 and invoice_total > 0:
+            paid_flag = 1
+
+        if paid_flag:
+            accounting_year = stamp.year
+            accounting_month = stamp.month
+            accounting_date = stamp.strftime("%Y-%m-%d")
+            accounting_status = "normal"
+            accounting_service_amount, accounting_goods_amount = allocate_payment_amount(
+                max(0.0, invoice_total - deposit_amount), service_total, goods_total
+            )
+        else:
+            accounting_year = None
+            accounting_month = None
+            accounting_date = ""
+            accounting_status = "red"
+            accounting_service_amount = 0.0
+            accounting_goods_amount = 0.0
+
+        # Identifiant technique distinct du numéro de facture.
+        dossier_no = (
+            "FS-" + stamp.strftime("%d%m%Y%H%M%S")
+            + "-" + secrets.token_hex(2).upper()
+        )
+
+        cur = con.execute("""
+            INSERT INTO repairs(
+                dossier_no,client_id,created_at,received_date,
+                problem,status,finished_at,invoice_no,
+                service_amount,goods_amount,payment_method,payment_mode,
+                paid,sent_via,service_description,goods_description,
+                legacy_invoice_text,
+                accounting_year,accounting_month,accounting_date,accounting_status,
+                accounting_service_amount,accounting_goods_amount,
+                deposit_amount,deposit_payment_mode,deposit_payment_detail,deposit_date,
+                deposit_accounting_year,deposit_accounting_month,
+                deposit_service_amount,deposit_goods_amount,
+                simple_invoice
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+        """, (
+            dossier_no,client_id,finished,stamp.strftime("%Y-%m-%d"),
+            "Facture simple","Terminé",finished,invoice_no,
+            service_total,goods_total,payment_mode,payment_mode,
+            paid_flag,sent_via,service_desc,goods_desc,
+            invoice_no,
+            accounting_year,accounting_month,accounting_date,accounting_status,
+            accounting_service_amount,accounting_goods_amount,
+            deposit_amount,deposit_mode,deposit_detail,deposit_date,
+            deposit_year,deposit_month,deposit_service_amount,deposit_goods_amount
+        ))
+        rid = int(cur.lastrowid)
+
+        for line in lines:
+            con.execute("""
+                INSERT INTO invoice_lines(
+                    repair_id,position,line_type,quantity,description,unit_price
+                ) VALUES(?,?,?,?,?,?)
+            """, (
+                rid,line["position"],line["line_type"],
+                line["quantity"],line["description"],line["unit_price"]
+            ))
+
+        con.commit()
+        con.close()
+
+        publish_tracking_snapshot(rid)
+        # V2.3.215 : aucune écriture Google automatique.
+        audit_event(
+            "SIMPLE_INVOICE_CREATE",
+            f"Facture {invoice_no} / repair_id={rid}",
+            request.remote_addr
+        )
+        flash(f"Facture simple {invoice_no} créée.")
+        return redirect(url_for("simple_invoice_done", rid=rid))
+
+    clients = con.execute("""
+        SELECT id,name,company
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+        ORDER BY name COLLATE NOCASE
+    """).fetchall()
+    con.close()
+    return render_template("simple_invoice.html", clients=clients)
+
+
+
+@app.route("/invoice/simple/<int:rid>/done")
+def simple_invoice_done(rid):
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name, c.email client_email
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=? AND COALESCE(r.simple_invoice,0)=1
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not r:
+        return "Facture simple introuvable", 404
+
+    total = float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+    con = db()
+    payment_summary = payment_summary_for_repair(con, rid, total)
+    con.close()
+
+    return render_template(
+        "simple_invoice_done.html",
+        r=r,
+        total=total,
+        payment_summary=payment_summary,
+        sumup_enabled=bool(read_sumup_settings().get("enabled")),
+    )
+
+
+MONTH_NAMES = {
+    1: "Janvier",
+    2: "Février",
+    3: "Mars",
+    4: "Avril",
+    5: "Mai",
+    6: "Juin",
+    7: "Juillet",
+    8: "Août",
+    9: "Septembre",
+    10: "Octobre",
+    11: "Novembre",
+    12: "Décembre",
+}
+
+def period_prefix(year, month=0):
+    """Retourne YYYY- ou YYYY-MM- pour les dates ISO de WOPR."""
+    if month:
+        return f"{int(year):04d}-{int(month):02d}-"
+    return f"{int(year):04d}-"
+
+def resolve_period_selection(
+    *,
+    requested_year=None,
+    available_years=None,
+    default_all_year=False,
+    search_active=False,
+):
+    """
+    Source unique pour les filtres année/mois de WOPR.
+
+    Règles :
+    - année courante + vue normale : mois courant par défaut ;
+    - année d'archive : toute l'année par défaut ;
+    - vue métier globale : toute l'année par défaut ;
+    - month=0 : « Toute l'année » explicite ;
+    - un mois choisi explicitement est conservé ;
+    - search_active neutralise le mois automatique.
+    """
+    current = now()
+    current_year = current.year
+
+    try:
+        year = int(requested_year if requested_year not in (None, "") else current_year)
+    except (TypeError, ValueError):
+        year = current_year
+
+    if available_years is not None:
+        valid_years = {int(y) for y in available_years}
+        if year not in valid_years:
+            year = current_year if current_year in valid_years else (
+                max(valid_years) if valid_years else current_year
+            )
+
+    raw_month = request.args.get("month")
+    explicit_month = raw_month not in (None, "")
+
+    if search_active:
+        selected_month = 0
+    elif explicit_month:
+        try:
+            selected_month = int(raw_month)
+        except (TypeError, ValueError):
+            selected_month = 0
+        if selected_month not in range(1, 13):
+            selected_month = 0
+    elif default_all_year:
+        selected_month = 0
+    elif year == current_year:
+        selected_month = current.month
+    else:
+        selected_month = 0
+
+    return year, selected_month
+
+def date_is_in_period(value, year, month=0):
+    """Teste l'appartenance d'une date texte ISO à une période."""
+    return str(value or "").startswith(period_prefix(year, month))
+
+@app.route("/factures")
+def invoices_page():
+    q = " ".join(request.args.get("q", "").split()).strip()
+    unpaid_only = str(request.args.get("unpaid") or "").strip().lower() in {"1", "true", "yes", "oui"}
+    con = db()
+
+    raw_rows = con.execute("""
+        SELECT
+            r.*,
+            c.name AS client_name,
+            c.company AS client_company,
+            c.email AS client_email,
+            (
+                SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                FROM invoice_lines il
+                WHERE il.repair_id=r.id
+            ) AS invoice_lines_total
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.invoice_no),'')<>''
+        ORDER BY r.id
+    """).fetchall()
+
+    grouped = {}
+    for raw in raw_rows:
+        row = dict(raw)
+        key = (row["client_id"], row["invoice_no"])
+        grouped.setdefault(key, {
+            "rows": [],
+            "client_name": row["client_name"],
+            "client_company": row.get("client_company") or "",
+            "client_email": row.get("client_email") or "",
+            "invoice_no": row["invoice_no"],
+        })["rows"].append(row)
+
+    invoices = []
+
+    for group in grouped.values():
+        members = group["rows"]
+        editable = next((x for x in members if not x["legacy_imported"]), None)
+        representative = editable or max(
+            members,
+            key=lambda x: (
+                bool(x.get("accounting_date")),
+                float(x.get("service_amount") or 0) + float(x.get("goods_amount") or 0),
+                str(x.get("received_date") or ""),
+                int(x.get("id") or 0),
+            )
+        )
+
+        # Total : lignes de facture récentes + montants Suivi + montants comptables
+        # + ancien texte de paiement. On prend la meilleure valeur connue.
+        total_candidates = []
+        for x in members:
+            total_candidates.extend([
+                float(x.get("invoice_lines_total") or 0),
+                float(x.get("service_amount") or 0) + float(x.get("goods_amount") or 0),
+                float(x.get("accounting_service_amount") or 0) + float(x.get("accounting_goods_amount") or 0),
+                payment_amount_from_text(x.get("payment_method")),
+            ])
+        invoice_total = max(total_candidates or [0.0])
+
+        # Date de facture depuis le numéro JJMMYYYYHHMM, sinon ligne la plus ancienne.
+        inv_date = invoice_no_date(group["invoice_no"])
+        if not inv_date:
+            date_candidates = sorted({
+                str(x.get("finished_at") or x.get("received_date") or "")[:10]
+                for x in members
+                if x.get("finished_at") or x.get("received_date")
+            })
+            inv_date = date_candidates[0] if date_candidates else ""
+
+        # Date encaissée : une ligne de paiement reportée gagne sur la ligne facture.
+        accounting_dates = sorted({
+            str(x.get("accounting_date") or "")[:10]
+            for x in members if x.get("accounting_date")
+        })
+        accounting_date = accounting_dates[-1] if accounting_dates else ""
+
+        # Si l'ancien groupe est marqué payé mais n'a encore aucune date, dernier filet :
+        # date du numéro de facture. Cela reste purement visuel ; aucun CA n'est déplacé.
+        is_paid = any(bool(x.get("paid")) for x in members)
+        deposit_amount = max(
+            [max(0.0, float(x.get("deposit_amount") or 0)) for x in members] or [0.0]
+        )
+        amount_paid = invoice_total if is_paid else min(invoice_total, deposit_amount)
+        remaining_amount = max(0.0, invoice_total - amount_paid)
+        if remaining_amount <= 0 and invoice_total > 0:
+            is_paid = True
+        if not accounting_date and is_paid:
+            accounting_date = inv_date
+
+        # Mode : uniquement les codes reconnus. Jamais de montant dans cette colonne.
+        modes = []
+        for x in members:
+            structured = normalize_payment_mode(x.get("payment_mode"))
+            if structured and structured != "MIXTE" and structured not in modes:
+                modes.append(structured)
+            deposit_structured = normalize_payment_mode(x.get("deposit_payment_mode"))
+            if deposit_structured and deposit_structured != "MIXTE" and deposit_structured not in modes:
+                modes.append(deposit_structured)
+            for detected in payment_modes_from_text(x.get("payment_method")):
+                if detected not in modes:
+                    modes.append(detected)
+
+        # Si une facture a déjà été modifiée dans l'éditeur, ses invoice_lines
+        # deviennent la source de vérité visuelle pour le total de la facture.
+        edited_line_totals = [
+            float(x.get("invoice_lines_total") or 0)
+            for x in members
+            if float(x.get("invoice_lines_total") or 0) > 0
+        ]
+        if edited_line_totals:
+            invoice_total = max(edited_line_totals)
+
+        payment_info = payment_breakdown_info(
+            representative.get("payment_mode") or "",
+            representative.get("payment_detail") or "",
+            representative.get("payment_method") or ""
+        )
+        if payment_info["is_mixed"]:
+            parts_text = []
+            for mode in ("ESP", "CB", "VIR", "PAY", "BTC", "CHQ"):
+                amount = float(payment_info["parts"].get(mode) or 0)
+                if amount > 0:
+                    parts_text.append(
+                        f"{amount:.2f} € {mode}".replace(".", ",")
+                    )
+            if parts_text:
+                payment_mode_display = "Mixte · " + " + ".join(parts_text)
+            else:
+                payment_mode_display = "Mixte"
+        else:
+            payment_mode_display = " + ".join(modes)
+
+        invoice = {
+            "id": representative["id"],
+            "invoice_no": group["invoice_no"],
+            "client_name": group["client_name"],
+            "client_company": group.get("client_company") or "",
+            "client_email": group.get("client_email") or "",
+            "invoice_date": inv_date,
+            "invoice_total": invoice_total,
+            "deposit_amount": deposit_amount,
+            "amount_paid": amount_paid,
+            "remaining_amount": remaining_amount,
+            "payment_mode_display": payment_mode_display,
+            "accounting_date": accounting_date,
+            "accounting_status": "red" if not is_paid else representative.get("accounting_status"),
+            "legacy_imported": 0 if editable else 1,
+            "historical": 0 if editable else 1,
+            "simple_invoice": int(representative.get("simple_invoice") or 0),
+            "sumup_payment_url": str(representative.get("sumup_payment_url") or "").strip(),
+            "sumup_transaction_id": str(representative.get("sumup_transaction_id") or "").strip(),
+            "sumup_transaction_code": str(representative.get("sumup_transaction_code") or "").strip(),
+        }
+
+        invoice["is_paid"] = is_paid
+        invoices.append(invoice)
+
+    archived_rows = con.execute("""
+        SELECT *
+        FROM archived_invoices
+        ORDER BY invoice_date DESC, invoice_no DESC
+    """).fetchall()
+
+    superseded_invoice_nos = {
+        canonical_client_invoice_no(str(x["supersedes_invoice_no"] or "").strip())
+        for x in archived_rows
+        if str(x["supersedes_invoice_no"] or "").strip()
+    }
+
+    # Une facture remplacée reste dans les archives/PDF mais n'est plus une
+    # facture active dans la liste normale.
+    if superseded_invoice_nos:
+        invoices = [
+            inv for inv in invoices
+            if canonical_client_invoice_no(str(inv.get("invoice_no") or "").strip())
+               not in superseded_invoice_nos
+        ]
+
+    existing_invoice_nos_for_archived = {
+        canonical_client_invoice_no(str(inv.get("invoice_no") or "").strip())
+        for inv in invoices
+        if str(inv.get("invoice_no") or "").strip()
+    }
+
+    for ar in archived_rows:
+        invoice_no = canonical_client_invoice_no(ar["invoice_no"])
+        if not re.fullmatch(r"\d{12}", invoice_no or ""):
+            continue
+        if invoice_no in existing_invoice_nos_for_archived:
+            continue
+
+        pdf = find_client_invoice_pdf(invoice_no, ar["client_name"] or "")
+        if not pdf or not pdf.exists():
+            continue
+
+        paid = bool(ar["paid"])
+        invoices.append({
+            "id": None,
+            "archived_meta": True,
+            "invoice_no": invoice_no,
+            "client_name": str(ar["client_name"] or ""),
+            "client_email": "",
+            "invoice_date": str(ar["invoice_date"] or "")[:10],
+            "invoice_total": float(ar["invoice_total"] or 0),
+            "payment_mode_display": str(ar["payment_mode"] or ""),
+            "accounting_date": str(ar["accounting_date"] or "")[:10],
+            "accounting_status": "normal" if paid else "red",
+            "legacy_imported": 1,
+            "historical": 1,
+            "simple_invoice": 0,
+            "sumup_payment_url": "",
+            "sumup_transaction_id": "",
+            "sumup_transaction_code": "",
+            "is_paid": paid,
+            "pdf_name": pdf.name,
+            "notes": str(ar["notes"] or ""),
+            "supersedes_invoice_no": str(ar["supersedes_invoice_no"] or ""),
+        })
+
+    invoices.sort(
+        key=lambda x: (str(x["invoice_date"] or ""), str(x["invoice_no"] or ""), int(x["id"] or 0)),
+        reverse=True
+    )
+
+    # Total général de TOUS les impayés, toutes années et périodes confondues.
+    # Pour une facture avec acompte, on additionne uniquement le reste à payer.
+    unpaid_grand_total = round(sum(
+        max(
+            0.0,
+            float(
+                inv.get("remaining_amount")
+                if inv.get("remaining_amount") is not None
+                else inv.get("invoice_total") or 0
+            )
+        )
+        for inv in invoices
+        if not bool(inv.get("is_paid"))
+    ), 2)
+    unpaid_grand_count = sum(1 for inv in invoices if not bool(inv.get("is_paid")))
+
+    current_year = now().year
+    available_years = sorted(
+        {current_year} | {
+            int(str(inv.get("invoice_date") or "")[:4])
+            for inv in invoices
+            if str(inv.get("invoice_date") or "")[:4].isdigit()
+        },
+        reverse=True,
+    )
+    year, selected_month = resolve_period_selection(
+        requested_year=request.args.get("year"),
+        available_years=available_years,
+        default_all_year=unpaid_only,
+        search_active=bool(q),
+    )
+    archive_years = [y for y in available_years if y != current_year]
+
+    year_invoices = [
+        inv for inv in invoices
+        if date_is_in_period(inv.get("invoice_date"), year)
+    ]
+
+    # Une recherche ne doit jamais être limitée à la période affichée.
+    # Sans recherche, toutes les pages utilisent la même logique de période.
+    period_invoices = [
+        inv for inv in year_invoices
+        if date_is_in_period(inv.get("invoice_date"), year, selected_month)
+    ]
+    invoice_search_source = invoices if q else period_invoices
+
+    # A query that looks like a price is treated as an exact invoice amount.
+    # Examples: 12, 12€, 12 €, 12,00, 12.00, =12
+    amount_query = None
+    if q:
+        raw_q = q.strip().replace("\u00a0", " ")
+        has_currency = bool(re.search(r"(?:€|eur)\s*$", raw_q, flags=re.IGNORECASE))
+        has_decimal = bool(re.search(r"[,.]\d{1,2}\s*(?:€|eur)?\s*$", raw_q, flags=re.IGNORECASE))
+        explicit_amount = raw_q.startswith("=")
+
+        amount_text = re.sub(r"^=\s*", "", raw_q)
+        amount_text = re.sub(r"\s*(?:€|eur)\s*$", "", amount_text, flags=re.IGNORECASE)
+        amount_text = amount_text.strip().replace(" ", "").replace(",", ".")
+
+        # Long all-digit values are invoice numbers (JJMMYYYYHHMM), not amounts.
+        # Short numeric values remain convenient amount searches: 12 -> 12,00 €.
+        looks_like_invoice_no = bool(re.fullmatch(r"\d{8,}", amount_text))
+        looks_like_amount = bool(re.fullmatch(r"\d+(?:\.\d{1,2})?", amount_text))
+
+        if looks_like_amount and (explicit_amount or has_currency or has_decimal or not looks_like_invoice_no):
+            try:
+                amount_query = round(float(amount_text), 2)
+            except ValueError:
+                amount_query = None
+
+    filtered_invoices = []
+    for invoice in invoice_search_source:
+        if q:
+            if amount_query is not None:
+                if abs(float(invoice["invoice_total"] or 0) - amount_query) >= 0.005:
+                    continue
+            else:
+                haystack = " ".join([
+                    str(invoice["invoice_no"]), str(invoice["client_name"]),
+                    str(invoice["invoice_date"]), str(invoice["invoice_total"]),
+                    str(invoice["payment_mode_display"]), str(invoice["accounting_date"]),
+                ]).casefold()
+                if q.casefold() not in haystack:
+                    continue
+        if unpaid_only and invoice.get("is_paid"):
+            continue
+        filtered_invoices.append(invoice)
+
+
+    # Ajoute les vraies factures historiques connues dans Achats/Ventes + PDF
+    # lorsqu'elles ne sont liées à aucun dossier repairs. Elles doivent rester
+    # visibles dans Factures sans créer artificiellement une réparation.
+    if not unpaid_only:
+        existing_invoice_nos = {
+            canonical_client_invoice_no(str(inv.get("invoice_no") or "").strip())
+            for inv in invoices
+            if str(inv.get("invoice_no") or "").strip()
+        }
+        superseded_invoice_nos = {
+            canonical_client_invoice_no(str(x["supersedes_invoice_no"] or "").strip())
+            for x in con.execute("""
+                SELECT supersedes_invoice_no
+                FROM archived_invoices
+                WHERE COALESCE(TRIM(supersedes_invoice_no),'')<>''
+            """).fetchall()
+        }
+
+        ledger_sql = """
+            SELECT le.*
+            FROM ledger_entries le
+            WHERE lower(COALESCE(le.operation,''))='vente'
+              AND COALESCE(TRIM(le.invoice_no),'')<>''
+        """
+        ledger_params = []
+
+        if not q:
+            ledger_sql += " AND substr(COALESCE(le.entry_date,''),1,4)=?"
+            ledger_params.append(str(year))
+            if selected_month:
+                ledger_sql += " AND substr(COALESCE(le.entry_date,''),6,2)=?"
+                ledger_params.append(f"{selected_month:02d}")
+
+        ledger_sql += " ORDER BY le.entry_date DESC, le.id DESC"
+
+        for le in con.execute(ledger_sql, tuple(ledger_params)).fetchall():
+            invoice_no = canonical_client_invoice_no(le["invoice_no"])
+            if not re.fullmatch(r"\d{12}", invoice_no or ""):
+                continue
+            if invoice_no in existing_invoice_nos or invoice_no in superseded_invoice_nos:
+                continue
+
+            amount = float(le["amount_ttc"] or 0)
+
+            if q:
+                if amount_query is not None:
+                    if abs(amount - amount_query) >= 0.005:
+                        continue
+                else:
+                    haystack = " ".join([
+                        invoice_no,
+                        str(le["party"] or ""),
+                        str(le["entry_date"] or ""),
+                        str(amount),
+                        str(le["payment_type"] or ""),
+                        str(le["remarks"] or ""),
+                    ]).casefold()
+                    if q.casefold() not in haystack:
+                        continue
+
+            pdf = find_client_invoice_pdf(invoice_no, le["party"] or "")
+            if not pdf or not pdf.exists():
+                continue
+
+            invoice_date = str(le["entry_date"] or "")[:10]
+            filtered_invoices.append({
+                "id": None,
+                "ledger_only": True,
+                "ledger_id": int(le["id"]),
+                "invoice_no": invoice_no,
+                "client_name": str(le["party"] or ""),
+                "client_email": "",
+                "invoice_date": invoice_date,
+                "invoice_total": amount,
+                "payment_mode_display": str(le["payment_type"] or ""),
+                "accounting_date": invoice_date,
+                "accounting_status": "normal",
+                "historical": True,
+                "simple_invoice": False,
+                "is_paid": True,
+                "sumup_payment_url": "",
+                "sumup_transaction_id": "",
+                "sumup_transaction_code": "",
+                "pdf_name": pdf.name,
+                "remarks": str(le["remarks"] or ""),
+            })
+
+        filtered_invoices.sort(
+            key=lambda inv: (
+                str(inv.get("invoice_date") or ""),
+                str(inv.get("invoice_no") or "")
+            ),
+            reverse=True
+        )
+
+    today = now().date()
+    week_start = today - timedelta(days=today.weekday())
+    invoice_stats = {
+        "total": len(year_invoices),
+        "week": 0,
+        "month": 0,
+        "year": len(year_invoices),
+        "pdf": 0,
+    }
+
+    if year == current_year:
+        for invoice in year_invoices:
+            try:
+                d = datetime.strptime(str(invoice.get("invoice_date") or "")[:10], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if week_start <= d <= today:
+                invoice_stats["week"] += 1
+            if d.year == today.year and d.month == today.month:
+                invoice_stats["month"] += 1
+
+    # Compte les PDF de factures correspondant à l'année affichée à partir du
+    # numéro de facture quand il contient une date JJMMYYYYHHMM.
+    if FACTURES_ROOT.exists():
+        year_token = str(year)
+        invoice_stats["pdf"] = sum(
+            1
+            for pdf in FACTURES_ROOT.rglob("*.pdf")
+            if "fournisseurs" not in {part.casefold() for part in pdf.parts}
+            and year_token in pdf.stem
+        )
+
+    # Même source que la page de maintenance : le bouton n'apparaît que
+    # lorsqu'au moins une vraie facture orpheline est actuellement détectée.
+    orphan_invoice_count = len(_collect_orphan_invoices(con))
+
+    con.close()
+
+    return render_template(
+        "invoices.html",
+        invoices=filtered_invoices,
+        q=q,
+        amount_query=amount_query,
+        unpaid_only=unpaid_only,
+        invoice_stats=invoice_stats,
+        year=year,
+        current_year=current_year,
+        archive_years=archive_years,
+        selected_month=selected_month,
+        month_names=MONTH_NAMES,
+        search_all_years=bool(q),
+        sumup_enabled=bool(read_sumup_settings().get("enabled")),
+        orphan_invoice_count=orphan_invoice_count,
+        unpaid_grand_total=unpaid_grand_total,
+        unpaid_grand_count=unpaid_grand_count,
+    )
+
+
+@app.route("/repair/<int:rid>/invoice/sumup", methods=["GET", "POST"])
+def invoice_sumup_link(rid):
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("L'intégration SumUp est désactivée. Active-la dans Sécurité.")
+        return redirect(url_for("security_page") + "#sumup-integration")
+
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not r:
+        con.close()
+        return "Dossier introuvable", 404
+    if not r["invoice_no"]:
+        con.close()
+        flash("Aucune facture n'est encore créée pour ce dossier.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    # Total réellement affiché/utilisé pour cette facture.
+    line_total = con.execute("""
+        SELECT COALESCE(SUM(COALESCE(quantity,0) * COALESCE(unit_price,0)), 0)
+        FROM invoice_lines WHERE repair_id=?
+    """, (rid,)).fetchone()[0]
+    invoice_total = float(line_total or 0)
+    if invoice_total <= 0:
+        invoice_total = float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+
+    cancel_url = url_for("invoices_page")
+    if request.method == "POST":
+        action = request.form.get("sumup_action", "save")
+        if action == "remove":
+            con.execute("UPDATE repairs SET sumup_payment_url='' WHERE id=?", (rid,))
+            con.commit()
+            con.close()
+            audit_event("SUMUP_LINK_REMOVED", f"Facture {r['invoice_no']}", request.remote_addr)
+            flash(f"Lien SumUp retiré de la facture {r['invoice_no']}.")
+            return redirect(cancel_url)
+
+        payment_url = request.form.get("sumup_payment_url", "").strip()
+        if not valid_payment_link(payment_url):
+            con.close()
+            flash("Lien de paiement invalide : utilise une adresse HTTPS complète.")
+            return redirect(url_for("invoice_sumup_link", rid=rid))
+
+        con.execute("UPDATE repairs SET sumup_payment_url=? WHERE id=?", (payment_url, rid))
+        con.commit()
+        con.close()
+        audit_event("SUMUP_LINK_SAVED", f"Facture {r['invoice_no']}", request.remote_addr)
+        flash(f"Lien SumUp enregistré pour la facture {r['invoice_no']}.")
+        return redirect(cancel_url)
+
+    con.close()
+    return render_template(
+        "invoice_sumup.html",
+        r=r,
+        sumup_amount=invoice_total,
+        cancel_url=cancel_url,
+    )
+
+
+
+def send_pdf_with_title(path, title, download_name=None, as_attachment=False):
+    """Envoie un PDF sans modifier l'original, en affichage ou téléchargement."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+
+        reader = PdfReader(str(path))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+
+        metadata = {}
+        try:
+            if reader.metadata:
+                metadata = {
+                    str(k): str(v)
+                    for k, v in reader.metadata.items()
+                    if k and v is not None
+                }
+        except Exception:
+            metadata = {}
+        metadata["/Title"] = str(title or "").strip()
+        writer.add_metadata(metadata)
+
+        bio = io.BytesIO()
+        writer.write(bio)
+        bio.seek(0)
+        return send_file(
+            bio,
+            mimetype="application/pdf",
+            as_attachment=as_attachment,
+            download_name=download_name or Path(path).name,
+        )
+    except Exception as exc:
+        app.logger.warning("Impossible de corriger le titre PDF de %s: %s", path, exc)
+        return send_file(
+            path,
+            mimetype="application/pdf",
+            as_attachment=as_attachment,
+            download_name=download_name or Path(path).name,
+        )
+
+
+
+
+def _sumup_invoice_total_from_members(members):
+    """
+    Total de facture utilisé uniquement pour le rapprochement SumUp.
+
+    Priorités :
+    1. invoice_lines : si une facture a été reconstruite/modifiée dans WOPR,
+       ses lignes sont la source de vérité.
+    2. montants comptables historiques : ils représentent le CA réellement
+       affecté à la facture.
+    3. ancien texte de règlement quand il contient un montant exploitable.
+    4. anciens montants Suivi service + marchandises.
+
+    On évite volontairement max(toutes les sources), qui pouvait transformer
+    138 € en 207 € lorsqu'une vieille ligne historique avait déjà réintégré
+    une des composantes de la facture.
+    """
+    members = [dict(x) for x in (members or [])]
+
+    line_totals = [
+        round(float(x.get("line_total") or x.get("invoice_lines_total") or 0), 2)
+        for x in members
+        if float(x.get("line_total") or x.get("invoice_lines_total") or 0) > 0
+    ]
+    if line_totals:
+        return max(line_totals), "lignes de facture"
+
+    accounting_totals = [
+        round(
+            float(x.get("accounting_service_amount") or 0)
+            + float(x.get("accounting_goods_amount") or 0),
+            2
+        )
+        for x in members
+        if (
+            float(x.get("accounting_service_amount") or 0)
+            + float(x.get("accounting_goods_amount") or 0)
+        ) > 0
+    ]
+    if accounting_totals:
+        return max(accounting_totals), "montants comptables"
+
+    payment_totals = []
+    for x in members:
+        try:
+            amount = float(payment_amount_from_text(x.get("payment_method")) or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            payment_totals.append(round(amount, 2))
+    if payment_totals:
+        return max(payment_totals), "ancien règlement"
+
+    followup_totals = [
+        round(
+            float(x.get("service_amount") or 0)
+            + float(x.get("goods_amount") or 0),
+            2
+        )
+        for x in members
+        if (
+            float(x.get("service_amount") or 0)
+            + float(x.get("goods_amount") or 0)
+        ) > 0
+    ]
+    return (max(followup_totals), "anciens montants Suivi") if followup_totals else (0.0, "aucun montant")
+
+
+
+def _sumup_invoice_amount_options(members):
+    """
+    Montants historiques plausibles connus pour une facture, sans additionner
+    des représentations différentes entre elles.
+    """
+    members = [dict(x) for x in (members or [])]
+    options = []
+
+    def add(amount, source):
+        try:
+            amount = round(float(amount or 0), 2)
+        except Exception:
+            return
+        if amount <= 0:
+            return
+        if not any(abs(amount - x["amount"]) < 0.005 for x in options):
+            options.append({"amount": amount, "source": source})
+
+    for x in members:
+        add(x.get("line_total") or x.get("invoice_lines_total") or 0, "lignes de facture")
+    for x in members:
+        add(
+            float(x.get("accounting_service_amount") or 0)
+            + float(x.get("accounting_goods_amount") or 0),
+            "montants comptables"
+        )
+    for x in members:
+        try:
+            add(payment_amount_from_text(x.get("payment_method")) or 0, "ancien règlement")
+        except Exception:
+            pass
+    for x in members:
+        add(
+            float(x.get("service_amount") or 0)
+            + float(x.get("goods_amount") or 0),
+            "anciens montants Suivi"
+        )
+    return options
+
+
+def _sumup_invoice_candidates():
+    """
+    Candidate pool for SumUp reconciliation.
+    Includes paid + unpaid invoices because historical WOPR/ODS rows may already
+    contain a payment date even when no SumUp transaction id was stored yet.
+    """
+    con = db()
+    rows = con.execute("""
+        SELECT r.*, c.name AS client_name,
+               (
+                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                 FROM invoice_lines il WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(trim(r.invoice_no),'')<>''
+        ORDER BY r.id DESC
+    """).fetchall()
+    con.close()
+
+    grouped = {}
+    for raw in rows:
+        r = dict(raw)
+        key = (r["client_id"], r["invoice_no"])
+        grouped.setdefault(key, []).append(r)
+
+    result = []
+    for members in grouped.values():
+        # Inclure aussi les factures non encore marquées payées : une vente CB
+        # fraîchement encaissée sur le terminal doit pouvoir être reconnue par
+        # SumUp avant que WOPR ait déjà renseigné paid/accounting_date.
+        # La sécurité du rattachement automatique est assurée plus bas : montant
+        # exact + transaction POS réussie + facture unique du même jour.
+        rep = next((x for x in members if not x.get("legacy_imported")), members[0])
+        total, total_source = _sumup_invoice_total_from_members(members)
+
+        # If any row of the same invoice is already linked to SumUp, exclude it
+        # from new candidate suggestions.
+        already_linked = any(str(x.get("sumup_transaction_id") or "").strip() for x in members)
+
+        payment_info = payment_breakdown_info(
+            rep.get("payment_mode") or "",
+            rep.get("payment_detail") or "",
+            rep.get("payment_method") or ""
+        )
+        payment_mode = payment_info["mode"]
+        cb_part = payment_info["cb_part"]
+
+        # For current OR historical mixed payments, SumUp represents only
+        # the CB portion.
+        match_amount = cb_part if payment_info["is_mixed"] and cb_part > 0 else total
+
+        result.append({
+            "id": int(rep["id"]),
+            "invoice_no": str(rep.get("invoice_no") or ""),
+            "client_name": str(rep.get("client_name") or ""),
+            "invoice_date": str(rep.get("invoice_date") or ""),
+            "accounting_date": str(rep.get("accounting_date") or ""),
+            "paid": bool(rep.get("paid")),
+            "payment_mode": payment_mode,
+            "invoice_total": round(total, 2),
+            "invoice_total_source": total_source,
+            "amount_options": _sumup_invoice_amount_options(members),
+            "cb_part": round(cb_part, 2),
+            "match_amount": round(match_amount, 2),
+            "already_linked": already_linked,
+        })
+    return result
+
+
+def _sumup_rank_candidates(tx, candidates):
+    """
+    Returns candidates sorted by confidence.
+    Hard rule: exact amount.
+    Strongest signal: existing accounting/payment date equals SumUp date.
+    Then invoice date proximity. Automatic linking is handled separately and
+    only for one unique, exact, same-day CB candidate.
+    """
+    amount = float(tx.get("amount") or 0)
+
+    tx_date = None
+    raw_ts = str(tx.get("timestamp") or "").strip()
+    if raw_ts:
+        try:
+            tx_date = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).date()
+        except Exception:
+            tx_date = None
+
+    ranked = []
+    for c in candidates:
+        if c.get("already_linked"):
+            continue
+
+        option_match = next(
+            (
+                opt for opt in (c.get("amount_options") or [])
+                if abs(float(opt.get("amount") or 0) - amount) < 0.005
+            ),
+            None
+        )
+        if option_match:
+            c = dict(c)
+            c["match_amount"] = float(option_match.get("amount") or c.get("match_amount") or 0)
+            c["invoice_total_source"] = option_match.get("source") or c.get("invoice_total_source")
+
+        if abs(float(c["match_amount"]) - amount) >= 0.005:
+            continue
+
+        invoice_date = None
+        accounting_date = None
+
+        raw_invoice_date = str(c.get("invoice_date") or "").strip()
+        if raw_invoice_date:
+            try:
+                invoice_date = date.fromisoformat(raw_invoice_date[:10])
+            except Exception:
+                pass
+
+        raw_accounting_date = str(c.get("accounting_date") or "").strip()
+        if raw_accounting_date:
+            try:
+                accounting_date = date.fromisoformat(raw_accounting_date[:10])
+            except Exception:
+                pass
+
+        score = 0
+        reasons = []
+
+        if tx_date and accounting_date:
+            delta_pay = abs((tx_date - accounting_date).days)
+            if delta_pay == 0:
+                score += 100
+                reasons.append("date d'encaissement exacte")
+            elif delta_pay <= 1:
+                score += 70
+                reasons.append("encaissement à ±1 jour")
+            elif delta_pay <= 3:
+                score += 40
+                reasons.append("encaissement proche")
+            else:
+                # Existing payment date strongly disagrees with this SumUp tx.
+                continue
+
+        if tx_date and invoice_date:
+            delta_inv = (tx_date - invoice_date).days
+
+            # Payment before invoice by more than 2 days is suspicious;
+            # payment more than 45 days later is too broad for auto suggestion.
+            if delta_inv < -2 or delta_inv > 45:
+                if not accounting_date:
+                    continue
+            else:
+                proximity = max(0, 30 - abs(delta_inv))
+                score += proximity
+                if delta_inv == 0:
+                    reasons.append("même jour que la facture")
+                elif abs(delta_inv) <= 2:
+                    reasons.append("facture à ±2 jours")
+                elif abs(delta_inv) <= 7:
+                    reasons.append("facture proche")
+
+        if c.get("paid"):
+            score += 5
+            if accounting_date:
+                reasons.append("déjà marquée payée dans WOPR")
+
+        # Keep exact-amount historical candidates even if date data is sparse.
+        ranked.append({
+            **c,
+            "_score": score,
+            "_reasons": reasons,
+        })
+
+    ranked.sort(
+        key=lambda c: (
+            int(c.get("_score") or 0),
+            str(c.get("accounting_date") or ""),
+            str(c.get("invoice_date") or "")
+        ),
+        reverse=True
+    )
+
+    # Only candidates plausibly close enough should be presented first.
+    # Keep max 6 to avoid a giant dropdown on recurring amounts like 30 €.
+    return ranked[:6]
+
+
+def _sumup_auto_link_safe(tx, candidate):
+    """Rattache une CB uniquement quand la correspondance est sans ambiguïté.
+
+    Cette routine ne traite pas l'historique différemment : elle est appelée
+    seulement pour une transaction SUCCESSFUL, un montant exact, une date
+    d'encaissement exacte et un candidat unique.
+    """
+    transaction_id = str(tx.get("id") or tx.get("transaction_id") or "").strip()
+    if not transaction_id or not candidate:
+        return False
+    ts = str(tx.get("timestamp") or "").strip()
+    try:
+        pay_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pay_date = pay_dt.date()
+    except Exception:
+        return False
+
+    con = db()
+    already = con.execute(
+        "SELECT 1 FROM repairs WHERE COALESCE(sumup_transaction_id,'')=? LIMIT 1",
+        (transaction_id,),
+    ).fetchone()
+    if already:
+        con.close()
+        return False
+    row = con.execute("SELECT * FROM repairs WHERE id=?", (int(candidate["id"]),)).fetchone()
+    if not row or str(row["invoice_no"] or "").strip() != str(candidate.get("invoice_no") or "").strip():
+        con.close()
+        return False
+
+    if not int(row["paid"] or 0):
+        fy, fm = row["followup_year"], row["followup_month"]
+        acc_status = "yellow" if fy and fm and (int(fy), int(fm)) != (pay_date.year, pay_date.month) else "normal"
+        con.execute("""
+            UPDATE repairs SET
+                paid=1, payment_mode='CB', payment_method='CB',
+                accounting_year=?, accounting_month=?, accounting_date=?,
+                accounting_status=?, accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
+            WHERE id=?
+        """, (pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(row["id"])))
+
+    con.execute("""
+        UPDATE repairs SET
+            sumup_payment_url='', sumup_transaction_id=?,
+            sumup_transaction_code=?, sumup_transaction_at=?, sumup_payment_type=?
+        WHERE id=?
+    """, (
+        str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+        str(tx.get("transaction_code") or ""), ts,
+        str(tx.get("payment_type") or tx.get("entry_mode") or ""), int(row["id"]),
+    ))
+    con.execute("DELETE FROM sumup_transaction_classifications WHERE transaction_id=?", (transaction_id,))
+    con.commit()
+    con.close()
+    audit_event(
+        "SUMUP_TRANSACTION_AUTO_LINK",
+        f"repair_id={row['id']}; invoice={row['invoice_no']}; tx={transaction_id}; amount={float(tx.get('amount') or 0):.2f}",
+    )
+    return True
+
+
+
+
+@app.route("/sumup/transactions")
+def sumup_transactions_page():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("L'intégration SumUp est désactivée. Active-la dans Sécurité.")
+        return redirect(url_for("security_page") + "#sumup-integration")
+    if not settings.get("api_key") or not settings.get("merchant_code"):
+        flash("Configure la clé API et le Merchant code SumUp dans Sécurité.")
+        return redirect(url_for("security_page") + "#sumup-integration")
+
+    today = now().date()
+
+    # Default: current month. Custom from/to dates override year/month.
+    raw_from = str(request.args.get("from_date") or "").strip()
+    raw_to = str(request.args.get("to_date") or "").strip()
+    selected_year = request.args.get("year", type=int)
+    selected_month = request.args.get("month", type=int)
+
+    if raw_from or raw_to:
+        try:
+            date_from = date.fromisoformat(raw_from) if raw_from else today.replace(day=1)
+            date_to = date.fromisoformat(raw_to) if raw_to else today
+        except ValueError:
+            flash("Période SumUp invalide.")
+            return redirect(url_for("sumup_transactions_page"))
+        if date_to < date_from:
+            date_from, date_to = date_to, date_from
+        period_mode = "custom"
+    else:
+        year = selected_year if selected_year and 2000 <= selected_year <= 2100 else today.year
+        month = selected_month if selected_month and 1 <= selected_month <= 12 else today.month
+        date_from = date(year, month, 1)
+        if month == 12:
+            next_month_date = date(year + 1, 1, 1)
+        else:
+            next_month_date = date(year, month + 1, 1)
+        date_to = next_month_date - timedelta(days=1)
+        period_mode = "month"
+
+    # Navigation month boundaries.
+    first_month = date(date_from.year, date_from.month, 1)
+    prev_last = first_month - timedelta(days=1)
+    prev_year, prev_month = prev_last.year, prev_last.month
+    if first_month.month == 12:
+        next_year, next_month = first_month.year + 1, 1
+    else:
+        next_year, next_month = first_month.year, first_month.month + 1
+
+    channel = str(request.args.get("channel") or "ALL").strip().upper()
+    if channel not in {"ALL", "POS", "ECOM"}:
+        channel = "ALL"
+
+    try:
+        transactions_all = sumup_transaction_history(date_from, date_to)
+    except Exception as exc:
+        flash(f"Impossible de récupérer les transactions SumUp : {exc}")
+        return redirect(url_for("invoices_page"))
+
+    if channel == "ALL":
+        transactions = transactions_all
+    else:
+        transactions = [
+            tx for tx in transactions_all
+            if str((tx or {}).get("payment_type") or "").upper() == channel
+        ]
+
+    candidates = _sumup_invoice_candidates()
+    con = db()
+    linked_rows = con.execute("""
+        SELECT id, invoice_no, sumup_transaction_id, sumup_transaction_code
+        FROM repairs
+        WHERE COALESCE(sumup_transaction_id,'')<>''
+    """).fetchall()
+    con.close()
+    linked = {
+        str(r["sumup_transaction_id"] or ""): {
+            "rid": int(r["id"]), "invoice_no": str(r["invoice_no"] or ""),
+            "transaction_code": str(r["sumup_transaction_code"] or "")
+        }
+        for r in linked_rows if str(r["sumup_transaction_id"] or "").strip()
+    }
+
+    con = db()
+    class_rows = con.execute("""
+        SELECT transaction_id, transaction_code, classification, note, classified_at
+        FROM sumup_transaction_classifications
+    """).fetchall()
+    con.close()
+    classifications = {
+        str(r["transaction_id"]): {
+            "classification": str(r["classification"] or ""),
+            "note": str(r["note"] or ""),
+            "classified_at": str(r["classified_at"] or ""),
+            "transaction_code": str(r["transaction_code"] or ""),
+        }
+        for r in class_rows
+    }
+
+    prepared = []
+    for tx in transactions:
+        tx = dict(tx or {})
+        tx_id = str(tx.get("id") or tx.get("transaction_id") or "").strip()
+        amount = float(tx.get("amount") or 0)
+        ranked = _sumup_rank_candidates(tx, candidates)
+
+        best = ranked[0] if ranked else None
+        second = ranked[1] if len(ranked) > 1 else None
+
+        # "Strong" means we can safely propose a one-click confirmation:
+        # score >= 60 and clearly ahead of the second candidate.
+        best_score = int(best.get("_score") or 0) if best else 0
+        second_score = int(second.get("_score") or 0) if second else -999
+        strong = bool(best and best_score >= 60 and (best_score - second_score) >= 25)
+
+        # Rattachement automatique sans ambiguïté. Deux cas sont acceptés :
+        # 1) facture déjà enregistrée payée : montant exact + date d'encaissement exacte ;
+        # 2) facture fraîchement créée mais pas encore marquée payée : montant exact,
+        #    une seule facture du même jour, transaction SumUp POS réussie.
+        # Dans le second cas, _sumup_auto_link_safe() renseigne lui-même paid, CB,
+        # date comptable et identifiant de transaction SumUp.
+        auto_linked = False
+        auto_candidate = best if (strong and len(ranked) == 1) else None
+
+        fresh_same_day = []
+        tx_date = None
+        raw_ts = str(tx.get("timestamp") or "").strip()
+        if raw_ts:
+            try:
+                tx_date = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).date()
+            except Exception:
+                tx_date = None
+        if tx_date:
+            for candidate in ranked:
+                if candidate.get("paid") or str(candidate.get("accounting_date") or "").strip():
+                    continue
+                try:
+                    candidate_invoice_date = date.fromisoformat(str(candidate.get("invoice_date") or "")[:10])
+                except Exception:
+                    continue
+                if candidate_invoice_date == tx_date:
+                    fresh_same_day.append(candidate)
+
+        # Une facture impayée du jour est sûre seulement si elle est unique pour
+        # ce montant. Les autres factures historiques de même montant ne bloquent
+        # donc pas le cas courant « je facture puis j'encaisse immédiatement ».
+        fresh_candidate = fresh_same_day[0] if len(fresh_same_day) == 1 else None
+
+        successful_pos = (
+            str(tx.get("status") or "").upper() == "SUCCESSFUL"
+            and str(tx.get("payment_type") or tx.get("entry_mode") or "").upper() in {"POS", "CB"}
+            and not linked.get(tx_id)
+            and not classifications.get(tx_id)
+        )
+
+        if successful_pos:
+            if (
+                auto_candidate
+                and int(auto_candidate.get("_score") or 0) >= 100
+                and str(auto_candidate.get("payment_mode") or "").upper() in {"CB", "MIXTE"}
+            ):
+                auto_linked = _sumup_auto_link_safe(tx, auto_candidate)
+            elif fresh_candidate:
+                auto_linked = _sumup_auto_link_safe(tx, fresh_candidate)
+                if auto_linked:
+                    auto_candidate = fresh_candidate
+
+            if auto_linked and auto_candidate:
+                linked[tx_id] = {
+                    "rid": int(auto_candidate["id"]),
+                    "invoice_no": str(auto_candidate.get("invoice_no") or ""),
+                    "transaction_code": str(tx.get("transaction_code") or ""),
+                }
+
+        prepared.append({
+            **tx,
+            "_id": tx_id,
+            "_amount": amount,
+            "_local_datetime": _sumup_local_datetime(tx.get("timestamp")),
+            "_channel": str(tx.get("payment_type") or tx.get("entry_mode") or "AUTRE").upper(),
+            "_linked": linked.get(tx_id),
+            "_auto_linked": auto_linked,
+            "_classification": classifications.get(tx_id),
+            "_candidates": ranked,
+            "_best_candidate": best,
+            "_strong_candidate": best if strong else None,
+        })
+
+    counts = {
+        "all": len(transactions_all),
+        "pos": sum(1 for tx in transactions_all if str((tx or {}).get("payment_type") or "").upper() == "POS"),
+        "ecom": sum(1 for tx in transactions_all if str((tx or {}).get("payment_type") or "").upper() == "ECOM"),
+        "linked": sum(1 for tx in prepared if tx.get("_linked")),
+        "successful_unlinked": sum(
+            1 for tx in prepared
+            if str(tx.get("status") or "").upper() == "SUCCESSFUL"
+            and not tx.get("_linked")
+            and not (
+                tx.get("_classification")
+                and tx["_classification"].get("classification") == "outside_wopr"
+            )
+        ),
+        "outside": sum(
+            1 for tx in prepared
+            if tx.get("_classification")
+            and tx["_classification"].get("classification") == "outside_wopr"
+        ),
+    }
+
+    month_names = [
+        "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+        "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+    ]
+    if period_mode == "month":
+        period_label = f"{month_names[date_from.month]} {date_from.year}"
+    else:
+        period_label = f"{date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')}"
+
+    return render_template(
+        "sumup_transactions.html",
+        transactions=prepared,
+        merchant_code=str(settings.get("merchant_code") or ""),
+        date_from=date_from.isoformat(),
+        date_to=date_to.isoformat(),
+        period_label=period_label,
+        period_mode=period_mode,
+        channel=channel,
+        counts=counts,
+        prev_year=prev_year,
+        prev_month=prev_month,
+        next_year=next_year,
+        next_month=next_month,
+        current_month=(today.year == date_from.year and today.month == date_from.month and period_mode == "month"),
+    )
+
+
+
+def _sumup_transactions_redirect_from_form():
+    """Return to the same SumUp period/filter and transaction row after a POST action."""
+    from_date = str(request.form.get("return_from_date") or "").strip()
+    to_date = str(request.form.get("return_to_date") or "").strip()
+    channel = str(request.form.get("return_channel") or "ALL").strip().upper()
+    anchor = str(request.form.get("return_anchor") or "").strip()
+    if channel not in {"ALL", "POS", "ECOM"}:
+        channel = "ALL"
+
+    # L'ancre vient uniquement du tableau SumUp. On la filtre pour ne jamais
+    # réinjecter une valeur arbitraire dans l'URL de retour.
+    if not re.fullmatch(r"sumup-tx-[A-Za-z0-9_-]+", anchor):
+        anchor = ""
+
+    kwargs = {"channel": channel}
+    if from_date:
+        kwargs["from_date"] = from_date
+    if to_date:
+        kwargs["to_date"] = to_date
+    if anchor:
+        kwargs["_anchor"] = anchor
+    return redirect(url_for("sumup_transactions_page", **kwargs))
+
+
+@app.route("/sumup/transactions/classify", methods=["POST"])
+def sumup_transaction_classify():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("Intégration SumUp désactivée.")
+        return redirect(url_for("invoices_page"))
+
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    transaction_code = str(request.form.get("transaction_code") or "").strip()
+    action = str(request.form.get("classification_action") or "").strip()
+
+    if not transaction_id:
+        flash("Transaction SumUp manquante.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    if action == "outside":
+        con.execute("""
+            INSERT INTO sumup_transaction_classifications
+                (transaction_id, transaction_code, classification, note, classified_at)
+            VALUES (?, ?, 'outside_wopr', ?, ?)
+            ON CONFLICT(transaction_id) DO UPDATE SET
+                transaction_code=excluded.transaction_code,
+                classification='outside_wopr',
+                note=excluded.note,
+                classified_at=excluded.classified_at
+        """, (
+            transaction_id,
+            transaction_code,
+            str(request.form.get("note") or "").strip(),
+            now().isoformat(timespec="seconds"),
+        ))
+        con.commit()
+        con.close()
+        audit_event(
+            "SUMUP_TRANSACTION_CLASSIFY",
+            f"tx={transaction_id}; code={transaction_code}; classification=outside_wopr",
+            request.remote_addr
+        )
+        flash(f"Transaction SumUp {transaction_code or transaction_id} classée « Hors facture WOPR ».")
+    elif action == "clear":
+        con.execute(
+            "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+            (transaction_id,)
+        )
+        con.commit()
+        con.close()
+        audit_event(
+            "SUMUP_TRANSACTION_CLASSIFY_CLEAR",
+            f"tx={transaction_id}; code={transaction_code}",
+            request.remote_addr
+        )
+        flash(f"Classement retiré pour {transaction_code or transaction_id}.")
+    else:
+        con.close()
+        flash("Classement SumUp inconnu.")
+
+    return _sumup_transactions_redirect_from_form()
+
+
+
+@app.route("/sumup/transactions/link-existing", methods=["POST"])
+def sumup_transaction_link_existing():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("Intégration SumUp désactivée.")
+        return redirect(url_for("invoices_page"))
+
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    transaction_code = str(request.form.get("transaction_code") or "").strip()
+    invoice_no = str(request.form.get("invoice_no") or "").strip()
+    force_amount = str(request.form.get("force_amount") or "").strip().lower() in {"1", "true", "yes", "oui"}
+
+    if not transaction_id or not invoice_no:
+        flash("Transaction SumUp ou numéro de facture manquant.")
+        return _sumup_transactions_redirect_from_form()
+
+    try:
+        tx = sumup_get_transaction(transaction_id)
+    except Exception as exc:
+        flash(f"Transaction SumUp illisible : {exc}")
+        return _sumup_transactions_redirect_from_form()
+
+    if str(tx.get("status") or "").upper() != "SUCCESSFUL":
+        flash("Cette transaction SumUp n'est pas marquée SUCCESSFUL.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    rows = con.execute("""
+        SELECT r.*,
+               (
+                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                 FROM invoice_lines il WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r
+        WHERE trim(COALESCE(r.invoice_no,''))=?
+        ORDER BY r.id DESC
+    """, (invoice_no,)).fetchall()
+
+    if not rows:
+        con.close()
+        flash(f"Facture {invoice_no} introuvable dans WOPR.")
+        return _sumup_transactions_redirect_from_form()
+
+    # Some historical invoices can span several repair rows. Prefer a non-legacy
+    # row for metadata, but calculate the invoice total from the whole group.
+    r = next((row for row in rows if not row["legacy_imported"]), rows[0])
+    invoice_total, invoice_total_source = _sumup_invoice_total_from_members(rows)
+    tx_amount = float(tx.get("amount") or 0)
+
+    amount_options = _sumup_invoice_amount_options(rows)
+    exact_known_amount = next(
+        (opt for opt in amount_options if abs(float(opt["amount"]) - tx_amount) < 0.005),
+        None
+    )
+    if exact_known_amount:
+        invoice_total = float(exact_known_amount["amount"])
+        invoice_total_source = exact_known_amount["source"]
+
+    payment_info = payment_breakdown_info(
+        r["payment_mode"] or "",
+        r["payment_detail"] or "",
+        r["payment_method"] or ""
+    )
+    payment_mode = payment_info["mode"]
+    cb_part = payment_info["cb_part"]
+
+    expected_sumup_amount = (
+        cb_part
+        if payment_info["is_mixed"] and cb_part > 0
+        else invoice_total
+    )
+
+    amount_mismatch = abs(expected_sumup_amount - tx_amount) >= 0.005
+    if amount_mismatch and not force_amount:
+        con.close()
+        if payment_info["is_mixed"] and cb_part > 0:
+            flash(
+                f"Montant différent : facture {invoice_no} = {invoice_total:.2f} € "
+                f"dont {cb_part:.2f} € CB / SumUp = {tx_amount:.2f} €. "
+                "Si tu as vérifié l'encaissement, coche « Forcer »."
+            )
+        else:
+            known_text = ", ".join(
+                f"{opt['amount']:.2f} € ({opt['source']})"
+                for opt in amount_options
+            )
+            suffix = f" Valeurs WOPR connues : {known_text}." if known_text else ""
+            flash(
+                f"Montant différent : facture {invoice_no} = {invoice_total:.2f} € "
+                f"({invoice_total_source}) / SumUp = {tx_amount:.2f} €."
+                f"{suffix} Si tu as vérifié l'encaissement, coche « Forcer »."
+            )
+        return _sumup_transactions_redirect_from_form()
+
+    already = con.execute("""
+        SELECT id, invoice_no
+        FROM repairs
+        WHERE COALESCE(sumup_transaction_id,'')=?
+          AND id<>?
+        LIMIT 1
+    """, (transaction_id, int(r["id"]))).fetchone()
+    if already:
+        con.close()
+        flash(
+            f"Cette transaction SumUp est déjà rattachée à la facture "
+            f"{already['invoice_no']}."
+        )
+        return _sumup_transactions_redirect_from_form()
+
+    ts = str(tx.get("timestamp") or "")
+    try:
+        pay_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pay_date = pay_dt.date()
+    except Exception:
+        pay_date = now().date()
+        ts = now().isoformat(timespec="seconds")
+
+    # Keep the original payment breakdown. A SumUp transaction can be only
+    # the CB part of a MIXTE invoice, so never replace MIXTE by CB.
+    if not int(r["paid"] or 0):
+        fy = r["followup_year"]
+        fm = r["followup_month"]
+        acc_status = "yellow" if (fy and fm and (int(fy), int(fm)) != (pay_date.year, pay_date.month)) else "normal"
+        if payment_info["is_mixed"]:
+            con.execute("""
+                UPDATE repairs SET
+                    paid=1,
+                    accounting_year=?,
+                    accounting_month=?,
+                    accounting_date=?,
+                    accounting_status=?,
+                    accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                    accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
+                WHERE id=?
+            """, (
+                pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(r["id"])
+            ))
+        else:
+            con.execute("""
+                UPDATE repairs SET
+                    paid=1,
+                    payment_mode='CB',
+                    payment_method='CB',
+                    accounting_year=?,
+                    accounting_month=?,
+                    accounting_date=?,
+                    accounting_status=?,
+                    accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                    accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0))
+                WHERE id=?
+            """, (
+                pay_date.year, pay_date.month, pay_date.isoformat(), acc_status, int(r["id"])
+            ))
+
+    con.execute("""
+        UPDATE repairs SET
+            sumup_payment_url='',
+            sumup_transaction_id=?,
+            sumup_transaction_code=?,
+            sumup_transaction_at=?,
+            sumup_payment_type=?
+        WHERE id=?
+    """, (
+        str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+        str(tx.get("transaction_code") or transaction_code),
+        ts,
+        str(tx.get("payment_type") or ""),
+        int(r["id"])
+    ))
+
+    con.execute(
+        "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+        (transaction_id,)
+    )
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_TRANSACTION_LINK_EXISTING",
+        f"repair_id={r['id']}; invoice={invoice_no}; tx={transaction_id}; "
+        f"code={transaction_code}; amount={tx_amount:.2f}; "
+        f"forced_amount_mismatch={1 if amount_mismatch else 0}",
+        request.remote_addr
+    )
+    if amount_mismatch:
+        flash(
+            f"Transaction SumUp {transaction_code or transaction_id} ({tx_amount:.2f} €) "
+            f"rattachée manuellement à la facture {invoice_no} malgré le montant WOPR "
+            f"de {invoice_total:.2f} €."
+        )
+    else:
+        flash(
+            f"Transaction SumUp {transaction_code or transaction_id} rattachée "
+            f"définitivement à la facture {invoice_no}."
+        )
+    return _sumup_transactions_redirect_from_form()
+
+
+
+@app.route("/sumup/transactions/relink-existing", methods=["POST"])
+def sumup_transaction_relink_existing():
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    transaction_code = str(request.form.get("transaction_code") or "").strip()
+    invoice_no = str(request.form.get("invoice_no") or "").strip()
+
+    if not transaction_id or not invoice_no:
+        flash("Transaction SumUp ou numéro de facture manquant.")
+        return _sumup_transactions_redirect_from_form()
+
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("L'intégration SumUp est désactivée.")
+        return _sumup_transactions_redirect_from_form()
+
+    try:
+        tx = sumup_get_transaction(transaction_id)
+    except Exception as exc:
+        flash(f"Impossible de relire la transaction SumUp : {exc}")
+        return _sumup_transactions_redirect_from_form()
+
+    if str(tx.get("status") or "").upper() != "SUCCESSFUL":
+        flash("Rattachement refusé : la transaction SumUp n'est pas SUCCESSFUL.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+
+    current = con.execute("""
+        SELECT id, invoice_no
+        FROM repairs
+        WHERE sumup_transaction_id=?
+        LIMIT 1
+    """, (transaction_id,)).fetchone()
+
+    if not current:
+        con.close()
+        flash("Cette transaction SumUp n'est pas actuellement rattachée.")
+        return _sumup_transactions_redirect_from_form()
+
+    rows = con.execute("""
+        SELECT r.*,
+               COALESCE((
+                   SELECT SUM(quantity * unit_price)
+                   FROM invoice_lines il
+                   WHERE il.repair_id=r.id
+               ), 0) AS line_total
+        FROM repairs r
+        WHERE trim(COALESCE(r.invoice_no,''))=?
+        ORDER BY COALESCE(r.legacy_imported,0), r.id DESC
+    """, (invoice_no,)).fetchall()
+
+    if not rows:
+        con.close()
+        flash(f"Facture {invoice_no} introuvable dans WOPR.")
+        return _sumup_transactions_redirect_from_form()
+
+    target = next((row for row in rows if not row["legacy_imported"]), rows[0])
+
+    # Refuse if target invoice is already linked to another SumUp transaction.
+    existing_target_link = con.execute("""
+        SELECT id, sumup_transaction_id, sumup_transaction_code
+        FROM repairs
+        WHERE trim(COALESCE(invoice_no,''))=?
+          AND COALESCE(sumup_transaction_id,'')<>''
+          AND sumup_transaction_id<>?
+        LIMIT 1
+    """, (invoice_no, transaction_id)).fetchone()
+
+    if existing_target_link:
+        con.close()
+        flash(
+            f"Facture {invoice_no} déjà rattachée à une autre transaction SumUp "
+            f"({existing_target_link['sumup_transaction_code'] or existing_target_link['sumup_transaction_id']})."
+        )
+        return _sumup_transactions_redirect_from_form()
+
+    tx_amount = float(tx.get("amount") or 0)
+
+    # Same historical/plausible amount logic used by normal manual linking.
+    amount_options = _sumup_invoice_amount_options(rows)
+    exact_known_amount = next(
+        (
+            opt for opt in amount_options
+            if abs(float(opt.get("amount") or 0) - tx_amount) < 0.005
+        ),
+        None
+    )
+
+    invoice_total, invoice_total_source = _sumup_invoice_total_from_members(rows)
+    if exact_known_amount:
+        invoice_total = float(exact_known_amount["amount"])
+        invoice_total_source = str(exact_known_amount.get("source") or invoice_total_source)
+
+    payment_info = payment_breakdown_info(
+        target["payment_mode"] or "",
+        target["payment_detail"] or "",
+        target["payment_method"] or ""
+    )
+    cb_part = float(payment_info["cb_part"] or 0)
+
+    expected_sumup_amount = (
+        cb_part
+        if payment_info["is_mixed"] and cb_part > 0
+        else invoice_total
+    )
+
+    if abs(expected_sumup_amount - tx_amount) >= 0.005:
+        con.close()
+        known_text = ", ".join(
+            f"{opt['amount']:.2f} € ({opt['source']})"
+            for opt in amount_options
+        )
+        suffix = f" Valeurs WOPR connues : {known_text}." if known_text else ""
+        flash(
+            f"Changement refusé : facture {invoice_no} = {expected_sumup_amount:.2f} € "
+            f"/ SumUp = {tx_amount:.2f} €.{suffix}"
+        )
+        return _sumup_transactions_redirect_from_form()
+
+    tx_timestamp = str(tx.get("timestamp") or "").strip()
+    tx_date = ""
+    if tx_timestamp:
+        try:
+            tx_date = datetime.fromisoformat(
+                tx_timestamp.replace("Z", "+00:00")
+            ).astimezone(ZoneInfo("Europe/Paris")).date().isoformat()
+        except Exception:
+            tx_date = ""
+
+    old_invoice_no = str(current["invoice_no"] or "")
+    old_rid = int(current["id"])
+
+    # Clear only SumUp linkage from old invoice. Do not alter its paid/accounting state.
+    con.execute("""
+        UPDATE repairs
+        SET sumup_transaction_id='',
+            sumup_transaction_code='',
+            sumup_transaction_at='',
+            sumup_payment_type=''
+        WHERE id=?
+    """, (old_rid,))
+
+    # Store SumUp link on target.
+    con.execute("""
+        UPDATE repairs
+        SET sumup_transaction_id=?,
+            sumup_transaction_code=?,
+            sumup_transaction_at=?,
+            sumup_payment_type=?,
+            sumup_payment_url=''
+        WHERE id=?
+    """, (
+        transaction_id,
+        transaction_code or str(tx.get("transaction_code") or ""),
+        tx_timestamp,
+        str(tx.get("payment_type") or ""),
+        int(target["id"])
+    ))
+
+    # If target invoice was not yet marked paid, align it with the real SumUp payment.
+    if not int(target["paid"] or 0):
+        con.execute("""
+            UPDATE repairs
+            SET paid=1,
+                payment_mode='CB',
+                payment_method='CB',
+                accounting_date=?,
+                accounting_year=?,
+                accounting_month=?,
+                accounting_service_amount=?,
+                accounting_goods_amount=?,
+                accounting_status='normal'
+            WHERE id=?
+        """, (
+            tx_date or str(target["accounting_date"] or "")[:10],
+            int((tx_date or str(target["accounting_date"] or "")[:10])[:4]) if (tx_date or str(target["accounting_date"] or "")[:10]) else None,
+            int((tx_date or str(target["accounting_date"] or "")[:10])[5:7]) if (tx_date or str(target["accounting_date"] or "")[:10]) else None,
+            float(target["service_amount"] or 0),
+            float(target["goods_amount"] or 0),
+            int(target["id"])
+        ))
+
+    con.execute(
+        "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+        (transaction_id,)
+    )
+
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_TRANSACTION_RELINK",
+        f"tx={transaction_id}; code={transaction_code}; "
+        f"old_invoice={old_invoice_no}; new_invoice={invoice_no}; amount={tx_amount:.2f}",
+        request.remote_addr
+    )
+
+    flash(
+        f"Transaction SumUp {transaction_code or transaction_id} déplacée de "
+        f"{old_invoice_no} vers la facture {invoice_no}."
+    )
+    return _sumup_transactions_redirect_from_form()
+
+
+@app.route("/sumup/transactions/link", methods=["POST"])
+def sumup_transaction_link():
+    settings = read_sumup_settings()
+    if not settings.get("enabled"):
+        flash("Intégration SumUp désactivée.")
+        return redirect(url_for("invoices_page"))
+
+    rid = int(request.form.get("rid") or 0)
+    transaction_id = str(request.form.get("transaction_id") or "").strip()
+    if not rid or not transaction_id:
+        flash("Facture ou transaction SumUp manquante.")
+        return _sumup_transactions_redirect_from_form()
+
+    try:
+        tx = sumup_get_transaction(transaction_id)
+    except Exception as exc:
+        flash(f"Transaction SumUp illisible : {exc}")
+        return _sumup_transactions_redirect_from_form()
+
+    if str(tx.get("status") or "").upper() != "SUCCESSFUL":
+        flash("Cette transaction SumUp n'est pas marquée SUCCESSFUL.")
+        return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    r = con.execute("""
+        SELECT r.*,
+               (
+                 SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)), 0)
+                 FROM invoice_lines il WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not r or not str(r["invoice_no"] or "").strip():
+        con.close()
+        flash("Facture WOPR introuvable.")
+        return _sumup_transactions_redirect_from_form()
+
+    invoice_total = max(
+        float(r["line_total"] or 0),
+        float(r["service_amount"] or 0) + float(r["goods_amount"] or 0),
+        0.0
+    )
+    tx_amount = float(tx.get("amount") or 0)
+
+    payment_info = payment_breakdown_info(
+        r["payment_mode"] or "",
+        r["payment_detail"] or "",
+        r["payment_method"] or ""
+    )
+    payment_mode = payment_info["mode"]
+    cb_part = payment_info["cb_part"]
+
+    expected_sumup_amount = (
+        cb_part
+        if payment_info["is_mixed"] and cb_part > 0
+        else invoice_total
+    )
+
+    if abs(expected_sumup_amount - tx_amount) >= 0.005:
+        con.close()
+        if payment_info["is_mixed"] and cb_part > 0:
+            flash(
+                f"Montant différent : facture {invoice_total:.2f} € "
+                f"dont {cb_part:.2f} € CB / SumUp {tx_amount:.2f} €. "
+                "Rattachement refusé."
+            )
+        else:
+            flash(
+                f"Montant différent : facture {invoice_total:.2f} € / "
+                f"SumUp {tx_amount:.2f} €. Rattachement refusé."
+            )
+        return _sumup_transactions_redirect_from_form()
+
+    ts = str(tx.get("timestamp") or "")
+    try:
+        pay_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pay_date = pay_dt.date()
+    except Exception:
+        pay_date = now().date()
+        ts = now().isoformat(timespec="seconds")
+
+    fy = r["followup_year"]
+    fm = r["followup_month"]
+    acc_status = "yellow" if (fy and fm and (int(fy), int(fm)) != (pay_date.year, pay_date.month)) else "normal"
+
+    # Un rattachement SumUp tardif ne doit jamais réécrire une recette déjà
+    # comptabilisée : sa période a pu être déclarée depuis plusieurs mois.
+    # Dans ce cas on ajoute seulement la preuve SumUp. Les champs comptables
+    # ne sont initialisés depuis la transaction que pour une facture qui ne
+    # possède pas encore d'encaissement exploitable.
+    accounting_locked = (
+        bool(r["paid"])
+        and int(r["accounting_year"] or 0) >= 2000
+        and 1 <= int(r["accounting_month"] or 0) <= 12
+        and (
+            float(r["accounting_service_amount"] or 0)
+            + float(r["accounting_goods_amount"] or 0)
+        ) > 0
+    )
+
+    if accounting_locked:
+        if payment_info["is_mixed"]:
+            con.execute("""
+                UPDATE repairs SET
+                    sumup_payment_url='',
+                    sumup_transaction_id=?,
+                    sumup_transaction_code=?,
+                    sumup_transaction_at=?,
+                    sumup_payment_type=?
+                WHERE id=?
+            """, (
+                str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+                str(tx.get("transaction_code") or ""),
+                ts,
+                str(tx.get("payment_type") or ""),
+                rid,
+            ))
+        else:
+            con.execute("""
+                UPDATE repairs SET
+                    payment_mode='CB',
+                    payment_method='CB',
+                    sumup_payment_url='',
+                    sumup_transaction_id=?,
+                    sumup_transaction_code=?,
+                    sumup_transaction_at=?,
+                    sumup_payment_type=?
+                WHERE id=?
+            """, (
+                str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+                str(tx.get("transaction_code") or ""),
+                ts,
+                str(tx.get("payment_type") or ""),
+                rid,
+            ))
+    elif payment_info["is_mixed"]:
+        con.execute("""
+            UPDATE repairs SET
+                paid=1,
+                accounting_year=?,
+                accounting_month=?,
+                accounting_date=?,
+                accounting_status=?,
+                accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0)),
+                sumup_payment_url='',
+                sumup_transaction_id=?,
+                sumup_transaction_code=?,
+                sumup_transaction_at=?,
+                sumup_payment_type=?
+            WHERE id=?
+        """, (
+            pay_date.year, pay_date.month, pay_date.isoformat(), acc_status,
+            str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+            str(tx.get("transaction_code") or ""),
+            ts,
+            str(tx.get("payment_type") or ""),
+            rid
+        ))
+    else:
+        con.execute("""
+            UPDATE repairs SET
+                paid=1,
+                payment_mode='CB',
+                payment_method='CB',
+                accounting_year=?,
+                accounting_month=?,
+                accounting_date=?,
+                accounting_status=?,
+                accounting_service_amount=MAX(0,COALESCE(service_amount,0)-COALESCE(deposit_service_amount,0)),
+                accounting_goods_amount=MAX(0,COALESCE(goods_amount,0)-COALESCE(deposit_goods_amount,0)),
+                sumup_payment_url='',
+                sumup_transaction_id=?,
+                sumup_transaction_code=?,
+                sumup_transaction_at=?,
+                sumup_payment_type=?
+            WHERE id=?
+        """, (
+            pay_date.year, pay_date.month, pay_date.isoformat(), acc_status,
+            str(tx.get("id") or tx.get("transaction_id") or transaction_id),
+            str(tx.get("transaction_code") or ""),
+            ts,
+            str(tx.get("payment_type") or ""),
+            rid
+        ))
+    con.execute(
+        "DELETE FROM sumup_transaction_classifications WHERE transaction_id=?",
+        (transaction_id,)
+    )
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_TRANSACTION_LINK",
+        f"repair_id={rid}; invoice={r['invoice_no']}; tx={transaction_id}; amount={tx_amount:.2f}",
+        request.remote_addr
+    )
+    if payment_info["is_mixed"]:
+        flash(
+            f"Paiement SumUp {tx_amount:.2f} € rattaché à la part CB de la facture "
+            f"{r['invoice_no']} — paiement MIXTE conservé."
+        )
+    else:
+        flash(
+            f"Paiement SumUp {tx_amount:.2f} € rattaché à la facture "
+            f"{r['invoice_no']} — facture marquée payée par CB."
+        )
+    return _sumup_transactions_redirect_from_form()
+
+
+
+@app.route("/repair/<int:rid>/sumup/external-refund", methods=["POST"])
+def sumup_external_refund(rid):
+    raw_amount = str(request.form.get("refund_amount") or "").strip()
+    refund_date = str(request.form.get("refund_date") or "").strip()
+    note = str(request.form.get("refund_note") or "").strip()
+
+    try:
+        amount = parse_money_input(raw_amount)
+    except Exception:
+        flash("Montant du remboursement invalide.")
+        return _sumup_transactions_redirect_from_form()
+
+    if amount <= 0:
+        flash("Le remboursement doit être supérieur à 0 €.")
+        return _sumup_transactions_redirect_from_form()
+
+    if refund_date:
+        try:
+            date.fromisoformat(refund_date)
+        except Exception:
+            flash("Date de remboursement invalide.")
+            return _sumup_transactions_redirect_from_form()
+
+    con = db()
+    r = con.execute(
+        "SELECT id, invoice_no, sumup_transaction_id FROM repairs WHERE id=?",
+        (rid,)
+    ).fetchone()
+    if not r:
+        con.close()
+        flash("Facture WOPR introuvable.")
+        return _sumup_transactions_redirect_from_form()
+
+    con.execute("""
+        UPDATE repairs SET
+            sumup_external_refund_amount=?,
+            sumup_external_refund_date=?,
+            sumup_external_refund_note=?
+        WHERE id=?
+    """, (
+        round(float(amount), 2),
+        refund_date,
+        note or "Remboursement effectué hors SumUp",
+        rid
+    ))
+    con.commit()
+    con.close()
+
+    audit_event(
+        "SUMUP_EXTERNAL_REFUND",
+        f"repair_id={rid}; invoice={r['invoice_no']}; amount={amount:.2f}; "
+        f"date={refund_date}; tx={r['sumup_transaction_id'] or ''}; trace_only=1",
+        request.remote_addr
+    )
+    flash(
+        f"Remboursement hors SumUp de {amount:.2f} € enregistré en note sur la facture "
+        f"{r['invoice_no']} (CA non modifié automatiquement)."
+    )
+    return _sumup_transactions_redirect_from_form()
+
+
+@app.route("/repair/<int:rid>/sumup/receipt")
+def sumup_receipt(rid):
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+    if not r:
+        return "Dossier introuvable", 404
+    tx_id = str(r["sumup_transaction_id"] or "").strip()
+    if not tx_id:
+        flash("Aucune transaction SumUp n'est rattachée à cette facture.")
+        return redirect(url_for("invoices_page"))
+
+    try:
+        receipt = sumup_get_receipt(tx_id)
+    except Exception as exc:
+        flash(f"Impossible de récupérer le ticket SumUp : {exc}")
+        return redirect(url_for("invoices_page"))
+
+    return render_template(
+        "sumup_receipt.html",
+        receipt=receipt,
+        r=r,
+        tx=receipt.get("transaction_data", {}) if isinstance(receipt, dict) else {},
+        merchant=receipt.get("merchant_data", {}) if isinstance(receipt, dict) else {},
+    )
+
+
+
+
+def _orphan_invoice_quote(con, ledger_row):
+    """Retrouve le devis explicitement référencé par une vente historique."""
+    text = " ".join([
+        str(ledger_row["remarks"] or ""),
+        str(ledger_row["party"] or ""),
+    ])
+    match = re.search(
+        r"(?i)\bdevis(?:\s*(?:n[°ºo]?|num(?:[ée]ro)?\.?))?\s*[:#-]?\s*(\d{12})\b",
+        text,
+    )
+    if not match:
+        return None
+    quote_no = match.group(1)
+    return con.execute(
+        "SELECT * FROM quotes WHERE quote_no=?",
+        (quote_no,),
+    ).fetchone()
+
+
+def _orphan_invoice_candidates_for_ledger(con, ledger_row):
+    """Propose des dossiers sans facture pour une vente historique orpheline."""
+    invoice_no = canonical_client_invoice_no(ledger_row["invoice_no"])
+    party = str(ledger_row["party"] or "").strip()
+    party_key = normalize_client_filename_name(party)
+    invoice_date = invoice_no_date(invoice_no) or str(ledger_row["entry_date"] or "")[:10]
+    ledger_amount = float(ledger_row["amount_ttc"] or 0)
+    quote_row = _orphan_invoice_quote(con, ledger_row)
+
+    clients = con.execute("""
+        SELECT id, name, first_name, last_name, company
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+    """).fetchall()
+
+    matched_client_ids = []
+    for c in clients:
+        labels = [
+            str(c["name"] or ""),
+            " ".join(filter(None, [str(c["first_name"] or ""), str(c["last_name"] or "")])).strip(),
+            str(c["company"] or ""),
+        ]
+        label_keys = [normalize_client_filename_name(x) for x in labels if str(x or "").strip()]
+        score = 0
+        for ck in label_keys:
+            if not ck or not party_key:
+                continue
+            if ck == party_key:
+                score = max(score, 100)
+            elif ck in party_key or party_key in ck:
+                score = max(score, 70)
+            else:
+                party_tokens = set(party_key.split())
+                client_tokens = set(ck.split())
+                common = party_tokens & client_tokens
+                if common:
+                    score = max(score, 40 + 10 * len(common))
+        if score >= 50:
+            matched_client_ids.append((score, int(c["id"])))
+
+    # Un devis explicitement référencé est une preuve bien plus forte que le
+    # libellé historique du client (ex. "SUEZ RV SUD OUEST" vs nom complet).
+    if quote_row and quote_row["client_id"]:
+        quote_client_id = int(quote_row["client_id"])
+        matched_client_ids = [
+            (score, cid) for score, cid in matched_client_ids
+            if cid != quote_client_id
+        ]
+        matched_client_ids.append((140, quote_client_id))
+
+    if not matched_client_ids:
+        return []
+
+    matched_client_ids.sort(reverse=True)
+    ids = [cid for _, cid in matched_client_ids[:8]]
+    placeholders = ",".join("?" for _ in ids)
+    repairs = con.execute(f"""
+        SELECT r.*, c.name AS client_name,
+               (
+                   SELECT COALESCE(SUM(COALESCE(il.quantity,0) * COALESCE(il.unit_price,0)),0)
+                   FROM invoice_lines il
+                   WHERE il.repair_id=r.id
+               ) AS line_total
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.client_id IN ({placeholders})
+          AND COALESCE(TRIM(r.invoice_no),'')=''
+        ORDER BY r.received_date DESC, r.id DESC
+    """, tuple(ids)).fetchall()
+
+    try:
+        inv_dt = datetime.strptime(invoice_date, "%Y-%m-%d").date() if invoice_date else None
+    except Exception:
+        inv_dt = None
+
+    client_score_map = {cid: score for score, cid in matched_client_ids}
+    candidates = []
+
+    for r in repairs:
+        score = client_score_map.get(int(r["client_id"]), 0)
+        reasons = []
+
+        if quote_row and quote_row["client_id"] and int(r["client_id"]) == int(quote_row["client_id"]):
+            reasons.append(f"devis {quote_row['quote_no']}")
+        elif score >= 100:
+            reasons.append("client exact")
+        elif score >= 70:
+            reasons.append("client proche")
+
+        repair_date = str(r["received_date"] or "")[:10]
+        day_diff = None
+        if inv_dt and repair_date:
+            try:
+                rd = datetime.strptime(repair_date, "%Y-%m-%d").date()
+                day_diff = (inv_dt - rd).days
+                ad = abs(day_diff)
+                if 0 <= day_diff <= 7:
+                    score += 70
+                    reasons.append(f"facture {day_diff} j après dépôt")
+                elif 0 <= day_diff <= 30:
+                    score += 45
+                    reasons.append(f"facture {day_diff} j après dépôt")
+                elif ad <= 30:
+                    score += 20
+                    reasons.append(f"dates proches ({ad} j)")
+                elif ad > 90:
+                    score -= 40
+            except Exception:
+                pass
+
+        values = [
+            float(r["line_total"] or 0),
+            float(r["service_amount"] or 0) + float(r["goods_amount"] or 0),
+            float(r["accounting_service_amount"] or 0) + float(r["accounting_goods_amount"] or 0),
+            payment_amount_from_text(r["payment_method"]),
+        ]
+        known_amounts = sorted({round(v, 2) for v in values if v and v > 0})
+        amount_match = any(abs(v - ledger_amount) < 0.005 for v in known_amounts) if ledger_amount > 0 else False
+        if amount_match:
+            score += 80
+            reasons.append(f"montant {ledger_amount:.2f} €")
+        elif ledger_amount > 0 and known_amounts:
+            nearest = min(abs(v - ledger_amount) for v in known_amounts)
+            if nearest <= 1:
+                score += 40
+                reasons.append("montant quasi identique")
+
+        candidates.append({
+            "rid": int(r["id"]),
+            "client_name": str(r["client_name"] or ""),
+            "received_date": repair_date,
+            "problem": str(r["problem"] or ""),
+            "status": str(r["status"] or ""),
+            "known_amounts": known_amounts,
+            "score": score,
+            "reasons": reasons,
+        })
+
+    candidates.sort(key=lambda x: (-x["score"], x["received_date"], x["rid"]))
+    return candidates[:8]
+
+
+
+@app.route("/factures/historique/<invoice_no>/pdf")
+def archived_historical_invoice_pdf(invoice_no):
+    invoice_no = canonical_client_invoice_no(invoice_no)
+    con = db()
+    row = con.execute(
+        "SELECT * FROM archived_invoices WHERE invoice_no=?",
+        (invoice_no,)
+    ).fetchone()
+    con.close()
+    if not row:
+        return "Facture historique introuvable", 404
+
+    pdf = find_client_invoice_pdf(invoice_no, row["client_name"] or "")
+    if not pdf or not pdf.exists():
+        return "PDF de facture introuvable", 404
+
+    return send_pdf_with_title(
+        pdf,
+        f"Facture {invoice_no} - {row['client_name'] or ''}",
+        download_name=pdf.name,
+    )
+
+
+@app.route("/factures/historique/<invoice_no>/encaissement", methods=["POST"])
+def archived_historical_invoice_payment(invoice_no):
+    invoice_no = canonical_client_invoice_no(invoice_no)
+    con = db()
+    row = con.execute(
+        "SELECT * FROM archived_invoices WHERE invoice_no=?",
+        (invoice_no,)
+    ).fetchone()
+    if not row:
+        con.close()
+        flash("Facture historique introuvable.")
+        return redirect(url_for("invoices_page"))
+
+    paid = 1 if request.form.get("paid") == "on" else 0
+    payment_mode = normalize_payment_mode(request.form.get("payment_mode") or "")
+    accounting_date = (request.form.get("accounting_date") or "").strip()
+
+    if paid and not accounting_date:
+        con.close()
+        flash("Indique la date d'encaissement pour une facture payée.")
+        return redirect(url_for("invoices_page", q=invoice_no))
+
+    if accounting_date and not ledger_valid_date(accounting_date):
+        con.close()
+        flash("Date d'encaissement invalide.")
+        return redirect(url_for("invoices_page", q=invoice_no))
+
+    if not paid:
+        accounting_date = ""
+
+    con.execute("""
+        UPDATE archived_invoices
+        SET payment_mode=?, accounting_date=?, paid=?, updated_at=?
+        WHERE invoice_no=?
+    """, (
+        payment_mode,
+        accounting_date,
+        paid,
+        now().isoformat(timespec="seconds"),
+        invoice_no,
+    ))
+    con.commit()
+    con.close()
+
+    audit_event(
+        "ARCHIVED_INVOICE_PAYMENT_EDIT",
+        f"invoice={invoice_no}; paid={paid}; mode={payment_mode}; date={accounting_date}",
+        request.remote_addr
+    )
+    flash(f"Encaissement de la facture {invoice_no} mis à jour.")
+    return redirect(url_for("invoices_page", q=invoice_no))
+
+
+def _collect_orphan_invoices(con):
+    """Retourne les factures historiques réellement orphelines.
+
+    Cette fonction est la source unique utilisée à la fois par le bouton de la
+    page Factures et par la page de maintenance /factures/orphelines.
+    """
+    ledger_rows = con.execute("""
+        SELECT le.*
+        FROM ledger_entries le
+        WHERE lower(COALESCE(le.operation,''))='vente'
+          AND COALESCE(TRIM(le.invoice_no),'')<>''
+        ORDER BY le.entry_date DESC, le.id DESC
+    """).fetchall()
+
+    repair_invoice_nos = {
+        canonical_client_invoice_no(row["invoice_no"])
+        for row in con.execute("""
+            SELECT DISTINCT TRIM(invoice_no) AS invoice_no
+            FROM repairs
+            WHERE COALESCE(TRIM(invoice_no),'')<>''
+        """).fetchall()
+    }
+
+    invoice_files = sorted(
+        p for p in FACTURES_ROOT.rglob("*.pdf")
+        if p.is_file() and "fournisseurs" not in {part.casefold() for part in p.parts}
+    ) if FACTURES_ROOT.exists() else []
+
+    items = []
+    seen = set()
+
+    for row in ledger_rows:
+        raw_invoice_no = canonical_client_invoice_no(row["invoice_no"])
+        invoice_no = raw_invoice_no if re.fullmatch(r"\d{12}", raw_invoice_no or "") else ""
+        pdf = None
+        inferred_from_pdf = False
+
+        if invoice_no:
+            pdf = find_client_invoice_pdf(invoice_no, row["party"] or "", invoice_files=invoice_files)
+        else:
+            pdf, inferred_no = _find_invoice_pdf_by_client_date(
+                row["party"] or "",
+                row["entry_date"] or "",
+                invoice_files=invoice_files,
+            )
+            if inferred_no:
+                invoice_no = inferred_no
+                inferred_from_pdf = True
+
+        if not invoice_no or invoice_no in repair_invoice_nos or invoice_no in seen:
+            continue
+        seen.add(invoice_no)
+
+        quote_row = _orphan_invoice_quote(con, row)
+        candidates = _orphan_invoice_candidates_for_ledger(con, row)
+
+        # Une facture explicitement issue d'un devis connu n'est pas une vraie
+        # orpheline si aucun dossier sans facture ne peut raisonnablement lui
+        # être associé. Elle reste visible dans Factures et son PDF reste intact.
+        if quote_row and not candidates:
+            continue
+
+        items.append({
+            "ledger_id": int(row["id"]),
+            "invoice_no": invoice_no,
+            "party": str(row["party"] or ""),
+            "entry_date": str(row["entry_date"] or "")[:10],
+            "amount": float(row["amount_ttc"] or 0),
+            "payment_type": str(row["payment_type"] or ""),
+            "remarks": str(row["remarks"] or ""),
+            "has_pdf": bool(pdf and pdf.exists()),
+            "pdf_name": pdf.name if pdf and pdf.exists() else "",
+            "inferred_from_pdf": inferred_from_pdf,
+            "candidates": candidates,
+        })
+
+    return items
+
+
+@app.route("/factures/orphelines")
+def orphan_invoices_page():
+    """Factures historiques connues/PDF présentes mais sans rattachement à repairs.invoice_no."""
+    con = db()
+    items = _collect_orphan_invoices(con)
+    con.close()
+
+    q = " ".join(request.args.get("q", "").split()).strip()
+    if q:
+        qk = q.casefold()
+        items = [
+            item for item in items
+            if qk in " ".join([
+                item["invoice_no"], item["party"], item["entry_date"],
+                f"{item['amount']:.2f}", item["payment_type"], item["remarks"],
+                item["pdf_name"],
+            ]).casefold()
+        ]
+
+    return render_template(
+        "orphan_invoices.html",
+        items=items,
+        q=q,
+    )
+
+
+@app.route("/factures/orphelines/<int:ledger_id>/pdf")
+def orphan_invoice_pdf(ledger_id):
+    con = db()
+    row = con.execute("""
+        SELECT * FROM ledger_entries
+        WHERE id=? AND lower(COALESCE(operation,''))='vente'
+    """, (ledger_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Vente historique introuvable", 404
+
+    invoice_no = canonical_client_invoice_no(row["invoice_no"])
+    pdf = None
+    if re.fullmatch(r"\d{12}", invoice_no or ""):
+        pdf = find_client_invoice_pdf(invoice_no, row["party"] or "")
+    else:
+        pdf, inferred_no = _find_invoice_pdf_by_client_date(
+            row["party"] or "", row["entry_date"] or ""
+        )
+        if inferred_no:
+            invoice_no = inferred_no
+
+    if not pdf or not pdf.exists():
+        return "PDF de facture introuvable", 404
+
+    return send_pdf_with_title(
+        pdf,
+        f"Facture {invoice_no} - {row['party'] or ''}",
+        download_name=pdf.name,
+    )
+
+
+@app.route("/factures/orphelines/<int:ledger_id>/rattacher", methods=["POST"])
+def orphan_invoice_attach(ledger_id):
+    try:
+        rid = int(request.form.get("rid") or 0)
+    except (TypeError, ValueError):
+        rid = 0
+    if rid <= 0:
+        flash("Choisis un dossier à rattacher.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    con = db()
+    ledger = con.execute("""
+        SELECT * FROM ledger_entries
+        WHERE id=? AND lower(COALESCE(operation,''))='vente'
+    """, (ledger_id,)).fetchone()
+    if not ledger:
+        con.close()
+        flash("Vente historique introuvable.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    invoice_no = canonical_client_invoice_no(ledger["invoice_no"])
+    resolved_pdf = None
+
+    if re.fullmatch(r"\d{12}", invoice_no or ""):
+        resolved_pdf = find_client_invoice_pdf(invoice_no, ledger["party"] or "")
+    else:
+        resolved_pdf, inferred_no = _find_invoice_pdf_by_client_date(
+            ledger["party"] or "", ledger["entry_date"] or ""
+        )
+        if inferred_no:
+            invoice_no = inferred_no
+
+    if not re.fullmatch(r"\d{12}", invoice_no or ""):
+        con.close()
+        flash("Impossible de déterminer un numéro de facture fiable depuis le PDF.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    target = con.execute("""
+        SELECT r.*, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    if not target:
+        con.close()
+        flash("Dossier cible introuvable.")
+        return redirect(url_for("orphan_invoices_page"))
+
+    existing = con.execute("""
+        SELECT r.id, c.name AS client_name
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE TRIM(COALESCE(r.invoice_no,''))=?
+          AND r.id<>?
+        LIMIT 1
+    """, (invoice_no, rid)).fetchone()
+    if existing:
+        con.close()
+        flash(
+            f"Facture {invoice_no} déjà rattachée au dossier #{existing['id']} "
+            f"({existing['client_name']})."
+        )
+        return redirect(url_for("orphan_invoices_page", q=invoice_no))
+
+    current_no = str(target["invoice_no"] or "").strip()
+    if current_no and canonical_client_invoice_no(current_no) != invoice_no:
+        con.close()
+        flash(
+            f"Le dossier #{rid} possède déjà la facture {current_no}. "
+            "Aucune modification effectuée."
+        )
+        return redirect(url_for("orphan_invoices_page", q=invoice_no))
+
+    # Vérifie que le PDF annoncé existe réellement quand il est disponible.
+    pdf = resolved_pdf or find_client_invoice_pdf(invoice_no, ledger["party"] or "")
+    if not pdf or not pdf.exists():
+        con.close()
+        flash(
+            f"PDF {invoice_no} introuvable dans les archives. "
+            "Rattachement annulé pour éviter de créer une référence vide."
+        )
+        return redirect(url_for("orphan_invoices_page", q=invoice_no))
+
+    # IMPORTANT : on ne touche qu'au numéro de facture.
+    # Montants, paiement, CA, dates et PDF restent inchangés.
+    con.execute(
+        "UPDATE repairs SET invoice_no=? WHERE id=?",
+        (invoice_no, rid)
+    )
+    con.commit()
+    con.close()
+
+    audit_event(
+        "ORPHAN_INVOICE_ATTACH",
+        f"invoice={invoice_no}; ledger_id={ledger_id}; repair_id={rid}; pdf={pdf.name}",
+        request.remote_addr
+    )
+    flash(
+        f"Facture {invoice_no} rattachée au dossier #{rid}. "
+        f"PDF conservé : {pdf.name}."
+    )
+    return redirect(url_for("invoices_page", q=invoice_no))
+
+
+@app.route("/repair/<int:rid>/invoice-file.pdf")
+def invoice_archived_pdf(rid):
+    """
+    Sert la copie PDF déjà archivée de la facture.
+    Avec ?download=1, le fichier est téléchargé au lieu d'être affiché.
+    Contrairement à invoice_pdf(), cette route ne régénère et ne réécrit rien
+    tant qu'une archive correspondant à la langue existe.
+    """
+    lang = pdf_lang()
+    force_download = request.args.get("download") == "1" and request.args.get("inline") != "1"
+    con = db()
+    r = con.execute("""
+        SELECT r.id, r.invoice_no, r.finished_at, r.received_date,
+               r.legacy_imported, c.name AS client_name
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    has_invoice_lines = bool(con.execute(
+        "SELECT 1 FROM invoice_lines WHERE repair_id=? LIMIT 1",
+        (rid,)
+    ).fetchone())
+    con.close()
+
+    if not r:
+        return "Facture introuvable", 404
+    if not str(r["invoice_no"] or "").strip():
+        return "Aucune facture pour ce dossier", 404
+
+    invoice_no = str(r["invoice_no"]).strip()
+    client_name = str(r["client_name"] or "").strip()
+    suffix = pdf_language_suffix(lang)
+
+    # Une facture WOPR éditable doit toujours être réimprimée depuis les
+    # données actuelles de la base. Sinon cette route ressortirait l'ancien
+    # PDF archivé après une modification de désignation, quantité ou prix.
+    #
+    # Exception : une vraie facture historique importée, jamais reconstruite
+    # dans l'éditeur, conserve son PDF original comme référence.
+    if has_invoice_lines or not r["legacy_imported"]:
+        return redirect(url_for(
+            "invoice_pdf",
+            rid=rid,
+            lang=lang,
+            _wopr_download="1" if force_download else None,
+        ))
+
+    # 1) Nom WOPR actuel exact, dans le dossier de la vraie date de facture.
+    invoice_date_value = invoice_no_date(invoice_no)
+    if not invoice_date_value:
+        invoice_date_value = str(r["finished_at"] or r["received_date"] or "")[:10]
+
+    expected_name = safe_document_name(
+        f"{safe_filename(client_name)}_{safe_filename(invoice_no)}_{suffix}.pdf"
+    )
+
+    try:
+        folder = year_month_folder(
+            FACTURES_ROOT,
+            invoice_date_value,
+            create=False
+        )
+    except Exception:
+        folder = None
+
+    if folder:
+        exact_path = Path(folder) / expected_name
+        if exact_path.is_file():
+            return send_pdf_with_title(
+                exact_path,
+                f"Facture {invoice_no} - {client_name}",
+                download_name=exact_path.name,
+                as_attachment=force_download,
+            )
+
+    # 2) Pour le français, accepter aussi le vrai PDF historique original
+    # (souvent sans suffixe _FR).
+    if lang == "fr":
+        original_pdf = (
+            find_client_invoice_pdf(invoice_no, client_name)
+            or find_document_recursive(FACTURES_ROOT, document_no=invoice_no)
+        )
+        if original_pdf and Path(original_pdf).is_file():
+            original_pdf = Path(original_pdf)
+            return send_pdf_with_title(
+                original_pdf,
+                f"Facture {invoice_no} - {client_name}",
+                download_name=original_pdf.name,
+                as_attachment=force_download,
+            )
+
+    # 3) Une traduction archivée peut avoir un nom légèrement différent :
+    # chercher numéro + suffixe sans modifier aucun fichier.
+    candidates = []
+    try:
+        for pdf in FACTURES_ROOT.rglob("*.pdf"):
+            if not pdf.is_file():
+                continue
+            stem_upper = pdf.stem.upper()
+            if invoice_no not in pdf.stem:
+                continue
+            if suffix.upper() in stem_upper.split("_"):
+                candidates.append(pdf)
+    except Exception:
+        candidates = []
+
+    if len(candidates) == 1:
+        pdf = candidates[0]
+        return send_pdf_with_title(
+            pdf,
+            f"Facture {invoice_no} - {client_name}",
+            download_name=pdf.name,
+            as_attachment=force_download,
+        )
+
+    # Aucun PDF archivé : on génère seulement en dernier recours.
+    # Le paramètre est explicitement conservé pour éviter une boucle.
+    return redirect(url_for(
+        "invoice_pdf",
+        rid=rid,
+        lang=lang,
+        _wopr_download="1" if force_download else None,
+    ))
+
+
+@app.route("/repair/<int:rid>/invoice.pdf")
+def invoice_pdf(rid):
+    lang = pdf_lang()
+    # Affichage/impression : cette route reste toujours inline pour les liens normaux.
+    # Le téléchargement n'est autorisé que via le fallback interne de Facture PDF.
+    force_download = request.args.get("_wopr_download") == "1" and request.args.get("inline") != "1"
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name, c.company client_company, c.address client_address,
+               c.address_street client_address_street, c.postal_code client_postal_code,
+               c.city client_city, c.phone client_phone, c.email client_email
+        FROM repairs r JOIN clients c ON c.id=r.client_id WHERE r.id=?
+    """, (rid,)).fetchone()
+    invoice_lines = con.execute("""
+        SELECT * FROM invoice_lines WHERE repair_id=? ORDER BY position,id
+    """, (rid,)).fetchall()
+    con.close()
+
+    if not r:
+        return "introuvable", 404
+    if not r["invoice_no"]:
+        return "La réparation n'est pas clôturée.", 400
+
+    # V2.6.2 — les factures liées à une réparation rappellent que
+    # les détails techniques complets sont disponibles sur la feuille de suivi.
+    # Ne concerne pas les factures simples.
+    invoice_followup_note = translate_pdf_text("Détails sur la feuille de suivi", lang)
+
+    # V2.3.20 : une ancienne facture ODS peut avoir beaucoup plus de détails
+    # dans son PDF d'origine que dans le Suivi importé. Tant que l'utilisateur
+    # n'a pas réellement reconstruit / enregistré cette facture dans l'éditeur,
+    # le PDF original reste la référence.
+    has_commercial_refs = bool(
+        str(r["quote_no"] or "").strip() or str(r["order_no"] or "").strip()
+    )
+
+    if (
+        lang == "fr"
+        and r["legacy_imported"]
+        and not invoice_lines
+        and request.args.get("rebuild") != "1"
+        and not has_commercial_refs
+    ):
+        original_pdf = find_client_invoice_pdf(
+            r["invoice_no"],
+            r["client_name"]
+        ) or find_document_recursive(
+            FACTURES_ROOT,
+            document_no=r["invoice_no"]
+        )
+        if original_pdf and original_pdf.exists():
+            legacy_filename = (
+                f"{safe_filename(r['client_name'])}_"
+                f"{safe_filename(r['invoice_no'])}_FR.pdf"
+            )
+            return send_pdf_with_title(
+                original_pdf,
+                f"Facture {r['invoice_no']} - {r['client_name']}",
+                download_name=legacy_filename,
+                as_attachment=force_download,
+            )
+
+    conf = cfg()
+    bio = io.BytesIO()
+    c = canvas.Canvas(bio, pagesize=A4)
+    c.setTitle(f"Facture {r['invoice_no']} - {r['client_name']}")
+    W, H = A4
+
+    BLUE = colors.HexColor("#3399FF")
+    LIGHT_GREY = colors.HexColor("#777777")
+    BLACK = colors.black
+
+    left = 6 * mm
+    right = W - 6 * mm
+    top = H - 10 * mm
+
+    c.setStrokeColor(BLUE)
+    c.setLineWidth(1.1)
+    c.line(left, top, right, top)
+
+    # Logo fourni par l'utilisateur
+    logo_x, logo_y = 6*mm, H - 62*mm
+    logo_w, logo_h = 114*mm, 48*mm
+    invoice_logo = invoice_logo_path()
+    if invoice_logo:
+        c.drawImage(str(invoice_logo), logo_x, logo_y, width=logo_w, height=logo_h,
+                    preserveAspectRatio=True, anchor='sw', mask='auto')
+
+    bx, by, bw, bh = 134*mm, H - 51*mm, 67*mm, 38*mm
+    c.setFillColor(BLUE)
+    c.rect(bx, by, bw, bh, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont(PDF_FONTS["bold"], 24)
+    c.drawCentredString(bx + bw/2, by + 25*mm, pdf_t("invoice", lang))
+
+    c.setFillColor(BLACK)
+    commercial_refs = []
+    if str(r["quote_no"] or "").strip():
+        commercial_refs.append((pdf_t("quote_no", lang), str(r["quote_no"]).strip()))
+    if str(r["order_no"] or "").strip():
+        commercial_refs.append((pdf_t("order_no", lang), str(r["order_no"]).strip()))
+
+    if commercial_refs:
+        c.setFont(PDF_FONTS["regular"], 8.8)
+        meta_rows = [
+            (pdf_t("invoice_no", lang), str(r["invoice_no"] or "")),
+            (pdf_t("date", lang), fr_date(r["finished_at"])),
+        ] + commercial_refs
+        meta_y = by + 16.0*mm
+        for label, value in meta_rows:
+            c.drawString(bx + 1.5*mm, meta_y, label + " :")
+            fit_text(c, value, bx + 27.5*mm, meta_y, bw - 29.5*mm, PDF_FONTS["regular"], 8.8, 6.6)
+            meta_y -= 5.0*mm
+    else:
+        # Sans référence commerciale, conserver exactement le cartouche historique.
+        c.setFont(PDF_FONTS["regular"], 10.5)
+        c.drawString(bx + 1.5*mm, by + 9*mm, pdf_t("invoice_no", lang) + " :")
+        fit_text(c, r["invoice_no"], bx + 29*mm, by + 9*mm, bw - 31*mm, PDF_FONTS["regular"], 10.5, 7)
+        c.drawString(bx + 1.5*mm, by + 3.5*mm, pdf_t("date", lang) + " :")
+        c.drawString(bx + 29*mm, by + 3.5*mm, fr_date(r["finished_at"]))
+
+    line_y = H - 64*mm
+    c.setStrokeColor(BLUE)
+    c.setLineWidth(1.1)
+    c.line(left, line_y, right, line_y)
+
+    box_y = H - 111*mm
+    box_h = 43*mm
+    c.setStrokeColor(BLUE)
+    c.setLineWidth(.8)
+    c.rect(11*mm, box_y, 66*mm, box_h, fill=0, stroke=1)
+
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["bold"], 13)
+    c.drawString(12*mm, box_y + 36.5*mm, conf.get("owner_name", ""))
+    c.setFont(PDF_FONTS["regular"], 11.5)
+    c.drawString(12*mm, box_y + 24*mm, conf.get("address_line1", ""))
+    c.drawString(12*mm, box_y + 12*mm, conf.get("address_line2", ""))
+    c.drawString(12*mm, box_y + 1.5*mm, pdf_t("phone", lang) + " : " + conf.get("phone", ""))
+
+    cbx, cby, cbw, cbh = 134*mm, box_y, 67*mm, box_h
+    c.setStrokeColor(colors.HexColor("#555555"))
+    c.rect(cbx, cby, cbw, cbh, fill=0, stroke=1)
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["bold"], 12.5)
+    c.drawString(cbx + 1*mm, cby + cbh - 6*mm, pdf_t("client", lang) + " :")
+    c.setLineWidth(.6)
+    c.line(cbx + 1*mm, cby + cbh - 7*mm, cbx + 18*mm, cby + cbh - 7*mm)
+
+    # Présentation postale classique : entreprise (si présente) / contact / rue / code postal + ville
+    client_lines = []
+    client_company = str(r["client_company"] or "").strip()
+    client_name = str(r["client_name"] or "").strip()
+    if client_company:
+        client_lines.append(client_company)
+    if client_name and client_name.casefold() != client_company.casefold():
+        client_lines.append(client_name)
+    street = (r["client_address_street"] or "").strip()
+    cp_city = " ".join(x for x in [(r["client_postal_code"] or "").strip(), (r["client_city"] or "").strip()] if x)
+    if street:
+        client_lines.append(street)
+    elif r["client_address"]:
+        legacy_lines = [x.strip() for x in str(r["client_address"]).replace("\r","").split("\n") if x.strip()]
+        client_lines.extend(legacy_lines[:1])
+    if cp_city:
+        client_lines.append(cp_city)
+
+    cy = cby + cbh - 16*mm
+    c.setFont(PDF_FONTS["regular"], 10)
+    for line in client_lines[:4]:
+        fit_text(c, line, cbx + 1.5*mm, cy, cbw - 3*mm, PDF_FONTS["regular"], 10, 7)
+        cy -= 6.8*mm
+
+    tx = 6*mm
+    ty_top = H - 117*mm
+    table_w = W - 12*mm
+    header_h = 9*mm
+    row_h = 6.1*mm
+    col_qty = 19*mm
+    col_desc = 92*mm
+    col_blank = 28*mm
+    col_total = table_w - col_qty - col_desc - col_blank
+
+    xs = [tx, tx+col_qty, tx+col_qty+col_desc,
+          tx+col_qty+col_desc+col_blank, tx+table_w]
+
+    c.setFillColor(BLUE)
+    c.rect(tx, ty_top-header_h, table_w, header_h, fill=1, stroke=0)
+    c.setStrokeColor(BLACK)
+    c.setLineWidth(.55)
+    for x in xs:
+        c.line(x, ty_top, x, ty_top-header_h)
+    c.line(tx, ty_top, tx+table_w, ty_top)
+    c.line(tx, ty_top-header_h, tx+table_w, ty_top-header_h)
+
+    c.setFillColor(colors.white)
+    c.setFont(PDF_FONTS["bold"], 10.5)
+    c.drawCentredString(tx + col_qty/2, ty_top-6.1*mm, pdf_t("quantity", lang))
+    c.drawCentredString(xs[1] + col_desc/2, ty_top-6.1*mm, pdf_t("description", lang))
+    c.drawCentredString(xs[2] + col_blank/2, ty_top-6.1*mm, pdf_t("unit_price", lang))
+    c.drawCentredString(xs[3] + col_total/2, ty_top-6.1*mm, pdf_t("total", lang))
+
+    rows = []
+    if invoice_lines:
+        for line in invoice_lines:
+            qty = float(line["quantity"] or 0)
+            unit = float(line["unit_price"] or 0)
+            line_type = str(line["line_type"] or "").strip().lower()
+            rows.append((qty, translate_pdf_text(line["description"], lang), qty * unit, unit, line_type))
+    else:
+        # Ancienne facture sans lignes détaillées.
+        if r["service_amount"]:
+            rows.append((1, translate_pdf_text(r["service_description"] or r["tests_validation"] or r["problem"] or "Prestation de service", lang),
+                         float(r["service_amount"]), float(r["service_amount"]), "service"))
+        if r["goods_amount"]:
+            rows.append((1, translate_pdf_text(r["goods_description"] or "Vente de marchandises / pièces", lang),
+                         float(r["goods_amount"]), float(r["goods_amount"]), "goods"))
+
+    # -----------------------------------------------------------------
+    # Typographie facture WOPR :
+    #   - 1re ligne de chaque article/prestation : Roboto 12
+    #   - 2e ligne et suivantes (détails)       : Roboto 10
+    # Les lignes trop longues sont renvoyées à la ligne, jamais réduites.
+    # Quantité / P.U. / Total ne figurent que sur la première ligne.
+    # Une ligne vide sépare chaque prestation / marchandise.
+    # -----------------------------------------------------------------
+    visual_rows = []
+    desc_width = col_desc - 2*mm
+
+    # La mention "Détails sur la feuille de suivi" appartient à la prestation :
+    # elle est ajoutée juste sous la dernière ligne de service, avant toute marchandise.
+    service_indexes = [i for i, row in enumerate(rows) if row[4] == "service"]
+    last_service_index = service_indexes[-1] if service_indexes else None
+
+    for item_index, (qty, description, amount, unit, line_type) in enumerate(rows):
+        raw_lines = str(description or "").replace("\r", "").split("\n")
+        if not raw_lines:
+            raw_lines = [""]
+
+        physical_lines = []
+        for raw_index, raw_line in enumerate(raw_lines):
+            font_size = 12 if raw_index == 0 else 10
+            wrapped = wrap_pdf_text(raw_line, PDF_FONTS["regular"], font_size, desc_width)
+            for wrap_index, wrapped_line in enumerate(wrapped):
+                # Seule la toute première ligne reste l'intitulé en 12.
+                is_title = (raw_index == 0 and wrap_index == 0)
+                physical_lines.append((wrapped_line, is_title))
+
+        if not physical_lines:
+            physical_lines = [("", True)]
+
+        for line_index, (desc_line, is_title) in enumerate(physical_lines):
+            visual_rows.append({
+                "qty": qty if line_index == 0 else None,
+                "desc": desc_line,
+                "amount": amount if line_index == 0 else None,
+                "unit": unit if line_index == 0 else None,
+                "font_size": 12 if is_title else 10,
+                "spacer": False,
+            })
+
+        if invoice_followup_note and item_index == last_service_index:
+            visual_rows.append({
+                "qty": None,
+                "desc": invoice_followup_note,
+                "amount": None,
+                "unit": None,
+                "font_size": 10,
+                "spacer": False,
+            })
+
+        # Une ligne entièrement vide ENTRE deux prestations / marchandises.
+        # Pas après le dernier article et jamais entre l'intitulé et ses détails.
+        if item_index < len(rows) - 1:
+            visual_rows.append({
+                "qty": None,
+                "desc": "",
+                "amount": None,
+                "unit": None,
+                "font_size": 10,
+                "spacer": True,
+            })
+
+    # Le gabarit historique contient au minimum 13 lignes de tableau.
+    # On ajoute des lignes vierges si nécessaire, sans modifier les polices.
+    content_rows = max(13, len(visual_rows))
+    row_h = 6.1*mm
+    y = ty_top - header_h
+    c.setFillColor(BLACK)
+
+    for i in range(content_rows):
+        y2 = y - row_h
+        c.setStrokeColor(BLACK)
+        c.setLineWidth(.45)
+        for x in xs:
+            c.line(x, y, x, y2)
+        c.line(tx, y2, tx+table_w, y2)
+
+        if i < len(visual_rows):
+            vr = visual_rows[i]
+
+            if vr["qty"] is not None:
+                qty = float(vr["qty"])
+                qty_text = str(int(qty)) if qty.is_integer() else str(qty).replace(".", ",")
+                c.setFont(PDF_FONTS["regular"], 10)
+                c.drawCentredString(tx + col_qty/2, y2 + 1.65*mm, qty_text)
+
+            # Taille FIXE : 12 pour l'intitulé, 10 pour les détails.
+            c.setFont(PDF_FONTS["regular"], vr["font_size"])
+            c.drawString(xs[1] + 1*mm, y2 + 1.45*mm, vr["desc"])
+
+            if vr["unit"] is not None:
+                c.setFont(PDF_FONTS["regular"], 10)
+                c.drawRightString(xs[3] - 1*mm, y2 + 1.65*mm,
+                                  f"{vr['unit']:,.2f} €".replace(",", " ").replace(".", ","))
+                c.drawRightString(xs[4] - 1*mm, y2 + 1.65*mm,
+                                  f"{vr['amount']:,.2f} €".replace(",", " ").replace(".", ","))
+        y = y2
+
+    footer_h = 12*mm
+    y2 = y - footer_h
+    c.setStrokeColor(BLACK)
+    c.setLineWidth(.55)
+    c.rect(tx, y2, table_w, footer_h, fill=0, stroke=1)
+    for x in xs[2:]:
+        c.line(x, y, x, y2)
+
+    c.setFont(PDF_FONTS["italic"], 9.5)
+    c.drawString(tx + 20*mm, y - 4.2*mm, pdf_t("vat_notice", lang))
+    c.drawString(tx + 20*mm, y - 9.4*mm, pdf_t("invoice_euros", lang))
+
+    total = sum(float(x["quantity"] or 0) * float(x["unit_price"] or 0) for x in invoice_lines) if invoice_lines else (float(r["service_amount"] or 0) + float(r["goods_amount"] or 0))
+    c.setFont(PDF_FONTS["bold"], 9.5)
+    c.drawString(xs[2] + 2*mm, y - 9.4*mm, pdf_t("net_payable", lang) + " :")
+    c.drawRightString(xs[4] - 1*mm, y - 9.4*mm,
+                      f"{total:,.2f} €".replace(",", " ").replace(".", ","))
+
+    note_y = y2 - 7*mm
+    # V2.3.51 : légèrement plus lisible à l'impression, avec réduction
+    # automatique seulement si la ligne risque de dépasser la largeur A4.
+    fit_text(
+        c,
+        pdf_t("abandon_1", lang),
+        7*mm, note_y, W-14*mm, PDF_FONTS["italic"], 7.3, 6.8
+    )
+    fit_text(
+        c,
+        pdf_t("abandon_2", lang),
+        7*mm, note_y-4.5*mm, W-14*mm, PDF_FONTS["regular"], 7.3, 6.8
+    )
+
+    c.setFillColor(LIGHT_GREY)
+    conds = [
+        pdf_t("payment_1", lang),
+        pdf_t("payment_2", lang),
+        pdf_t("payment_3", lang),
+        pdf_t("payment_4", lang),
+    ]
+    yy = note_y - 14*mm
+    for line in conds:
+        fit_text(
+            c, line, 7*mm, yy, W-14*mm,
+            PDF_FONTS["regular"], 7.2, 6.7
+        )
+        yy -= 4.2*mm
+
+    c.setFillColor(BLACK)
+    c.setFont(PDF_FONTS["regular"], 7.8)
+    footer = [
+        f"{conf.get('business_name','WOPR')} - {conf.get('owner_name','')} - {pdf_t('siret_no', lang)} : {conf.get('siret','')} - {pdf_t('ape_code', lang)} : {conf.get('ape','')}",
+        f"IBAN : {conf.get('iban','')}",
+        f"- {conf.get('website','')} - {conf.get('email','')} -",
+    ]
+    legal_lines = wrap_pdf_text(
+        pdf_t("legal_registration_exemption", lang),
+        PDF_FONTS["regular"], 7.8, W-20*mm
+    )
+    footer.extend(legal_lines)
+    fy = 25*mm
+    for line in footer:
+        c.drawCentredString(W/2, fy, line)
+        fy -= 4.2*mm
+
+    c.save()
+    pdf_bytes = bio.getvalue()
+
+    # V2.3.238 — classement automatique de la facture selon sa date réelle.
+    # Les numéros historiques JJMMYYYYHHMM restent prioritaires pour retrouver
+    # la date de facture ; sinon on utilise finished_at puis received_date.
+    invoice_date_value = invoice_no_date(r["invoice_no"])
+    if not invoice_date_value:
+        invoice_date_value = str(r["finished_at"] or r["received_date"] or "")[:10]
+    try:
+        datetime.strptime(str(invoice_date_value or ""), "%Y-%m-%d")
+    except Exception:
+        invoice_date_value = now().strftime("%Y-%m-%d")
+
+    invoice_filename = (
+        f"{safe_filename(r['client_name'])}_"
+        f"{safe_filename(r['invoice_no'])}_"
+        f"{pdf_language_suffix(lang)}.pdf"
+    )
+
+    invoice_folder = year_month_folder(
+        FACTURES_ROOT,
+        invoice_date_value,
+        create=True
+    )
+    invoice_saved_path = invoice_folder / safe_document_name(invoice_filename)
+    try:
+        invoice_saved_path.write_bytes(pdf_bytes)
+    except Exception as exc:
+        app.logger.warning(
+            "Impossible d'enregistrer la facture dans %s: %s",
+            invoice_saved_path, exc
+        )
+
+    bio.seek(0)
+    return send_file(
+        bio,
+        mimetype="application/pdf",
+        # V2.3.239 : la copie officielle est déjà archivée dans
+        # private/documents/Factures. Affichage navigateur, sans doublon
+        # automatique dans Téléchargements.
+        as_attachment=force_download,
+        download_name=invoice_filename
+    )
+
+
+
+@app.route("/repair/<int:rid>/followup/email", methods=["GET", "POST"])
+def followup_email(rid):
+    """Envoie uniquement le PDF de suivi + photos sélectionnées, jamais la facture."""
+    smtp_settings = read_smtp_settings()
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name, c.email client_email
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not r:
+        return "Dossier introuvable", 404
+
+    lang = pdf_lang(request.values.get("lang", "fr"))
+    cancel_url = url_for("repair_detail", rid=rid)
+
+    if request.method == "GET":
+        if not smtp_settings.get("enabled") or not smtp_settings.get("token"):
+            flash("Configure d'abord le SMTP Proton dans Sécurité.")
+            return redirect(url_for("security_page"))
+        if not r["client_email"]:
+            flash("Impossible d'envoyer : le client n'a pas d'adresse e-mail.")
+            return redirect(cancel_url)
+
+        ident = business_identity()
+        subject = f"{ident['name']} - Suivi de réparation"
+        if str(r["status"] or "") == "Laissé pour pièces":
+            body = (
+                "Bonjour,\n\n"
+                f"Comme convenu, vous avez choisi de laisser votre matériel à {ident['name']} pour pièces "
+                "en remplacement du forfait diagnostic de 30 €.\n\n"
+                "Vous trouverez ci-joint le suivi de votre dossier ainsi que les photos sélectionnées.\n\n"
+                "Cordialement,\n"
+                f"{business_signature()}"
+            )
+        else:
+            body = (
+                "Bonjour,\n\n"
+                f"Vous trouverez ci-joint le suivi de votre dossier {ident['name']} ainsi que les photos sélectionnées.\n\n"
+                "Cordialement,\n"
+                f"{business_signature()}"
+            )
+
+        # Génère aussi le PDF dès l'écran de prévisualisation afin d'afficher
+        # une vraie pièce jointe (nom + taille), et pas seulement une phrase.
+        preview_pdf = intake_pdf(rid)
+        preview_pdf_data = b""
+        if hasattr(preview_pdf, "get_data"):
+            # send_file() utilise le mode direct_passthrough :
+            # get_data() plante tant qu'on ne le désactive pas explicitement.
+            preview_pdf.direct_passthrough = False
+            preview_pdf_data = bytes(preview_pdf.get_data())
+        preview_pdf_ok = preview_pdf_data.startswith(b"%PDF")
+        preview_pdf_filename = (
+            f"{safe_filename(r['client_name'])}_"
+            f"{now().strftime('%d%m%Y')}_"
+            f"{pdf_language_suffix(lang)}.pdf"
+        )
+        preview_pdf_size = len(preview_pdf_data) if preview_pdf_ok else 0
+
+        return render_template(
+            "followup_email_preview.html",
+            r=r,
+            recipient=r["client_email"],
+            subject=subject,
+            body=body,
+            cancel_url=cancel_url,
+            sender=smtp_settings.get("sender_email") or smtp_settings.get("username"),
+            pdf_lang=lang,
+            pdf_languages=PDF_LANGUAGES,
+            preview_pdf_ok=preview_pdf_ok,
+            preview_pdf_filename=preview_pdf_filename,
+            preview_pdf_size=preview_pdf_size,
+        )
+
+    recipient = request.form.get("recipient", "").strip()
+    subject = request.form.get("subject", "").strip()
+    body = request.form.get("body", "").strip()
+    lang = pdf_lang(request.form.get("lang", "fr"))
+
+    if not recipient or "@" not in recipient:
+        flash("Adresse destinataire invalide.")
+        return redirect(url_for("followup_email", rid=rid, lang=lang))
+    if not subject:
+        flash("L'objet du message est obligatoire.")
+        return redirect(url_for("followup_email", rid=rid, lang=lang))
+
+    # Génère directement le PDF de suivi dans la requête courante.
+    # On évite le client Flask interne : selon l'auth/session il pouvait renvoyer
+    # autre chose que le PDF tout en ayant un code HTTP 200.
+    pdf_response = intake_pdf(rid)
+    if not hasattr(pdf_response, "get_data"):
+        flash("Impossible de générer le PDF de suivi.")
+        return redirect(url_for("followup_email", rid=rid, lang=lang))
+    pdf_response.direct_passthrough = False
+    pdf_data = bytes(pdf_response.get_data())
+    if not pdf_data.startswith(b"%PDF"):
+        flash("Le PDF de suivi n'a pas pu être généré correctement.")
+        return redirect(url_for("followup_email", rid=rid, lang=lang))
+
+    sender_email = str(smtp_settings.get("sender_email") or smtp_settings.get("username") or "").strip()
+    sender_name = str(smtp_settings.get("sender_name") or business_identity()["name"]).strip()
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    msg["To"] = recipient
+    set_email_content(msg, body)
+
+    followup_filename = (
+        f"{safe_filename(r['client_name'])}_"
+        f"{now().strftime('%d%m%Y')}_"
+        f"{pdf_language_suffix(lang)}.pdf"
+    )
+    msg.add_attachment(
+        pdf_data,
+        maintype="application",
+        subtype="pdf",
+        filename=followup_filename
+    )
+
+    # Médias choisis au moment de l'envoi : photos, GIF et vidéos.
+    allowed_media_ext = {
+        ".jpg", ".jpeg", ".png", ".webp", ".gif",
+        ".mp4", ".mov", ".webm", ".m4v", ".avi"
+    }
+    media_files = request.files.getlist("media")
+    attached_media = 0
+    attached_media_bytes = 0
+    max_media_total = 20 * 1024 * 1024  # 20 Mo de médias, hors PDF
+
+    for media in media_files:
+        filename = str(media.filename or "").strip()
+        if not filename:
+            continue
+        ext = Path(filename).suffix.lower()
+        if ext not in allowed_media_ext:
+            continue
+
+        data = media.read()
+        if not data:
+            continue
+
+        if attached_media_bytes + len(data) > max_media_total:
+            flash("Certains médias n'ont pas été joints : limite de 20 Mo de médias par e-mail.")
+            break
+
+        guessed_type, _ = mimetypes.guess_type(filename)
+        if guessed_type and "/" in guessed_type:
+            maintype, subtype = guessed_type.split("/", 1)
+        elif ext == ".gif":
+            maintype, subtype = "image", "gif"
+        elif ext in {".mp4", ".m4v"}:
+            maintype, subtype = "video", "mp4"
+        elif ext == ".mov":
+            maintype, subtype = "video", "quicktime"
+        elif ext == ".webm":
+            maintype, subtype = "video", "webm"
+        elif ext == ".avi":
+            maintype, subtype = "video", "x-msvideo"
+        else:
+            maintype, subtype = "application", "octet-stream"
+
+        msg.add_attachment(
+            data,
+            maintype=maintype,
+            subtype=subtype,
+            filename=safe_filename(filename)
+        )
+        attached_media += 1
+        attached_media_bytes += len(data)
+
+    # Vérification avant envoi : le PDF de suivi doit réellement être présent
+    # dans le MIME du message.
+    attachments = list(msg.iter_attachments())
+    pdf_attachments = [
+        part for part in attachments
+        if part.get_content_type() == "application/pdf"
+    ]
+    if not pdf_attachments:
+        flash("Erreur interne : le PDF de suivi n'a pas été joint au message.")
+        return redirect(url_for("followup_email", rid=rid, lang=lang))
+
+    try:
+        smtp_send_message(msg)
+        audit_event(
+            "FOLLOWUP_EMAIL",
+            f"Suivi repair_id={rid} envoyé à {recipient} avec {attached_media} média(s)",
+            request.remote_addr
+        )
+        flash(
+            f"Suivi PDF joint et envoyé par e-mail à {recipient}"
+            + (f" avec {attached_media} média(s)." if attached_media else ".")
+        )
+        return redirect(cancel_url)
+    except Exception as e:
+        audit_event(
+            "FOLLOWUP_EMAIL_ERROR",
+            f"Suivi repair_id={rid} : {type(e).__name__}",
+            request.remote_addr
+        )
+        flash(f"Échec envoi e-mail : {e}")
+        return redirect(url_for("followup_email", rid=rid, lang=lang))
+
+
+@app.route("/repair/<int:rid>/invoice/email", methods=["GET", "POST"])
+def invoice_email(rid):
+    smtp_settings = read_smtp_settings()
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name, c.email client_email
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+
+    if not r:
+        return "Dossier introuvable", 404
+    if not r["invoice_no"]:
+        flash("Impossible d'envoyer : aucune facture n'a encore été créée.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    from_page = request.values.get("from_page", "detail")
+    with_followup = request.values.get("with_followup", "") in {"1", "true", "on"}
+    lang = pdf_lang(request.values.get("lang", "fr"))
+    cancel_url = url_for("invoices_page") if from_page == "factures" else url_for("repair_detail", rid=rid)
+
+    if request.method == "GET":
+        if not smtp_settings.get("enabled") or not smtp_settings.get("token"):
+            flash("Configure d'abord le SMTP Proton dans Sécurité.")
+            return redirect(url_for("security_page"))
+        if not r["client_email"]:
+            flash("Impossible d'envoyer : le client n'a pas d'adresse e-mail.")
+            return redirect(cancel_url)
+
+        ident = business_identity()
+        subject = f"{ident['name']} - Facture {r['invoice_no']}"
+        if with_followup:
+            subject += " + suivi de réparation"
+        sumup_url = str(r["sumup_payment_url"] or "").strip()
+        sumup_block = ""
+        if read_sumup_settings().get("enabled") and sumup_url:
+            sumup_block = (
+                "Si vous souhaitez régler en ligne, vous pouvez utiliser ce lien SumUp sécurisé :\n"
+                f"{sumup_url}\n\n"
+            )
+        body = (
+            "Bonjour,\n\n"
+            f"Veuillez trouver ci-joint votre facture {ident['name']}"
+            + (" ainsi que le suivi de votre réparation." if with_followup else ".")
+            + "\n\n"
+            f"{sumup_block}"
+            "Je vous remercie pour votre confiance.\n\n"
+            "Cordialement,\n"
+            f"{business_signature()}"
+        )
+        followup_filename = (
+            f"{safe_filename(r['client_name'])}_"
+            f"{now().strftime('%d%m%Y')}_"
+            f"{pdf_language_suffix(lang)}_suivi.pdf"
+        ) if with_followup else ""
+        invoice_attachment_filename = (
+            f"{safe_filename(r['client_name'])}_"
+            f"{safe_filename(r['invoice_no'])}_"
+            f"{pdf_language_suffix(lang)}_facture.pdf"
+        )
+        return render_template(
+            "invoice_email_preview.html",
+            r=r,
+            recipient=r["client_email"],
+            subject=subject,
+            body=body,
+            from_page=from_page,
+            cancel_url=cancel_url,
+            sender=smtp_settings.get("sender_email") or smtp_settings.get("username"),
+            pdf_lang=lang,
+            pdf_languages=PDF_LANGUAGES,
+            with_followup=with_followup,
+            followup_filename=followup_filename,
+            invoice_attachment_filename=invoice_attachment_filename,
+        )
+
+    recipient = request.form.get("recipient", "").strip()
+    subject = request.form.get("subject", "").strip()
+    body = request.form.get("body", "").strip()
+    with_followup = request.form.get("with_followup", "") in {"1", "true", "on"}
+
+    if not recipient or "@" not in recipient:
+        flash("Adresse destinataire invalide.")
+        return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=int(with_followup)))
+    if not subject:
+        flash("L'objet du message est obligatoire.")
+        return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=int(with_followup)))
+
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess.update(dict(session))
+        pdf_response = client.get(url_for("invoice_pdf", rid=rid, lang=lang))
+        if pdf_response.status_code != 200:
+            flash("Impossible de générer le PDF de facture.")
+            return redirect(url_for("invoice_email", rid=rid, from_page=from_page))
+        pdf_data = bytes(pdf_response.data)
+
+    sender_email = str(smtp_settings.get("sender_email") or smtp_settings.get("username") or "").strip()
+    sender_name = str(smtp_settings.get("sender_name") or business_identity()["name"]).strip()
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    msg["To"] = recipient
+    set_email_content(msg, body)
+    invoice_attachment_filename = (
+        f"{safe_filename(r['client_name'])}_"
+        f"{safe_filename(r['invoice_no'])}_"
+        f"{pdf_language_suffix(lang)}_facture.pdf"
+    )
+    msg.add_attachment(
+        pdf_data,
+        maintype="application",
+        subtype="pdf",
+        filename=invoice_attachment_filename
+    )
+
+    if with_followup:
+        followup_response = intake_pdf(rid)
+        if not hasattr(followup_response, "get_data"):
+            flash("Impossible de générer le PDF de suivi.")
+            return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=1))
+        followup_response.direct_passthrough = False
+        followup_data = bytes(followup_response.get_data())
+        if not followup_data.startswith(b"%PDF"):
+            flash("Le PDF de suivi n'a pas pu être généré correctement.")
+            return redirect(url_for("invoice_email", rid=rid, from_page=from_page, with_followup=1))
+        msg.add_attachment(
+            followup_data,
+            maintype="application",
+            subtype="pdf",
+            filename=f"{safe_filename(r['client_name'])}_{now().strftime('%d%m%Y')}_{pdf_language_suffix(lang)}_suivi.pdf"
+        )
+
+    try:
+        smtp_send_message(msg)
+        audit_event("INVOICE_EMAIL", f"Facture {r['invoice_no']} envoyée à {recipient}", request.remote_addr)
+        flash(
+            f"Facture {r['invoice_no']}"
+            + (" et suivi" if with_followup else "")
+            + f" envoyé(s) par e-mail à {recipient}."
+        )
+        return redirect(cancel_url)
+    except Exception as e:
+        audit_event("INVOICE_EMAIL_ERROR", f"Facture {r['invoice_no']} : {type(e).__name__}", request.remote_addr)
+        flash(f"Échec envoi e-mail : {e}")
+        return redirect(url_for("invoice_email", rid=rid, from_page=from_page))
+
+
+@app.route("/repair/<int:rid>/invoice/sms-link")
+def invoice_sms_link(rid):
+    con = db()
+    r = con.execute("""
+        SELECT r.*, c.name client_name, c.phone client_phone
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.id=?
+    """, (rid,)).fetchone()
+    con.close()
+    if not r:
+        return "Dossier introuvable", 404
+    if not r["client_phone"]:
+        flash("Le client n'a pas de numéro de téléphone.")
+        return redirect(url_for("repair_detail", rid=rid))
+
+    # Cette page ouvre le composeur SMS sur un téléphone.
+    message = f"Bonjour {r['client_name']}, votre facture {business_identity()['name']} n° {r['invoice_no'] or ''} est disponible. Merci."
+    from urllib.parse import quote
+    phone = re.sub(r"[^0-9+]", "", r["client_phone"])
+    return redirect(f"sms:{phone}?body={quote(message)}")
+
+
+
+
+@app.route("/contacts/import-google-csv", methods=["GET", "POST"])
+def import_google_csv_contacts():
+    if request.method == "POST":
+        f = request.files.get("csv")
+        if not f or not f.filename:
+            flash("Choisis ton export Google Contacts .csv.")
+            return redirect(url_for("import_google_csv_contacts"))
+
+        if not f.filename.lower().endswith(".csv"):
+            flash("Le fichier doit être un export Google Contacts .csv.")
+            return redirect(url_for("import_google_csv_contacts"))
+
+        try:
+            raw = f.read().decode("utf-8-sig", errors="replace")
+            contacts = parse_google_contacts_csv(raw)
+
+            if request.form.get("only_business_label") == "on":
+                business_label = str(
+                    cfg().get("google_contact_group")
+                    or cfg().get("business_name")
+                    or "WOPR"
+                ).strip().casefold()
+                contacts = [
+                    c for c in contacts
+                    if business_label in str(c.get("labels") or "").casefold()
+                ]
+        except Exception as e:
+            flash(f"Impossible de lire le CSV Google : {e}")
+            return redirect(url_for("import_google_csv_contacts"))
+
+        if not contacts:
+            flash("Aucun contact exploitable trouvé dans ce CSV.")
+            return redirect(url_for("import_google_csv_contacts"))
+
+        analyzed, summary = analyze_google_csv_contacts(contacts)
+
+        payload = {
+            "created_at": now().isoformat(timespec="seconds"),
+            "source_filename": safe_filename(Path(f.filename).stem) + ".csv",
+            "summary": summary,
+            "contacts": analyzed,
+        }
+        save_pending_google_csv_import(payload)
+
+        audit_event(
+            "GOOGLE_CSV_IMPORT_ANALYZE",
+            (
+                f"{summary['total_source']} source; {summary['safe']} sûrs; "
+                f"{summary['will_fill']} à compléter; "
+                f"filtre_label={'oui' if request.form.get('only_business_label') == 'on' else 'non'}"
+            ),
+            request.remote_addr
+        )
+        return redirect(url_for("import_google_csv_preview"))
+
+    return render_template("google_csv_import.html")
+
+
+@app.route("/contacts/import-google-csv/preview")
+def import_google_csv_preview():
+    payload, _ = load_pending_google_csv_import()
+    if not payload:
+        flash("Aucun import Google CSV en attente. Recharge le fichier.")
+        return redirect(url_for("import_google_csv_contacts"))
+    return render_template("google_csv_import_preview.html", payload=payload)
+
+
+@app.route("/contacts/import-google-csv/confirm", methods=["POST"])
+def import_google_csv_confirm():
+    payload, pending_path = load_pending_google_csv_import()
+    if not payload:
+        flash("L'aperçu Google CSV a expiré. Recharge le fichier.")
+        return redirect(url_for("import_google_csv_contacts"))
+
+    selected_ids = {
+        int(x) for x in request.form.getlist("apply_client_id")
+        if str(x).isdigit()
+    }
+
+    safe_rows = [
+        x for x in payload.get("contacts", [])
+        if x.get("status") == "safe"
+        and x.get("local_client_id") in selected_ids
+        and (x.get("fill") or x.get("duplicate_local_ids"))
+    ]
+
+    if not safe_rows:
+        flash("Aucun complément ou doublon sûr sélectionné.")
+        return redirect(url_for("import_google_csv_preview"))
+
+    backup_database(force=True, tag="avant_import_google_csv")
+    con = db()
+
+    updated_clients = 0
+    updated_fields = 0
+    merged_duplicates = 0
+    moved_repairs = 0
+    moved_quotes = 0
+
+    for row in safe_rows:
+        cid = int(row["local_client_id"])
+
+        # Merge safe local duplicates in the same operation.
+        for dup_id in row.get("duplicate_local_ids") or []:
+            try:
+                dup_id = int(dup_id)
+            except Exception:
+                continue
+            merge_result = _merge_one_local_client(con, cid, dup_id)
+            if merge_result["merged"]:
+                merged_duplicates += 1
+                moved_repairs += merge_result["repairs"]
+                moved_quotes += merge_result["quotes"]
+
+        current = con.execute("SELECT * FROM clients WHERE id=?", (cid,)).fetchone()
+        if not current:
+            continue
+
+        # Revalider au moment de l'écriture : uniquement les champs encore vides.
+        allowed = (
+            "first_name", "last_name", "company", "phone", "email",
+            "address_street", "postal_code", "city"
+        )
+        sets = []
+        values = []
+
+        for field in allowed:
+            wanted = str((row.get("fill") or {}).get(field) or "").strip()
+            if wanted and not str(current[field] or "").strip():
+                sets.append(f"{field}=?")
+                values.append(wanted)
+
+        if not sets:
+            # The row may still have merged local duplicates.
+            continue
+
+        # Maintenir le nom historique/compatibilité à partir des champs structurés.
+        first_after = (
+            (row.get("fill") or {}).get("first_name")
+            if not str(current["first_name"] or "").strip()
+            else current["first_name"]
+        ) or ""
+        last_after = (
+            (row.get("fill") or {}).get("last_name")
+            if not str(current["last_name"] or "").strip()
+            else current["last_name"]
+        ) or ""
+
+        if (first_after or last_after):
+            composed = compose_client_name(last_after, first_after)
+            if composed and not str(current["name"] or "").strip():
+                sets.append("name=?")
+                values.append(composed)
+
+        # Reconstruire address uniquement à partir des champs structurés finaux.
+        street_after = (
+            (row.get("fill") or {}).get("address_street")
+            if not str(current["address_street"] or "").strip()
+            else current["address_street"]
+        ) or ""
+        postal_after = (
+            (row.get("fill") or {}).get("postal_code")
+            if not str(current["postal_code"] or "").strip()
+            else current["postal_code"]
+        ) or ""
+        city_after = (
+            (row.get("fill") or {}).get("city")
+            if not str(current["city"] or "").strip()
+            else current["city"]
+        ) or ""
+
+        address_after = "\n".join(
+            x for x in [
+                str(street_after).strip(),
+                " ".join(x for x in [str(postal_after).strip(), str(city_after).strip()] if x).strip()
+            ] if x
+        )
+
+        if address_after != str(current["address"] or ""):
+            sets.append("address=?")
+            values.append(address_after)
+
+        sets.extend(["google_sync_status=?", "google_sync_error=?", "updated_at=?"])
+        values.extend(["À synchroniser", "", now().isoformat(timespec="seconds")])
+        values.append(cid)
+
+        con.execute(
+            f"UPDATE clients SET {', '.join(sets)} WHERE id=?",
+            values
+        )
+        updated_clients += 1
+        updated_fields += len([
+            f for f in allowed
+            if str((row.get("fill") or {}).get(f) or "").strip()
+            and not str(current[f] or "").strip()
+        ])
+
+    con.commit()
+    con.close()
+
+    audit_event(
+        "GOOGLE_CSV_IMPORT_APPLY",
+        (
+            f"{updated_clients} clients; {updated_fields} champs complétés; "
+            f"{merged_duplicates} doublons fusionnés; "
+            f"{moved_repairs} réparations; {moved_quotes} devis déplacés"
+        ),
+        request.remote_addr
+    )
+
+    if pending_path:
+        try:
+            pending_path.unlink()
+        except OSError:
+            pass
+    session.pop("google_csv_import_token", None)
+
+    flash(
+        f"Google CSV : {updated_clients} client(s) enrichi(s), "
+        f"{updated_fields} champ(s) complété(s), "
+        f"{merged_duplicates} doublon(s) local(aux) fusionné(s). "
+        "Aucune valeur existante n'a été écrasée."
+    )
+    return redirect(url_for("contacts_page"))
+
+
+@app.route("/contacts/import-google-csv/cancel", methods=["POST"])
+def import_google_csv_cancel():
+    _, pending_path = load_pending_google_csv_import()
+    if pending_path:
+        try:
+            pending_path.unlink()
+        except OSError:
+            pass
+    session.pop("google_csv_import_token", None)
+    flash("Import Google CSV annulé. Aucune donnée n'a été modifiée.")
+    return redirect(url_for("contacts_page"))
+
+
+
+@app.route("/contacts/import-proton", methods=["GET", "POST"])
+def import_proton_contacts():
+    if request.method == "POST":
+        f = request.files.get("vcf")
+        if not f or not f.filename:
+            flash("Choisis ton fichier Proton Contacts .vcf.")
+            return redirect(url_for("import_proton_contacts"))
+
+        if not f.filename.lower().endswith(".vcf"):
+            flash("Le fichier doit être un export Proton .vcf.")
+            return redirect(url_for("import_proton_contacts"))
+
+        try:
+            raw = f.read().decode("utf-8-sig", errors="replace")
+            contacts = parse_proton_vcf(raw)
+        except Exception as e:
+            flash(f"Impossible de lire le fichier VCF : {e}")
+            return redirect(url_for("import_proton_contacts"))
+
+        if not contacts:
+            flash("Aucun contact trouvé dans ce fichier VCF.")
+            return redirect(url_for("import_proton_contacts"))
+
+        google_index = None
+        google_error = ""
+        if google_credentials() is not None:
+            try:
+                service = google_service()
+                google_index = google_contacts_bulk_index(service)
+            except Exception as e:
+                google_error = str(e)
+
+        analyzed, summary = analyze_proton_contacts(contacts, google_index)
+        payload = {
+            "created_at": now().isoformat(timespec="seconds"),
+            "source_filename": safe_filename(Path(f.filename).stem) + ".vcf",
+            "google_checked": google_index is not None,
+            "google_error": google_error,
+            "summary": summary,
+            "contacts": analyzed,
+        }
+        save_pending_proton_import(payload)
+
+        audit_event(
+            "PROTON_IMPORT_ANALYZE",
+            f"{len(contacts)} contacts analysés; google_checked={google_index is not None}",
+            request.remote_addr
+        )
+        return redirect(url_for("import_proton_preview"))
+
+    return render_template(
+        "proton_import.html",
+        google_connected=google_credentials() is not None
+    )
+
+
+@app.route("/contacts/import-proton/preview")
+def import_proton_preview():
+    payload, _ = load_pending_proton_import()
+    if not payload:
+        flash("Aucune analyse Proton en attente. Recharge le fichier VCF.")
+        return redirect(url_for("import_proton_contacts"))
+    return render_template("proton_import_preview.html", payload=payload)
+
+
+@app.route("/contacts/import-proton/confirm", methods=["POST"])
+def import_proton_confirm():
+    payload, pending_path = load_pending_proton_import()
+    if not payload:
+        flash("Analyse Proton expirée. Recharge le fichier VCF.")
+        return redirect(url_for("import_proton_contacts"))
+
+    contacts = payload.get("contacts", [])
+    # Tous les contacts Proton importés sont considérés comme des clients WOPR.
+    # Google est un miroir : les contacts absents y sont créés automatiquement.
+    create_missing_google = True
+
+    backup_database(force=True, tag="avant_import_proton")
+    audit_event("PROTON_IMPORT_START", f"{len(contacts)} contacts", request.remote_addr)
+
+    # Recalcule les index au moment exact de l'import.
+    con = db()
+    current_rows = con.execute("SELECT * FROM clients ORDER BY id").fetchall()
+    con.close()
+    local_index = build_local_contact_index(current_rows)
+
+    source_phone_counts = {}
+    for c in contacts:
+        for phone in c.get("phones", []):
+            pk = normalize_phone(phone)
+            if pk:
+                source_phone_counts[pk] = source_phone_counts.get(pk, 0) + 1
+
+    service = google_service() if google_credentials() is not None else None
+    google_index = None
+    group_resource = None
+    google_scan_error = ""
+    if service:
+        try:
+            google_index = google_contacts_bulk_index(service)
+            group_resource = google_find_group(service)
+        except Exception as e:
+            google_scan_error = str(e)
+            google_index = None
+
+    created_local = 0
+    merged_local = 0
+    local_ambiguous = 0
+    google_linked = 0
+    google_created = 0
+    google_ambiguous = 0
+    google_errors = 0
+
+    for contact in contacts:
+        # 1) Rattachement local : UID Proton > e-mail > téléphone unique.
+        local_matches, _ = _unique_contact_matches(contact, local_index, source_phone_counts)
+        client_id = None
+
+        if len(local_matches) == 1:
+            client_id = local_matches[0]
+            con = db()
+            existing = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+            if existing:
+                name = existing["name"] or contact.get("name", "")
+                email = existing["email"] or contact.get("email", "")
+                phone = existing["phone"] or contact.get("phone", "")
+                street = existing["address_street"] or existing["address"] or contact.get("address_street", "")
+                postal = existing["postal_code"] or contact.get("postal_code", "")
+                city = existing["city"] or contact.get("city", "")
+                address = "\n".join(x for x in [street, " ".join(x for x in [postal, city] if x).strip()] if x)
+                notes = _merge_notes(existing["notes"], contact.get("notes", ""))
+
+                con.execute("""
+                    UPDATE clients SET
+                        name=?, email=?, phone=?, address=?, address_street=?,
+                        postal_code=?, city=?, notes=?,
+                        proton_uid=COALESCE(NULLIF(proton_uid,''), ?),
+                        proton_imported_at=?, updated_at=?
+                    WHERE id=?
+                """, (
+                    name, email, phone, address, street, postal, city, notes,
+                    contact.get("uid", ""), now().isoformat(timespec="seconds"),
+                    now().isoformat(timespec="seconds"), client_id
+                ))
+                con.commit()
+                merged_local += 1
+            con.close()
+
+        elif len(local_matches) > 1:
+            # Ne jamais fusionner arbitrairement plusieurs clients locaux.
+            local_ambiguous += 1
+
+        if client_id is None:
+            con = db()
+            address = "\n".join(
+                x for x in [
+                    contact.get("address_street", ""),
+                    " ".join(x for x in [contact.get("postal_code", ""), contact.get("city", "")] if x).strip()
+                ] if x
+            )
+            cur = con.execute("""
+                INSERT INTO clients(
+                    name,address,address_street,postal_code,city,phone,email,
+                    notes,proton_uid,proton_imported_at,
+                    google_sync_status,google_sync_error,created_at,updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                contact.get("name") or "Client Proton",
+                address,
+                contact.get("address_street", ""),
+                contact.get("postal_code", ""),
+                contact.get("city", ""),
+                contact.get("phone", ""),
+                contact.get("email", ""),
+                contact.get("notes", ""),
+                contact.get("uid", ""),
+                now().isoformat(timespec="seconds"),
+                "À synchroniser",
+                "",
+                now().isoformat(timespec="seconds"),
+                now().isoformat(timespec="seconds"),
+            ))
+            client_id = cur.lastrowid
+            con.commit()
+            con.close()
+            created_local += 1
+
+        # Actualise l'index local afin qu'un même UID Proton réimporté ne se duplique pas.
+        con = db()
+        fresh = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        con.close()
+        if fresh:
+            fresh_index = build_local_contact_index([fresh])
+            for key in ("email", "phone", "name", "uid"):
+                for val, ids in fresh_index[key].items():
+                    local_index[key].setdefault(val, [])
+                    for rid in ids:
+                        if rid not in local_index[key][val]:
+                            local_index[key][val].append(rid)
+
+        # 2) Google : rattache un contact unique existant. Ne modifie pas son contenu,
+        # pour éviter d'effacer ses éventuels champs secondaires.
+        if google_index is not None and service:
+            google_matches, _ = _unique_contact_matches(contact, google_index, source_phone_counts)
+
+            if len(google_matches) == 1:
+                resource = google_matches[0]
+                try:
+                    if group_resource:
+                        service.contactGroups().members().modify(
+                            resourceName=group_resource,
+                            body={"resourceNamesToAdd": [resource]}
+                        ).execute()
+                    set_google_sync_state(client_id, "Synchronisé", resource_name=resource)
+                    google_linked += 1
+                except HttpError as e:
+                    if getattr(e.resp, "status", None) in (400, 409):
+                        set_google_sync_state(client_id, "Synchronisé", resource_name=resource)
+                        google_linked += 1
+                    else:
+                        set_google_sync_state(client_id, "Erreur", error=str(e))
+                        google_errors += 1
+                except Exception as e:
+                    set_google_sync_state(client_id, "Erreur", error=str(e))
+                    google_errors += 1
+
+            elif len(google_matches) > 1:
+                set_google_sync_state(
+                    client_id,
+                    "Erreur",
+                    error=f"Doublon Google à vérifier : {len(google_matches)} contacts correspondent."
+                )
+                google_ambiguous += 1
+
+            elif create_missing_google:
+                try:
+                    resource = google_create_from_proton(service, contact, group_resource)
+                    if resource:
+                        set_google_sync_state(client_id, "Synchronisé", resource_name=resource)
+                        google_created += 1
+                    else:
+                        set_google_sync_state(client_id, "Erreur", error="Google n'a renvoyé aucun identifiant.")
+                        google_errors += 1
+                except Exception as e:
+                    set_google_sync_state(client_id, "Erreur", error=str(e))
+                    google_errors += 1
+
+    if pending_path:
+        try:
+            pending_path.unlink()
+        except OSError:
+            pass
+    session.pop("proton_import_token", None)
+
+    audit_event(
+        "PROTON_IMPORT_DONE",
+        f"created={created_local}; merged={merged_local}; google_linked={google_linked}; google_created={google_created}; google_ambiguous={google_ambiguous}",
+        request.remote_addr
+    )
+
+    message = (
+        f"Import Proton terminé : {created_local} nouveau(x) client(s), "
+        f"{merged_local} fiche(s) locale(s) rapprochée(s)."
+    )
+    if local_ambiguous:
+        message += f" {local_ambiguous} rapprochement(s) local(aux) ambigu(s) laissé(s) séparé(s)."
+    if google_index is not None:
+        message += (
+            f" Google : {google_linked} contact(s) existant(s) rattaché(s), "
+            f"{google_created} créé(s), {google_ambiguous} doublon(s) à vérifier"
+        )
+        if google_errors:
+            message += f", {google_errors} erreur(s)"
+        message += "."
+    elif google_scan_error:
+        message += f" Vérification Google impossible : {google_scan_error}"
+
+    flash(message)
+    return redirect(url_for("contacts_page"))
+
+
+@app.route("/contacts/import-proton/cancel", methods=["POST"])
+def import_proton_cancel():
+    _, pending_path = load_pending_proton_import()
+    if pending_path:
+        try:
+            pending_path.unlink()
+        except OSError:
+            pass
+    session.pop("proton_import_token", None)
+    flash("Import Proton annulé. Aucune donnée n'a été modifiée.")
+    return redirect(url_for("contacts_page"))
+
+
+
+@app.route("/recherche")
+def global_search():
+    """Recherche globale WOPR : multi-mots, accents et ponctuation ignorés."""
+    q = " ".join(str(request.args.get("q") or "").split()).strip()
+    results = {"clients": [], "repairs": [], "ledger": [], "quotes": [], "archived_invoices": [], "stock": []}
+
+    if q:
+        normalized_q = normalize_global_search(q)
+        tokens = [t for t in normalized_q.split() if t][:8]
+
+        def build_where(expressions):
+            # Chaque mot saisi doit apparaître quelque part dans l'élément.
+            # Exemple : "benoit gaucher" peut matcher prénom + nom séparément.
+            token_clauses = []
+            params = []
+            for token in tokens:
+                token_clauses.append(
+                    "(" + " OR ".join(f"WOPR_NORM({expr}) LIKE ?" for expr in expressions) + ")"
+                )
+                params.extend([f"%{token}%"] * len(expressions))
+            return " AND ".join(token_clauses) if token_clauses else "1=0", params
+
+        con = db()
+
+        client_expr = [
+            "COALESCE(name,'')",
+            "COALESCE(first_name,'')",
+            "COALESCE(last_name,'')",
+            "COALESCE(first_name,'') || ' ' || COALESCE(last_name,'')",
+            "COALESCE(last_name,'') || ' ' || COALESCE(first_name,'')",
+            "COALESCE(company,'')",
+            "COALESCE(phone,'')",
+            "COALESCE(email,'')",
+            "COALESCE(address_street,'')",
+            "COALESCE(postal_code,'')",
+            "COALESCE(city,'')",
+        ]
+        where, params = build_where(client_expr)
+        results["clients"] = con.execute(f"""
+            SELECT * FROM clients
+            WHERE {where}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 30
+        """, params).fetchall()
+
+        repair_expr = [
+            "COALESCE(r.dossier_no,'')",
+            "COALESCE(c.name,'')",
+            "COALESCE(c.first_name,'')",
+            "COALESCE(c.last_name,'')",
+            "COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')",
+            "COALESCE(c.last_name,'') || ' ' || COALESCE(c.first_name,'')",
+            "COALESCE(c.company,'')",
+            "COALESCE(c.phone,'')",
+            "COALESCE(c.email,'')",
+            "COALESCE(r.device_type,'')",
+            "COALESCE(r.brand_model,'')",
+            "COALESCE(r.serial_no,'')",
+            "COALESCE(r.system_name,'')",
+            "COALESCE(r.problem,'')",
+            "COALESCE(r.diagnosis,'')",
+            "COALESCE(r.status,'')",
+            "COALESCE(r.invoice_no,'')",
+            "COALESCE(r.accessories,'')",
+        ]
+        where, params = build_where(repair_expr)
+        results["repairs"] = con.execute(f"""
+            SELECT r.*, c.name AS client_name, c.first_name AS client_first_name,
+                   c.last_name AS client_last_name, c.phone AS client_phone
+            FROM repairs r
+            JOIN clients c ON c.id=r.client_id
+            WHERE {where}
+            ORDER BY r.received_date DESC, r.id DESC
+            LIMIT 50
+        """, params).fetchall()
+
+        ledger_expr = [
+            "COALESCE(party,'')",
+            "COALESCE(operation,'')",
+            "COALESCE(entry_date,'')",
+            "COALESCE(description,'')",
+            "COALESCE(invoice_no,'')",
+            "COALESCE(remarks,'')",
+            "COALESCE(document_original_name,'')",
+            "printf('%.2f',COALESCE(amount_ttc,0))",
+        ]
+        where, params = build_where(ledger_expr)
+        results["ledger"] = con.execute(f"""
+            SELECT * FROM ledger_entries
+            WHERE {where}
+            ORDER BY entry_date DESC, id DESC
+            LIMIT 50
+        """, params).fetchall()
+
+        # Factures historiques qui n'existent que dans archived_invoices.
+        # La page Factures les affiche déjà ; la recherche globale doit donc
+        # interroger la même source afin qu'une facture historique ne soit pas
+        # "visible ici mais introuvable là-bas".
+        archived_expr = [
+            "COALESCE(ai.invoice_no,'')",
+            "COALESCE(ai.client_name,'')",
+            "COALESCE(ai.invoice_date,'')",
+            "COALESCE(ai.payment_mode,'')",
+            "COALESCE(ai.accounting_date,'')",
+            "COALESCE(ai.notes,'')",
+            "printf('%.2f',COALESCE(ai.invoice_total,0))",
+        ]
+        where, params = build_where(archived_expr)
+        archived_rows = con.execute(f"""
+            SELECT ai.*
+            FROM archived_invoices ai
+            WHERE {where}
+            ORDER BY ai.invoice_date DESC, ai.invoice_no DESC
+            LIMIT 50
+        """, params).fetchall()
+
+        # Évite les doublons lorsque la même facture est déjà trouvée via un
+        # dossier réparation ou une vente historique. archived_invoices reste
+        # la source de secours pour les factures qui n'ont aucune autre ligne.
+        found_invoice_nos = {
+            canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
+            for r in results["repairs"]
+            if str(r["invoice_no"] or "").strip()
+        }
+        found_invoice_nos.update(
+            canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
+            for r in results["ledger"]
+            if str(r["invoice_no"] or "").strip()
+        )
+        results["archived_invoices"] = [
+            r for r in archived_rows
+            if canonical_client_invoice_no(str(r["invoice_no"] or "").strip())
+               not in found_invoice_nos
+        ]
+
+        # Stock composants : référence, fonction, quantité et remarques.
+        # Même logique multi-mots / accents / ponctuation que le reste de la recherche globale.
+        ensure_stock_table()
+        stock_expr = [
+            "COALESCE(reference,'')",
+            "COALESCE(function,'')",
+            "COALESCE(quantity,'')",
+            "COALESCE(remarks,'')",
+        ]
+        where, params = build_where(stock_expr)
+        results["stock"] = con.execute(f"""
+            SELECT *
+            FROM stock_items
+            WHERE {where}
+            ORDER BY reference COLLATE NOCASE, id
+            LIMIT 50
+        """, params).fetchall()
+
+        quote_expr = [
+            "COALESCE(q.quote_no,'')",
+            "COALESCE(q.client_name,'')",
+            "COALESCE(q.client_company,'')",
+            "COALESCE(q.contact_name,'')",
+            "COALESCE(q.status,'')",
+            "COALESCE(q.notes,'')",
+            "COALESCE(ql.description,'')",
+        ]
+        where, params = build_where(quote_expr)
+        results["quotes"] = con.execute(f"""
+            SELECT DISTINCT q.*
+            FROM quotes q
+            LEFT JOIN quote_lines ql ON ql.quote_id=q.id
+            WHERE {where}
+            ORDER BY q.quote_date DESC, q.id DESC
+            LIMIT 30
+        """, params).fetchall()
+
+        con.close()
+
+    total = sum(len(v) for v in results.values())
+    return render_template("global_search.html", q=q, results=results, total=total)
+
+
+@app.route("/contacts/<int:client_id>/historique")
+def client_history(client_id):
+    """Historique client complet : lecture seule, accès direct aux dossiers/devis."""
+    con = db()
+    client = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        con.close()
+        return "Client introuvable", 404
+    repairs = con.execute("""
+        SELECT * FROM repairs WHERE client_id=?
+        ORDER BY received_date DESC, id DESC
+    """, (client_id,)).fetchall()
+    # Les devis historiques peuvent ne pas avoir de client_id (anciens imports).
+    # On les rattache uniquement si le nom correspond sans ambiguïté à ce client.
+    def _client_name_keys(row):
+        keys = set()
+        values = [
+            row["name"],
+            row["company"],
+            f"{row['first_name'] or ''} {row['last_name'] or ''}",
+            f"{row['last_name'] or ''} {row['first_name'] or ''}",
+        ]
+        for value in values:
+            key = normalize_history_name(value)
+            if key:
+                keys.add(key)
+        return keys
+
+    client_keys = _client_name_keys(client)
+
+    # On construit l'index des noms de tous les clients pour éviter tout rattachement
+    # automatique lorsqu'un même nom peut désigner plusieurs fiches.
+    key_owners = {}
+    for c in con.execute("SELECT * FROM clients").fetchall():
+        for key in _client_name_keys(c):
+            key_owners.setdefault(key, set()).add(int(c["id"]))
+
+    legacy_quotes = con.execute("""
+        SELECT * FROM quotes
+        WHERE client_id IS NULL
+        ORDER BY quote_date DESC, id DESC
+    """).fetchall()
+
+    linked_quote_ids = []
+    for q in legacy_quotes:
+        qkey = normalize_history_name(q["client_name"])
+        if not qkey or qkey not in client_keys:
+            continue
+        owners = key_owners.get(qkey, set())
+        if owners == {int(client_id)}:
+            con.execute("UPDATE quotes SET client_id=?, updated_at=? WHERE id=? AND client_id IS NULL",
+                        (client_id, now().isoformat(timespec="seconds"), q["id"]))
+            linked_quote_ids.append(int(q["id"]))
+
+    if linked_quote_ids:
+        con.commit()
+
+    quotes = con.execute("""
+        SELECT * FROM quotes WHERE client_id=?
+        ORDER BY quote_date DESC, id DESC
+    """, (client_id,)).fetchall()
+    con.close()
+    total_billed = sum(float(r["service_amount"] or 0) + float(r["goods_amount"] or 0) for r in repairs)
+    total_paid = sum(
+        float(r["accounting_service_amount"] or 0) + float(r["accounting_goods_amount"] or 0)
+        for r in repairs if int(r["paid"] or 0) == 1
+    )
+    unpaid_total = sum(
+        float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)
+        for r in repairs if int(r["paid"] or 0) == 0 and (float(r["service_amount"] or 0) + float(r["goods_amount"] or 0)) > 0
+    )
+    active_statuses = {"Reçu", "Diagnostic", "En attente accord", "En attente pièce", "En réparation", "Terminé"}
+    active_repairs = [r for r in repairs if str(r["status"] or "") in active_statuses]
+    to_return = [r for r in repairs if str(r["status"] or "") == "Terminé"]
+
+    invoice_repairs = [r for r in repairs if str(r["invoice_no"] or "").strip()]
+    invoice_numbers = []
+    seen_invoice_numbers = set()
+    for r in invoice_repairs:
+        no = str(r["invoice_no"] or "").strip()
+        if no and no not in seen_invoice_numbers:
+            seen_invoice_numbers.add(no)
+            invoice_numbers.append(no)
+
+    def _repair_activity_date(row):
+        # La dernière interaction réelle est plus utile qu'une simple date d'entrée.
+        for key in ("returned_at", "finished_at", "received_date", "created_at"):
+            value = str(row[key] or "").strip()
+            if value:
+                return value[:10]
+        return ""
+
+    last_repair = max(repairs, key=_repair_activity_date) if repairs else None
+    last_intervention_date = _repair_activity_date(last_repair) if last_repair else None
+    last_invoice = invoice_repairs[0] if invoice_repairs else None
+    last_quote = quotes[0] if quotes else None
+
+    return render_template(
+        "client_history.html",
+        client=client,
+        repairs=repairs,
+        quotes=quotes,
+        total_billed=total_billed,
+        total_paid=total_paid,
+        unpaid_total=unpaid_total,
+        active_repairs=active_repairs,
+        to_return=to_return,
+        invoice_count=len(invoice_numbers),
+        last_repair=last_repair,
+        last_intervention_date=last_intervention_date,
+        last_invoice=last_invoice,
+        last_quote=last_quote,
+    )
+
+
+
+
+@app.route("/achats-ventes/vente/<int:entry_id>/facture")
+def achats_ventes_sale_invoice_view(entry_id):
+    """Ouvre le vrai PDF de vente client sans fabriquer un nom ni dépendre d'un RID ambigu."""
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+    if (row["operation"] or "").casefold() != "vente":
+        return "Cette ligne n'est pas une vente", 400
+    invoice_no = str(row["invoice_no"] or "").strip()
+    if not invoice_no:
+        return "Aucun numéro de facture", 404
+
+    canonical_invoice_no = canonical_client_invoice_no(invoice_no)
+    pdf = find_client_invoice_pdf(canonical_invoice_no, row["party"] or "")
+    if pdf and pdf.exists():
+        return send_pdf_with_title(
+            pdf,
+            f"Facture {canonical_invoice_no} - {row['party'] or ''}",
+            download_name=pdf.name,
+        )
+
+    # Fallback : s'il n'existe aucun PDF historique classé, on retombe sur la facture WOPR.
+    con = db()
+    members = con.execute("""
+        SELECT r.id, c.name AS client_name, r.legacy_imported
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE trim(COALESCE(r.invoice_no,'')) IN (?, ?)
+        ORDER BY r.id DESC
+    """, (invoice_no, canonical_invoice_no)).fetchall()
+    con.close()
+    party_key = normalize_client_filename_name(row["party"] or "")
+    best = None
+    best_score = -1
+    for member in members:
+        ck = normalize_client_filename_name(member["client_name"] or "")
+        sc = 100 if ck and ck == party_key else (50 if ck and party_key and (ck in party_key or party_key in ck) else 0)
+        if sc > best_score:
+            best, best_score = member, sc
+    if best:
+        return redirect(url_for("invoice_pdf", rid=int(best["id"])))
+    return "Facture client introuvable", 404
+
+
+@app.route("/securite/controle-documents")
+def documents_audit():
+    """Audit non destructif des archives Factures et Devis."""
+    con = db()
+
+    repair_invoice_rows = con.execute("""
+        SELECT r.client_id,
+               c.name AS client_name,
+               r.invoice_no,
+               MIN(COALESCE(NULLIF(r.finished_at,''), r.received_date)) AS repair_date,
+               MAX(COALESCE(r.remarks,'')) AS repair_remarks,
+               MAX(COALESCE(r.legacy_invoice_text,'')) AS legacy_invoice_text,
+               MAX(COALESCE(r.sent_via,'')) AS sent_via,
+               MAX(COALESCE(r.legacy_imported,0)) AS legacy_imported,
+               'repair' AS invoice_source
+        FROM repairs r
+        JOIN clients c ON c.id=r.client_id
+        WHERE COALESCE(TRIM(r.invoice_no),'')<>''
+        GROUP BY r.client_id, r.invoice_no
+        ORDER BY repair_date DESC, r.invoice_no DESC
+    """).fetchall()
+
+    # Certaines anciennes factures n'ont jamais eu leur numéro recopié dans
+    # repairs.invoice_no, mais il existe bien dans Achats/Ventes.
+    # Exemple : Habarou 090920251600.
+    ledger_invoice_rows = con.execute("""
+        SELECT NULL AS client_id,
+               COALESCE(NULLIF(TRIM(party),''), '—') AS client_name,
+               TRIM(invoice_no) AS invoice_no,
+               MIN(entry_date) AS repair_date,
+               MAX(COALESCE(remarks,'')) AS repair_remarks,
+               '' AS legacy_invoice_text,
+               '' AS sent_via,
+               0 AS legacy_imported,
+               'ledger' AS invoice_source
+        FROM ledger_entries
+        WHERE lower(COALESCE(operation,''))='vente'
+          AND COALESCE(TRIM(invoice_no),'')<>''
+        GROUP BY TRIM(invoice_no), COALESCE(NULLIF(TRIM(party),''), '—')
+        ORDER BY repair_date DESC, invoice_no DESC
+    """).fetchall()
+
+    # Fusion par numéro : si une facture existe dans les deux sources, on garde
+    # en priorité la fiche réparation (plus riche), sinon la vente historique.
+    invoice_by_no = {}
+    for row in ledger_invoice_rows:
+        invoice_by_no[str(row["invoice_no"] or "").strip()] = dict(row)
+    for row in repair_invoice_rows:
+        invoice_by_no[str(row["invoice_no"] or "").strip()] = dict(row)
+
+    invoice_rows = sorted(
+        invoice_by_no.values(),
+        key=lambda row: (
+            str(row.get("repair_date") or ""),
+            str(row.get("invoice_no") or ""),
+        ),
+        reverse=True,
+    )
+
+    quote_docs = con.execute("""
+        SELECT qd.id, qd.quote_id, qd.filename, qd.label, qd.created_at,
+               q.quote_no, q.quote_date, q.client_name
+        FROM quote_documents qd
+        JOIN quotes q ON q.id=qd.quote_id
+        ORDER BY q.quote_date DESC, q.quote_no DESC, qd.id DESC
+    """).fetchall()
+
+    con.close()
+
+    # ---------- Factures ----------
+    invoice_files = sorted(
+        p for p in FACTURES_ROOT.rglob("*.pdf")
+        if p.is_file()
+    ) if FACTURES_ROOT.exists() else []
+
+    missing_invoices = []
+    probable_invoice_matches = []
+    paper_only_invoices = []
+    matched_invoice_paths = set()
+
+    def _invoice_pdf_timestamp(path):
+        """Extrait la date/heure d'un nom de PDF historique.
+
+        Formats connus :
+        - JJMMYYYYHHMM (12 chiffres)
+        - JJMMYYHHMM   (10 chiffres, ancien format)
+        """
+        stem = path.stem
+
+        m = re.search(r'(\d{12})$', stem)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%d%m%Y%H%M")
+            except ValueError:
+                pass
+
+        m = re.search(r'(\d{10})$', stem)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%d%m%y%H%M")
+            except ValueError:
+                pass
+
+        return None
+
+    _pdf_text_cache = {}
+
+    def _pdf_contains_invoice_no(path, invoice_no):
+        """Cherche un numéro de facture dans le texte des 2 premières pages.
+
+        Le contrôle est optionnel : si pypdf n'est pas disponible ou si le PDF
+        n'est pas extractible, l'audit continue simplement avec les autres critères.
+        """
+        if not invoice_no or not re.fullmatch(r"\d{12}", invoice_no):
+            return False
+
+        key = str(path)
+        if key not in _pdf_text_cache:
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(str(path))
+                parts = []
+                for page in reader.pages[:2]:
+                    try:
+                        parts.append(page.extract_text() or "")
+                    except Exception:
+                        continue
+                _pdf_text_cache[key] = "\n".join(parts)
+            except Exception:
+                _pdf_text_cache[key] = ""
+
+        return invoice_no in _pdf_text_cache[key]
+
+    for row in invoice_rows:
+        invoice_no = str(row["invoice_no"] or "").strip()
+        client_name = str(row["client_name"] or "").strip()
+
+        row_dict = dict(row)
+        legacy_text = normalize_history_name(
+            " ".join([
+                str(row_dict.get("repair_remarks") or ""),
+                str(row_dict.get("legacy_invoice_text") or ""),
+                str(row_dict.get("sent_via") or ""),
+            ])
+        )
+        is_legacy_paper_invoice = bool(
+            row_dict.get("legacy_imported") and "facture papier" in legacy_text
+        )
+
+        # 1) Recherche brute du numéro de facture dans le nom du PDF.
+        # Même une ancienne facture marquée "Facture Papier" peut avoir un PDF
+        # archivé : dans ce cas le PDF réel est prioritaire.
+        #    Elle ne dépend pas du nom client et couvre des fichiers historiques
+        #    comme EN_NANI_110920261211_FR.pdf.
+        direct_candidates = [
+            p for p in invoice_files
+            if invoice_no.casefold() in p.name.casefold()
+        ]
+        if direct_candidates:
+            for p in direct_candidates:
+                try:
+                    matched_invoice_paths.add(str(p.resolve()))
+                except Exception:
+                    matched_invoice_paths.add(str(p))
+            continue
+
+        # 2) Correspondance historique exacte sur date/heure.
+        #    Exemple :
+        #    120520261400 -> Leroy_1205261400.pdf
+        #    (même JJ/MM/AAAA HH:MM, année abrégée sur 2 chiffres dans le fichier)
+        exact_datetime_candidates = []
+        if re.fullmatch(r"\d{12}", invoice_no):
+            try:
+                invoice_dt = datetime.strptime(invoice_no, "%d%m%Y%H%M")
+            except ValueError:
+                invoice_dt = None
+
+            if invoice_dt:
+                for pdf in invoice_files:
+                    pdf_dt = _invoice_pdf_timestamp(pdf)
+                    if pdf_dt != invoice_dt:
+                        continue
+
+                    stem_norm = normalize_history_name(pdf.stem)
+                    client_tokens_exact = [
+                        token for token in normalize_history_name(client_name).split()
+                        if len(token) >= 3 and token not in {
+                            "client", "passage", "clientpassage",
+                            "monsieur", "madame",
+                            "le", "la", "les", "de", "du", "des",
+                        }
+                    ]
+
+                    if client_tokens_exact and not any(
+                        token in stem_norm for token in client_tokens_exact
+                    ):
+                        continue
+
+                    exact_datetime_candidates.append(pdf)
+
+        if len(exact_datetime_candidates) == 1:
+            pdf = exact_datetime_candidates[0]
+            try:
+                matched_invoice_paths.add(str(pdf.resolve()))
+            except Exception:
+                matched_invoice_paths.add(str(pdf))
+            continue
+
+        # 3) Résolution stricte déjà utilisée ailleurs dans WOPR.
+        exact = find_client_invoice_pdf(
+            invoice_no,
+            client_name,
+            invoice_files=invoice_files,
+        )
+        if exact and exact.is_file():
+            try:
+                matched_invoice_paths.add(str(exact.resolve()))
+            except Exception:
+                matched_invoice_paths.add(str(exact))
+            continue
+
+        # 4) Contenu du PDF : sur certains historiques, le nom du fichier porte
+        #    la date réelle de facturation/retrait alors que le numéro WOPR est
+        #    inscrit dans le document. Exemple :
+        #    020420261200 -> Bouvart_220420261700.pdf
+        strong_tokens = [
+            token for token in normalize_history_name(client_name).split()
+            if len(token) >= 3 and token not in {
+                "client", "passage", "clientpassage",
+                "monsieur", "madame",
+            }
+        ]
+        content_candidates = []
+        for pdf in invoice_files:
+            stem_norm = normalize_history_name(pdf.stem)
+            if strong_tokens and not any(token in stem_norm for token in strong_tokens):
+                continue
+            if _pdf_contains_invoice_no(pdf, invoice_no):
+                content_candidates.append(pdf)
+
+        if len(content_candidates) == 1:
+            pdf = content_candidates[0]
+            try:
+                matched_invoice_paths.add(str(pdf.resolve()))
+            except Exception:
+                matched_invoice_paths.add(str(pdf))
+            continue
+
+        # 5) Historique : le numéro peut représenter la date d'entrée alors que
+        #    le PDF est nommé avec la date réelle de facturation/retrait.
+        #    On cherche alors par nom client + chronologie, sans déclarer le lien certain.
+        # Les noms clients historiques peuvent contenir des qualificatifs
+        # comme "(client passage)". Ils ne doivent jamais servir à identifier
+        # un PDF : sinon "Batanero (client passage) Stéphane" peut matcher
+        # à tort "Passage_19_08_2026.pdf".
+        client_token_stopwords = {
+            "client", "passage", "clientpassage",
+            "mr", "mme", "monsieur", "madame",
+            # Particules/articles trop génériques : ils provoquent des faux
+            # positifs comme "Quellec Sylvio Le" -> "Le Gallo".
+            "le", "la", "les", "de", "du", "des", "d", "l",
+        }
+        client_tokens = [
+            token for token in normalize_history_name(client_name).split()
+            if len(token) >= 3 and token not in client_token_stopwords
+        ]
+
+        entry_date = invoice_no_date(invoice_no)
+        try:
+            entry_dt = datetime.strptime(entry_date, "%Y-%m-%d") if entry_date else None
+        except ValueError:
+            entry_dt = None
+
+        candidates = []
+        for pdf in invoice_files:
+            stem_norm = normalize_history_name(pdf.stem)
+            pdf_tokens = set(stem_norm.split())
+
+            matched_tokens = []
+            for token in client_tokens:
+                if token in pdf_tokens:
+                    matched_tokens.append(token)
+                    continue
+                # Ancien nom de fichier concaténé : "LeQuellec" doit pouvoir
+                # correspondre à "Quellec" sans pour autant accepter "Le Gallo".
+                if any(
+                    pdf_token.endswith(token) or pdf_token.startswith(token)
+                    for pdf_token in pdf_tokens
+                    if len(pdf_token) >= len(token) + 2
+                ):
+                    matched_tokens.append(token)
+
+            # Sans aucun élément significatif du nom en commun, on ne rapproche jamais.
+            if not matched_tokens:
+                continue
+
+            pdf_dt = _invoice_pdf_timestamp(pdf)
+            score = len(matched_tokens) * 100
+
+            # Les anciens numéros de facture contiennent souvent HHMM à la fin.
+            # Quand plusieurs PDF du même client existent, une heure identique
+            # est un excellent critère de départage :
+            # 090720261600 -> ...260620261600.pdf plutôt que ...010720261730.pdf.
+            invoice_time = invoice_no[-4:] if re.fullmatch(r"\d{12}", invoice_no) else ""
+            pdf_time = pdf_dt.strftime("%H%M") if pdf_dt else ""
+            if invoice_time and pdf_time:
+                if invoice_time == pdf_time:
+                    score += 700
+                elif invoice_time[:2] == pdf_time[:2]:
+                    score += 80
+
+            # Le mois est un bon critère pour les anciens imports où l'année
+            # peut être incohérente. Exemple : 130520251723 doit préférer
+            # Ricquier_060520261100.pdf (mai) à Ricquier_230320261530.pdf (mars).
+            if entry_dt and pdf_dt and pdf_dt.month == entry_dt.month:
+                score += 500
+
+            # Une date identique ou très proche est un indice beaucoup plus fort
+            # qu'un prénom commun. Cela évite Jean-Pierre Leroy -> Jean-Pierre Moreau.
+            if entry_dt and pdf_dt:
+                delta_days = (pdf_dt.date() - entry_dt.date()).days
+
+                if delta_days == 0:
+                    score += 1000
+                elif 0 < delta_days <= 7:
+                    score += 500 - (delta_days * 20)
+                elif 7 < delta_days <= 45:
+                    score += 250 - min(delta_days, 45)
+                elif -7 <= delta_days < 0:
+                    # Certains historiques ont une petite incohérence entre
+                    # date saisie et date imprimée.
+                    score += 180 - (abs(delta_days) * 10)
+                elif 45 < delta_days <= 120:
+                    score += 80
+                elif pdf_dt.year == entry_dt.year:
+                    score += 10
+
+            # Bonus si le nom du fichier commence directement par un token client.
+            stem_first = stem_norm.split()[0] if stem_norm.split() else ""
+            if stem_first in client_tokens:
+                score += 120
+
+            # Un simple prénom commun ne suffit pas. On ne retient que les
+            # rapprochements historiques réellement étayés par le nom + la date/mois/heure.
+            if score >= 300:
+                candidates.append((score, pdf, pdf_dt))
+
+        candidates.sort(key=lambda item: (item[0], item[2] or datetime.min), reverse=True)
+
+        if candidates:
+            best_score = candidates[0][0]
+            best = [item for item in candidates if item[0] == best_score][:5]
+
+            for _, pdf, _ in best:
+                try:
+                    matched_invoice_paths.add(str(pdf.resolve()))
+                except Exception:
+                    matched_invoice_paths.add(str(pdf))
+
+            probable_invoice_matches.append({
+                "invoice_no": invoice_no,
+                "repair_date": row["repair_date"] or "",
+                "client_name": client_name,
+                "files": [
+                    str(pdf.relative_to(DOCUMENTS_ROOT))
+                    if DOCUMENTS_ROOT in pdf.parents else str(pdf)
+                    for _, pdf, _ in best
+                ],
+            })
+        else:
+            # Dernier filet de sécurité, volontairement très conservateur :
+            # si le numéro historique est mal formé, on accepte uniquement
+            # UN SEUL PDF du même client dans le même mois + année.
+            #
+            # Exemples :
+            # - Batanero 240720261530 -> Batanero_2407020261530.pdf
+            # - Chiab 60620251900 -> Chiab_230620251000.pdf
+            #
+            # Mais cela ne doit surtout pas rapprocher :
+            # - Vigier 2025/07 -> Vigier 2026/05
+            # - Marin -> aucun PDF
+            fallback_dt = None
+
+            # Tente d'abord la date embarquée dans le numéro, avec plusieurs
+            # longueurs historiques.
+            for fmt in ("%d%m%Y%H%M", "%d%m%y%H%M", "%d%m%Y%H%M"):
+                try:
+                    if fmt == "%d%m%Y%H%M" and len(invoice_no) == 12:
+                        fallback_dt = datetime.strptime(invoice_no, fmt)
+                        break
+                    if fmt == "%d%m%y%H%M" and len(invoice_no) == 10:
+                        fallback_dt = datetime.strptime(invoice_no, fmt)
+                        break
+                except ValueError:
+                    pass
+
+            # Sinon, utilise la date du dossier historique/réparation.
+            if fallback_dt is None:
+                repair_date = str(row.get("repair_date") or "")
+                try:
+                    fallback_dt = datetime.fromisoformat(repair_date)
+                except ValueError:
+                    try:
+                        fallback_dt = datetime.strptime(repair_date[:10], "%Y-%m-%d")
+                    except Exception:
+                        fallback_dt = None
+
+            strong_tokens = [
+                token for token in normalize_history_name(client_name).split()
+                if len(token) >= 3 and token not in {
+                    "client", "passage", "clientpassage",
+                    "monsieur", "madame",
+                    "le", "la", "les", "de", "du", "des",
+                }
+            ]
+
+            same_month_client_files = []
+            if fallback_dt and strong_tokens:
+                expected_year = str(fallback_dt.year)
+                expected_month = f"{fallback_dt.month:02d}"
+
+                for pdf in invoice_files:
+                    try:
+                        rel = pdf.relative_to(FACTURES_ROOT)
+                        parts = rel.parts
+                    except Exception:
+                        continue
+
+                    # Structure attendue : Factures/YYYY/MM - Mois/fichier.pdf
+                    if len(parts) < 3:
+                        continue
+                    folder_year = parts[0]
+                    folder_month = parts[1][:2]
+
+                    if folder_year != expected_year or folder_month != expected_month:
+                        continue
+
+                    stem_norm = normalize_history_name(pdf.stem)
+                    if not any(token in stem_norm for token in strong_tokens):
+                        continue
+
+                    same_month_client_files.append(pdf)
+
+            if len(same_month_client_files) == 1:
+                pdf = same_month_client_files[0]
+                try:
+                    matched_invoice_paths.add(str(pdf.resolve()))
+                except Exception:
+                    matched_invoice_paths.add(str(pdf))
+                probable_invoice_matches.append({
+                    "invoice_no": invoice_no,
+                    "repair_date": row["repair_date"] or "",
+                    "client_name": client_name,
+                    "files": [
+                        str(pdf.relative_to(DOCUMENTS_ROOT))
+                        if DOCUMENTS_ROOT in pdf.parents else str(pdf)
+                    ],
+                })
+            elif is_legacy_paper_invoice:
+                row_dict["reason"] = "Facture papier / historique sans PDF archivé"
+                paper_only_invoices.append(row_dict)
+            else:
+                missing_invoices.append(dict(row))
+
+    unmatched_invoice_files = []
+    standalone_invoice_files = []
+    ignored_invoice_supporting_docs = []
+
+    def _looks_like_standalone_invoice(path):
+        """Reconnaît un PDF de facture plausible même si aucune ligne de base
+        ne permet de le rattacher formellement.
+
+        Formats historiques connus :
+        - Client_JJMMYYYYHHMM.pdf
+        - Client_JJMMYYHHMM.pdf
+        - Client_DD_MM_YYYY.pdf
+        - variantes avec suffixe _FR
+        """
+        stem = path.stem
+
+        patterns = (
+            r".*[_-]\d{12}(?:_FR)?$",
+            r".*[_-]\d{10}(?:_FR)?$",
+            r".*[_-]\d{2}[_-]\d{2}[_-]\d{4}(?:_FR)?$",
+        )
+        return any(re.fullmatch(pattern, stem, flags=re.IGNORECASE) for pattern in patterns)
+
+    def _is_invoice_supporting_doc(path):
+        """Détecte les justificatifs rangés avec les factures mais qui ne sont
+        pas eux-mêmes des factures (virement, paiement, reçu bancaire, etc.)."""
+        stem = normalize_history_name(path.stem)
+        supporting_terms = (
+            "virement",
+            "preuve paiement",
+            "preuve de paiement",
+            "justificatif paiement",
+            "justificatif de paiement",
+            "payment proof",
+            "preuve virement",
+            "recu virement",
+        )
+        return any(term in stem for term in supporting_terms)
+
+    for p in invoice_files:
+        try:
+            resolved = str(p.resolve())
+        except Exception:
+            resolved = str(p)
+        if resolved in matched_invoice_paths:
+            continue
+        try:
+            display = str(p.relative_to(DOCUMENTS_ROOT))
+        except Exception:
+            display = str(p)
+
+        if _is_invoice_supporting_doc(p):
+            ignored_invoice_supporting_docs.append(display)
+            continue
+
+        if _looks_like_standalone_invoice(p):
+            standalone_invoice_files.append(display)
+            continue
+
+        unmatched_invoice_files.append(display)
+
+    # ---------- Devis ----------
+    quote_files = sorted(
+        p for p in DEVIS_ROOT.rglob("*.pdf")
+        if p.is_file()
+    ) if DEVIS_ROOT.exists() else []
+
+    quote_by_basename = {}
+    for p in quote_files:
+        quote_by_basename.setdefault(p.name.casefold(), []).append(p)
+
+    missing_quote_documents = []
+    quote_db_filenames = set()
+
+    for row in quote_docs:
+        filename = str(row["filename"] or "").strip()
+        if not filename:
+            continue
+        key = filename.casefold()
+        quote_db_filenames.add(key)
+        if key not in quote_by_basename:
+            missing_quote_documents.append(dict(row))
+
+    duplicate_quote_links = []
+    quote_link_groups = {}
+    for row in quote_docs:
+        key = str(row["filename"] or "").strip().casefold()
+        if not key:
+            continue
+        quote_link_groups.setdefault(key, []).append(dict(row))
+    for key, members in sorted(quote_link_groups.items()):
+        if len(members) > 1:
+            duplicate_quote_links.append({
+                "filename": members[0]["filename"],
+                "rows": members,
+                "count": len(members),
+            })
+
+    unregistered_quote_files = []
+    for p in quote_files:
+        # Les PDF à double suffixe sont des sorties générées par WOPR :
+        # ils ne sont pas censés exister dans quote_documents.
+        if re.search(r"\.[A-Za-z0-9_-]+\.pdf$", p.name, flags=re.I):
+            continue
+
+        if p.name.casefold() in quote_db_filenames:
+            continue
+
+        try:
+            display = str(p.relative_to(DOCUMENTS_ROOT))
+        except Exception:
+            display = str(p)
+
+        unregistered_quote_files.append(display)
+
+    # ---------- Commandes ----------
+    order_files = sorted(
+        p for p in COMMANDES_ROOT.rglob("*.pdf")
+        if p.is_file()
+    ) if COMMANDES_ROOT.exists() else []
+
+    order_file_paths = []
+    for p in order_files:
+        try:
+            order_file_paths.append(str(p.relative_to(DOCUMENTS_ROOT)))
+        except Exception:
+            order_file_paths.append(str(p))
+
+    return render_template(
+        "documents_audit.html",
+        invoice_count=len(invoice_rows),
+        invoice_pdf_count=len(invoice_files),
+        missing_invoices=missing_invoices,
+        probable_invoice_matches=probable_invoice_matches,
+        paper_only_invoices=paper_only_invoices,
+        unmatched_invoice_files=unmatched_invoice_files,
+        standalone_invoice_files=standalone_invoice_files,
+        ignored_invoice_supporting_docs=ignored_invoice_supporting_docs,
+        quote_document_count=len(quote_docs),
+        quote_pdf_count=len(quote_files),
+        missing_quote_documents=missing_quote_documents,
+        duplicate_quote_links=duplicate_quote_links,
+        unregistered_quote_files=unregistered_quote_files,
+        order_pdf_count=len(order_files),
+        order_file_paths=order_file_paths,
+    )
+
+
+@app.route("/achats-ventes/controle-justificatifs")
+def supplier_documents_audit():
+    """Audit non destructif des justificatifs fournisseurs.
+
+    Signale :
+    - les liens valides ;
+    - les liens cassés ;
+    - les fichiers utilisés par plusieurs lignes d'achat ;
+    - les fichiers présents dans Fournisseurs mais non rattachés en base.
+
+    Cette route ne crée, ne déplace, ne renomme et ne supprime aucun fichier.
+    """
+    con = db()
+    rows = con.execute("""
+        SELECT * FROM ledger_entries
+        WHERE lower(COALESCE(operation,''))='achat'
+          AND COALESCE(document_path,'')<>''
+        ORDER BY entry_date DESC, id DESC
+    """).fetchall()
+    con.close()
+
+    ok_rows, broken_rows = [], []
+    resolved_by_row = {}
+    linked_real_paths = set()
+
+    for row in rows:
+        path = ledger_document_file(row)
+        if path and path.is_file():
+            ok_rows.append(row)
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            resolved_by_row[int(row["id"])] = resolved
+            linked_real_paths.add(str(resolved))
+        else:
+            broken_rows.append(row)
+
+    path_groups = {}
+    for row in ok_rows:
+        resolved = resolved_by_row.get(int(row["id"]))
+        if not resolved:
+            continue
+        path_groups.setdefault(str(resolved), []).append(row)
+
+    duplicate_file_groups = []
+    for resolved, members in sorted(path_groups.items()):
+        if len(members) < 2:
+            continue
+        try:
+            display_path = str(Path(resolved).relative_to(DOCUMENTS_ROOT))
+        except Exception:
+            display_path = str(resolved)
+        duplicate_file_groups.append({
+            "path": display_path,
+            "rows": members,
+            "count": len(members),
+        })
+
+    supplier_exts = {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+    orphan_files = []
+    if FOURNISSEURS_ROOT.exists():
+        for path in sorted(FOURNISSEURS_ROOT.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in supplier_exts:
+                continue
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            if str(resolved) in linked_real_paths:
+                continue
+            try:
+                orphan_files.append(str(path.relative_to(DOCUMENTS_ROOT)))
+            except Exception:
+                orphan_files.append(str(path))
+
+    return render_template(
+        "supplier_documents_audit.html",
+        ok_rows=ok_rows,
+        broken_rows=broken_rows,
+        linked_count=len(rows),
+        duplicate_file_groups=duplicate_file_groups,
+        orphan_files=orphan_files,
+    )
+
+
+@app.route("/contacts")
+def contacts_page():
+    q = " ".join(request.args.get("q", "").split()).strip()
+    show_archived = str(request.args.get("archived") or "").strip().lower() in {"1", "true", "yes", "oui"}
+
+    google_status = str(request.args.get("google_status") or "").strip().lower()
+    if not google_status and str(request.args.get("google_errors") or "").strip() in {"1", "true", "yes", "oui"}:
+        google_status = "error"
+    if show_archived or google_status not in {"synced", "pending", "error"}:
+        google_status = ""
+
+    google_errors_only = google_status == "error"
+    archive_clause = "COALESCE(archived,0)=1" if show_archived else "COALESCE(archived,0)=0"
+    status_clause = {
+        "synced": " AND google_sync_status='Synchronisé'",
+        "pending": " AND COALESCE(google_sync_status,'À synchroniser') NOT IN ('Synchronisé','Erreur')",
+        "error": " AND google_sync_status='Erreur'",
+    }.get(google_status, "")
+    con = db()
+
+    if q:
+        like = f"%{q}%"
+        clients = con.execute(f"""
+            SELECT * FROM clients
+            WHERE {archive_clause}{status_clause}
+              AND (
+                   COALESCE(last_name,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(first_name,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(name,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(company,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(phone,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(email,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(address_street,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(postal_code,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(city,'') LIKE ? COLLATE NOCASE
+                OR COALESCE(notes,'') LIKE ? COLLATE NOCASE
+              )
+            ORDER BY
+                COALESCE(first_name,'') COLLATE NOCASE,
+                COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
+                id
+        """, (like, like, like, like, like, like, like, like, like, like)).fetchall()
+    else:
+        clients = con.execute(f"""
+            SELECT * FROM clients
+            WHERE {archive_clause}{status_clause}
+            ORDER BY
+                COALESCE(first_name,'') COLLATE NOCASE,
+                COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
+                id
+        """).fetchall()
+
+    total_clients = con.execute(
+        f"SELECT COUNT(*) FROM clients WHERE {archive_clause}{status_clause}"
+    ).fetchone()[0]
+    archived_clients_count = con.execute(
+        "SELECT COUNT(*) FROM clients WHERE COALESCE(archived,0)=1"
+    ).fetchone()[0]
+
+    # Résumé Google des clients actifs uniquement.
+    google_sync_stats = con.execute("""
+        SELECT
+            SUM(CASE WHEN google_sync_status='Synchronisé' THEN 1 ELSE 0 END) AS synced,
+            SUM(CASE WHEN google_sync_status='Erreur' THEN 1 ELSE 0 END) AS errors,
+            SUM(CASE
+                    WHEN COALESCE(google_sync_status,'') NOT IN ('Synchronisé','Erreur')
+                    THEN 1 ELSE 0
+                END) AS pending
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+    """).fetchone()
+    google_synced_count = int(google_sync_stats["synced"] or 0)
+    google_pending_count = int(google_sync_stats["pending"] or 0)
+    google_error_count = int(google_sync_stats["errors"] or 0)
+
+    try:
+        with _google_sync_progress_lock:
+            sync_snapshot = dict(_google_sync_progress)
+    except NameError:
+        sync_snapshot = {}
+    google_sync_last_result = ""
+    if sync_snapshot.get("finished_at"):
+        scope = "erreurs uniquement" if sync_snapshot.get("errors_only") else "contacts en attente"
+        google_sync_last_result = (
+            f"Dernière synchro : {sync_snapshot.get('ok', 0)} OK · "
+            f"{sync_snapshot.get('errors', 0)} erreur(s) · {scope} · "
+            f"{str(sync_snapshot['finished_at']).replace('T', ' ')}"
+        )
+
+    safe_duplicate_groups = len(find_safe_local_duplicate_groups(con))
+    con.close()
+
+    connected = google_credentials() is not None
+    return render_template(
+        "contacts.html",
+        clients=clients,
+        q=q,
+        total_clients=total_clients,
+        google_connected=connected,
+        google_client_secret=GOOGLE_CLIENT_SECRET.exists(),
+        google_libs_ok=GOOGLE_LIBS_OK,
+        safe_duplicate_groups=safe_duplicate_groups,
+        show_archived=show_archived,
+        google_status=google_status,
+        google_errors_only=google_errors_only,
+        archived_clients_count=archived_clients_count,
+        google_synced_count=google_synced_count,
+        google_pending_count=google_pending_count,
+        google_error_count=google_error_count,
+        google_sync_last_result=google_sync_last_result,
+        business_name=str(cfg().get("business_name") or "WOPR").strip() or "WOPR",
+        google_contact_group=str(
+            cfg().get("google_contact_group")
+            or cfg().get("business_name")
+            or "WOPR"
+        ).strip() or "WOPR",
+    )
+
+
+
+
+@app.route("/contacts/merge-safe-duplicates", methods=["POST"])
+def contacts_merge_safe_duplicates():
+    result = merge_safe_local_duplicates()
+    audit_event(
+        "CLIENT_SAFE_DEDUP",
+        (
+            f"{result['merged_clients']} fiches fusionnées; "
+            f"{result['moved_repairs']} réparations déplacées; "
+            f"{result['moved_quotes']} devis déplacés"
+        ),
+        request.remote_addr
+    )
+
+    if result["merged_clients"]:
+        flash(
+            f"Doublons sûrs : {result['merged_clients']} fiche(s) fusionnée(s), "
+            f"{result['moved_repairs']} réparation(s) et "
+            f"{result['moved_quotes']} devis rattaché(s)."
+        )
+    else:
+        flash("Aucun doublon sûr à fusionner.")
+    return redirect(url_for("contacts_page"))
+
+
+
+
+@app.route("/contacts/<int:client_id>/merge", methods=["GET", "POST"])
+def client_merge(client_id):
+    con = db()
+    source = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not source:
+        con.close()
+        return "Client introuvable", 404
+
+    if request.method == "POST":
+        try:
+            target_id = int(request.form.get("target_id", "0"))
+        except ValueError:
+            target_id = 0
+
+        if not target_id or target_id == client_id:
+            con.close()
+            flash("Choisis une autre fiche client à conserver.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        target = con.execute("SELECT * FROM clients WHERE id=?", (target_id,)).fetchone()
+        if not target:
+            con.close()
+            flash("La fiche client à conserver est introuvable.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        if request.form.get("confirm_merge") != "FUSIONNER":
+            con.close()
+            flash("Fusion annulée : confirmation invalide.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        backup_database(force=True, tag="avant_fusion_manuelle_clients")
+        result = _merge_manual_local_client(con, target_id, client_id)
+        if not result["merged"]:
+            con.close()
+            flash("Fusion impossible.")
+            return redirect(url_for("client_merge", client_id=client_id))
+
+        con.commit()
+        con.close()
+
+        audit_event(
+            "CLIENT_MANUAL_MERGE",
+            (
+                f"source_client_id={client_id}; master_client_id={target_id}; "
+                f"repairs={result['repairs']}; quotes={result['quotes']}"
+            ),
+            request.remote_addr
+        )
+        flash(
+            f"Fusion terminée : {result['repairs']} suivi(s)/facture(s) et "
+            f"{result['quotes']} devis rattaché(s) à la fiche conservée."
+        )
+
+        return_q = request.form.get("return_q", "").strip()
+        target_url = url_for("contacts_page", q=return_q or None)
+        return redirect(target_url + f"#client-{target_id}")
+
+    source_dict = dict(source)
+    source_sigs = _contact_name_signature(
+        source_dict.get("first_name"),
+        source_dict.get("last_name"),
+        source_dict.get("name"),
+        ""
+    )
+
+    rows = [dict(x) for x in con.execute("""
+        SELECT * FROM clients
+        WHERE id<>? AND COALESCE(archived,0)=0
+        ORDER BY COALESCE(NULLIF(last_name,''), name) COLLATE NOCASE,
+                 COALESCE(first_name,'') COLLATE NOCASE,
+                 id
+    """, (client_id,)).fetchall()]
+
+    activity_stats = _client_activity_counts(con)
+
+    candidates = []
+    for row in rows:
+        sigs = _contact_name_signature(
+            row.get("first_name"), row.get("last_name"), row.get("name"), ""
+        )
+        exact_name = bool(source_sigs & sigs)
+        row_stats = activity_stats.get(row["id"], {})
+        candidates.append({
+            "client": row,
+            "exact_name": exact_name,
+            "repairs_count": int(row_stats.get("repairs", 0)),
+            "quotes_count": int(row_stats.get("quotes", 0)),
+        })
+
+    source_stats = activity_stats.get(client_id, {})
+    source_repairs = int(source_stats.get("repairs", 0))
+    source_quotes = int(source_stats.get("quotes", 0))
+    con.close()
+
+    # Les correspondances de nom exact passent en premier.
+    candidates.sort(
+        key=lambda x: (
+            0 if x["exact_name"] else 1,
+            str(x["client"].get("last_name") or x["client"].get("name") or "").casefold(),
+            str(x["client"].get("first_name") or "").casefold(),
+            int(x["client"]["id"])
+        )
+    )
+
+    return render_template(
+        "client_merge.html",
+        source=source,
+        candidates=candidates,
+        source_repairs=int(source_repairs or 0),
+        source_quotes=int(source_quotes or 0),
+        q=request.args.get("q", "").strip(),
+    )
+
+
+
+@app.route("/contacts/new", methods=["GET", "POST"])
+def client_new():
+    if request.method == "POST":
+        last_name = request.form.get("last_name", "").strip()
+        first_name = request.form.get("first_name", "").strip()
+        company = request.form.get("company", "").strip()
+        name = compose_client_name(last_name, first_name).strip() or company
+
+        address_street = request.form.get("address_street", "").strip()
+        postal_code = request.form.get("postal_code", "").strip()
+        city = request.form.get("city", "").strip()
+        phone = request.form.get("phone", "").strip()
+        phone_secondary = request.form.get("phone_secondary", "").strip()
+        email = request.form.get("email", "").strip()
+        email_secondary = request.form.get("email_secondary", "").strip()
+        notes = request.form.get("notes", "").strip()
+
+        form_client = {
+            "name": name,
+            "last_name": last_name,
+            "first_name": first_name,
+            "company": company,
+            "address_street": address_street,
+            "postal_code": postal_code,
+            "city": city,
+            "phone": phone,
+            "phone_secondary": phone_secondary,
+            "email": email,
+            "email_secondary": email_secondary,
+            "notes": notes,
+        }
+
+        if not name:
+            flash("Saisis au moins un prénom/nom ou une société.")
+            return render_template("client_edit.html", client=form_client, is_new=True)
+
+        address = "\n".join(
+            x for x in [address_street, (postal_code + " " + city).strip()] if x
+        )
+        stamp = now().isoformat(timespec="seconds")
+
+        con = db()
+        cur = con.execute("""
+            INSERT INTO clients(
+                name,last_name,first_name,company,
+                address,address_street,postal_code,city,
+                phone,phone_secondary,email,email_secondary,notes,
+                created_at,updated_at,
+                google_sync_status,google_sync_error,
+                archived
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+        """, (
+            name,last_name,first_name,company,
+            address,address_street,postal_code,city,
+            phone,phone_secondary,email,email_secondary,notes,
+            stamp,stamp,
+            "À synchroniser",""
+        ))
+        client_id = int(cur.lastrowid)
+        con.commit()
+        con.close()
+
+        audit_event(
+            "CLIENT_CREATE",
+            f"client_id={client_id}",
+            request.remote_addr
+        )
+        flash("Client créé. Google n'a pas été modifié automatiquement.")
+        return redirect(url_for("contacts_page") + f"#client-{client_id}")
+
+    empty_client = {
+        "name": "",
+        "last_name": "",
+        "first_name": "",
+        "company": "",
+        "address_street": "",
+        "postal_code": "",
+        "city": "",
+        "phone": "",
+        "phone_secondary": "",
+        "email": "",
+        "email_secondary": "",
+        "notes": "",
+    }
+    return render_template("client_edit.html", client=empty_client, is_new=True)
+
+
+@app.route("/contacts/<int:client_id>/edit", methods=["GET", "POST"])
+def client_edit(client_id):
+    con = db()
+    client = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        con.close()
+        return "Client introuvable", 404
+
+    if request.method == "POST":
+        last_name = request.form.get("last_name", "").strip()
+        first_name = request.form.get("first_name", "").strip()
+        company = request.form.get("company", "").strip()
+        # Une fiche peut représenter soit une personne, soit une entreprise.
+        # Pour une entreprise pure, prénom/nom sont facultatifs : le nom affiché
+        # et historique reprend alors la raison sociale saisie dans `company`.
+        name = compose_client_name(last_name, first_name) or company
+        address_street = request.form.get("address_street", "").strip()
+        postal_code = request.form.get("postal_code", "").strip()
+        city = request.form.get("city", "").strip()
+        phone = request.form.get("phone", "").strip()
+        phone_secondary = request.form.get("phone_secondary", "").strip()
+        email = request.form.get("email", "").strip()
+        email_secondary = request.form.get("email_secondary", "").strip()
+        notes = request.form.get("notes", "").strip()
+
+        if not name:
+            flash("Le nom du client est obligatoire.")
+            con.close()
+            return render_template("client_edit.html", client=client)
+
+        address = "\n".join(
+            x for x in [address_street, (postal_code + " " + city).strip()] if x
+        )
+
+        con.execute("""
+            UPDATE clients
+            SET name=?, last_name=?, first_name=?, company=?,
+                address=?, address_street=?, postal_code=?, city=?,
+                phone=?, phone_secondary=?, email=?, email_secondary=?, notes=?, updated_at=?,
+                google_sync_status='À synchroniser', google_sync_error=''
+            WHERE id=?
+        """, (
+            name, last_name, first_name, company,
+            address, address_street, postal_code, city,
+            phone, phone_secondary, email, email_secondary, notes, now().isoformat(timespec="seconds"), client_id
+        ))
+        con.commit()
+        con.close()
+
+        # V2.3.215 : aucune écriture Google automatique.
+        # La fiche reste "À synchroniser" jusqu'au bouton WOPR → Google.
+        flash("Client modifié. Google n'a pas été modifié automatiquement.")
+
+        # Revenir exactement dans le contexte de la liste d'où vient la modification :
+        # recherche éventuelle + archives éventuelles + ligne du client.
+        return_q = request.form.get("return_q", "").strip()
+        return_archived = request.form.get("return_archived", "") == "1"
+        if return_archived:
+            target = url_for("contacts_page", q=return_q or None, archived=1)
+        else:
+            target = url_for("contacts_page", q=return_q or None)
+        return redirect(target + f"#client-{client_id}")
+
+    con.close()
+    return render_template("client_edit.html", client=client, is_new=False)
+
+
+@app.route("/contacts/<int:client_id>/delete", methods=["GET", "POST"])
+def client_delete(client_id):
+    con = db()
+    client = con.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        con.close()
+        return "Client introuvable", 404
+
+    stats = con.execute("""
+        SELECT COUNT(*) AS repairs_count,
+               SUM(CASE WHEN invoice_no IS NOT NULL AND trim(invoice_no)<>'' THEN 1 ELSE 0 END) AS invoices_count
+        FROM repairs WHERE client_id=?
+    """, (client_id,)).fetchone()
+    quotes_count = con.execute(
+        "SELECT COUNT(*) FROM quotes WHERE client_id=?",
+        (client_id,)
+    ).fetchone()[0]
+
+    repairs_count = int(stats["repairs_count"] or 0)
+    invoices_count = int(stats["invoices_count"] or 0)
+    quotes_count = int(quotes_count or 0)
+    has_history = bool(repairs_count or invoices_count or quotes_count)
+    is_archived = int(client["archived"] or 0) == 1
+
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+
+        # Restauration d'une fiche archivée.
+        if is_archived and action == "restore":
+            con.execute("""
+                UPDATE clients
+                SET archived=0, archived_at=NULL,
+                    google_sync_status='À synchroniser',
+                    google_sync_error='',
+                    updated_at=?
+                WHERE id=?
+            """, (now().isoformat(timespec="seconds"), client_id))
+            con.commit()
+            con.close()
+            audit_event("CLIENT_RESTORE", f"client_id={client_id}", request.remote_addr)
+            flash(f"Client « {client['name']} » restauré.")
+            return redirect(url_for("contacts_page"))
+
+        confirm = request.form.get("confirm_delete") == "yes"
+        if not confirm:
+            con.close()
+            flash("Opération annulée : confirmation manquante.")
+            return redirect(url_for("contacts_page"))
+
+        backup_database(force=True, tag="avant_archivage_suppression_client")
+
+        # Abby suit WOPR : si la fiche est reliée, la suppression distante doit
+        # réussir AVANT toute suppression ou archivage local. On évite ainsi
+        # les clients fantômes chez Abby et les liens impossibles à récupérer.
+        if str(client["abby_id"] or "").strip():
+            try:
+                delete_client_from_abby(client)
+                audit_event(
+                    "ABBY_CLIENT_DELETE",
+                    f"client_id={client_id}; abby_type={client['abby_type']}; abby_id={client['abby_id']}",
+                    request.remote_addr
+                )
+            except Exception as exc:
+                con.close()
+                audit_event(
+                    "ABBY_CLIENT_DELETE_ERROR",
+                    f"client_id={client_id}; {type(exc).__name__}",
+                    request.remote_addr
+                )
+                flash(
+                    "Suppression annulée : le client n'a pas pu être supprimé chez Abby. "
+                    f"{exc}"
+                )
+                return redirect(url_for("client_delete", client_id=client_id))
+
+        # Suppression TOTALE volontaire : réservée aux fiches de test / erreurs.
+        # Cette action efface le client ET tout l'historique WOPR associé.
+        if action == "delete_all":
+            if request.form.get("confirm_delete_all") != "SUPPRIMER":
+                con.close()
+                flash("Suppression totale annulée : confirmation invalide.")
+                return redirect(url_for("contacts_page"))
+
+            google_warning = ""
+            if request.form.get("delete_google") == "on" and client["google_resource_name"]:
+                try:
+                    service = google_service()
+                    if service:
+                        service.people().deleteContact(
+                            resourceName=client["google_resource_name"]
+                        ).execute()
+                    else:
+                        google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+                except HttpError as exc:
+                    if getattr(exc.resp, "status", None) != 404:
+                        google_warning = f" Contact Google non supprimé : {exc}"
+                except Exception as exc:
+                    google_warning = f" Contact Google non supprimé : {exc}"
+
+            repairs = con.execute("""
+                SELECT id, signature_path
+                FROM repairs
+                WHERE client_id=?
+            """, (client_id,)).fetchall()
+            repair_ids = [int(row["id"]) for row in repairs]
+
+            quotes = con.execute("""
+                SELECT id
+                FROM quotes
+                WHERE client_id=?
+            """, (client_id,)).fetchall()
+            quote_ids = [int(row["id"]) for row in quotes]
+
+            if repair_ids:
+                placeholders = ",".join("?" for _ in repair_ids)
+                con.execute(
+                    f"DELETE FROM invoice_lines WHERE repair_id IN ({placeholders})",
+                    repair_ids
+                )
+                con.execute(
+                    f"DELETE FROM repair_status_history WHERE repair_id IN ({placeholders})",
+                    repair_ids
+                )
+                con.execute(
+                    f"DELETE FROM repairs WHERE id IN ({placeholders})",
+                    repair_ids
+                )
+
+            if quote_ids:
+                placeholders = ",".join("?" for _ in quote_ids)
+                con.execute(
+                    f"DELETE FROM quote_documents WHERE quote_id IN ({placeholders})",
+                    quote_ids
+                )
+                con.execute(
+                    f"DELETE FROM quote_lines WHERE quote_id IN ({placeholders})",
+                    quote_ids
+                )
+                con.execute(
+                    f"DELETE FROM quotes WHERE id IN ({placeholders})",
+                    quote_ids
+                )
+
+            con.execute("DELETE FROM clients WHERE id=?", (client_id,))
+            con.commit()
+            con.close()
+
+            # Nettoyage des signatures locales rattachées aux suivis supprimés.
+            for repair in repairs:
+                path = repair["signature_path"]
+                if path:
+                    try:
+                        p = resolve_signature_path(path)
+                        if p and p.exists() and p.resolve().parent == SIGNATURES.resolve():
+                            p.unlink()
+                    except Exception:
+                        pass
+
+            audit_event(
+                "CLIENT_DELETE_ALL",
+                (
+                    f"client_id={client_id}; repairs={len(repair_ids)}; "
+                    f"invoices={invoices_count}; quotes={len(quote_ids)}"
+                ),
+                request.remote_addr
+            )
+            flash(
+                f"Client « {client['name']} » supprimé définitivement avec tout son historique."
+                + (" Client supprimé chez Abby." if str(client["abby_id"] or "").strip() else "")
+                + f"{google_warning}"
+            )
+            return redirect(url_for("contacts_page"))
+
+        # Si le client possède un historique, on l'archive et on ne touche
+        # ni aux réparations, ni aux factures, ni aux devis.
+        if has_history:
+            google_warning = ""
+            google_deleted = False
+
+            if request.form.get("delete_google") == "on" and client["google_resource_name"]:
+                try:
+                    service = google_service()
+                    if service:
+                        service.people().deleteContact(
+                            resourceName=client["google_resource_name"]
+                        ).execute()
+                        google_deleted = True
+                    else:
+                        google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+                except HttpError as exc:
+                    if getattr(exc.resp, "status", None) == 404:
+                        # Déjà absent de Google : résultat équivalent à une suppression réussie.
+                        google_deleted = True
+                    else:
+                        google_warning = f" Contact Google non supprimé : {exc}"
+                except Exception as exc:
+                    google_warning = f" Contact Google non supprimé : {exc}"
+
+            stamp = now().isoformat(timespec="seconds")
+            if google_deleted:
+                con.execute("""
+                    UPDATE clients
+                    SET archived=1, archived_at=?,
+                        google_resource_name=NULL,
+                        google_sync_hash=NULL,
+                        google_sync_status='Archivé',
+                        google_sync_error='',
+                        google_synced_at=?,
+                        abby_id=NULL,
+                        abby_type=NULL,
+                        abby_sync_status='Supprimé',
+                        abby_sync_error='',
+                        abby_synced_at=?,
+                        updated_at=?
+                    WHERE id=?
+                """, (stamp, stamp, stamp, stamp, client_id))
+            else:
+                con.execute("""
+                    UPDATE clients
+                    SET archived=1, archived_at=?,
+                        google_sync_status='Archivé',
+                        abby_id=NULL,
+                        abby_type=NULL,
+                        abby_sync_status='Supprimé',
+                        abby_sync_error='',
+                        abby_synced_at=?,
+                        updated_at=?
+                    WHERE id=?
+                """, (stamp, stamp, stamp, client_id))
+
+            con.commit()
+            con.close()
+            audit_event(
+                "CLIENT_ARCHIVE",
+                f"client_id={client_id}; repairs={repairs_count}; invoices={invoices_count}; quotes={quotes_count}",
+                request.remote_addr
+            )
+            flash(
+                f"Client « {client['name']} » archivé. "
+                f"Ses {repairs_count} suivi(s), {invoices_count} facture(s) et {quotes_count} devis sont conservés."
+                + (" Client supprimé chez Abby." if str(client["abby_id"] or "").strip() else "")
+                + f"{google_warning} Pour voir les archives : /contacts?archived=1"
+            )
+            return redirect(url_for("contacts_page"))
+
+        # Aucun historique : vraie suppression autorisée.
+        google_warning = ""
+        if request.form.get("delete_google") == "on" and client["google_resource_name"]:
+            try:
+                service = google_service()
+                if service:
+                    service.people().deleteContact(
+                        resourceName=client["google_resource_name"]
+                    ).execute()
+                else:
+                    google_warning = " Contact Google non supprimé : Google n'est pas connecté."
+            except HttpError as exc:
+                if getattr(exc.resp, "status", None) != 404:
+                    google_warning = f" Contact Google non supprimé : {exc}"
+            except Exception as exc:
+                google_warning = f" Contact Google non supprimé : {exc}"
+
+        con.execute("DELETE FROM clients WHERE id=?", (client_id,))
+        con.commit()
+        con.close()
+        audit_event("CLIENT_DELETE", f"client_id={client_id}; no_history=1", request.remote_addr)
+        abby_note = " Client supprimé chez Abby." if str(client["abby_id"] or "").strip() else ""
+        flash(f"Client « {client['name']} » supprimé.{abby_note}{google_warning}")
+        return redirect(url_for("contacts_page"))
+
+    con.close()
+    return render_template(
+        "client_delete.html",
+        client=client,
+        repairs_count=repairs_count,
+        invoices_count=invoices_count,
+        quotes_count=quotes_count,
+        has_history=has_history,
+        is_archived=is_archived,
+        google_connected=google_credentials() is not None,
+    )
+
+
+@app.route("/google/credentials", methods=["POST"])
+def google_credentials_upload():
+    if not GOOGLE_LIBS_OK:
+        flash("Les bibliothèques Google ne sont pas installées. Relance pip install -r requirements.txt.")
+        return redirect(url_for("contacts_page"))
+    f = request.files.get("credentials")
+    if not f or not f.filename:
+        flash("Choisis le fichier JSON OAuth téléchargé depuis Google Cloud.")
+        return redirect(url_for("contacts_page"))
+    try:
+        raw = f.read().decode("utf-8")
+        parsed = json.loads(raw)
+        if not (parsed.get("installed") or parsed.get("web")):
+            raise ValueError("JSON OAuth Google invalide")
+        GOOGLE_CLIENT_SECRET.write_text(raw, encoding="utf-8")
+        flash("Clé Google enregistrée. Clique maintenant sur Connecter Google.")
+    except Exception as e:
+        flash(f"Fichier Google invalide : {e}")
+    return redirect(url_for("contacts_page"))
+
+
+GOOGLE_OAUTH_REDIRECT_URI = "http://127.0.0.1:5000/google/callback"
+
+
+@app.route("/google/connect")
+def google_connect():
+    if not GOOGLE_LIBS_OK:
+        flash("Bibliothèques Google manquantes. Relance pip install -r requirements.txt.")
+        return redirect(url_for("contacts_page"))
+    if not GOOGLE_CLIENT_SECRET.exists():
+        flash("Ajoute d'abord le fichier JSON OAuth Google.")
+        return redirect(url_for("contacts_page"))
+
+    flow = Flow.from_client_secrets_file(
+        str(GOOGLE_CLIENT_SECRET),
+        scopes=GOOGLE_SCOPE,
+        redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+        autogenerate_code_verifier=True
+    )
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent"
+    )
+
+    # PKCE : le même code_verifier doit impérativement être réutilisé
+    # au callback pour échanger le code d'autorisation contre le token.
+    session["google_oauth_state"] = state
+    session["google_oauth_code_verifier"] = flow.code_verifier
+    return redirect(auth_url)
+
+
+@app.route("/google/callback")
+def google_callback():
+    if not GOOGLE_CLIENT_SECRET.exists():
+        return redirect(url_for("contacts_page"))
+
+    state = session.get("google_oauth_state")
+    code_verifier = session.get("google_oauth_code_verifier")
+
+    if not code_verifier:
+        flash("Session OAuth expirée ou incomplète. Clique à nouveau sur Connecter Google Contacts.")
+        return redirect(url_for("contacts_page"))
+
+    flow = Flow.from_client_secrets_file(
+        str(GOOGLE_CLIENT_SECRET),
+        scopes=GOOGLE_SCOPE,
+        state=state,
+        redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+        code_verifier=code_verifier,
+        autogenerate_code_verifier=False
+    )
+
+    try:
+        # Google renvoie ?code=...&state=... sur notre callback local HTTP.
+        # Ne pas transmettre l'URL HTTP à OAuthlib : on lui donne uniquement
+        # le code d'autorisation, puis l'échange du jeton se fait vers
+        # l'endpoint HTTPS de Google.
+        error = request.args.get("error")
+        if error:
+            raise RuntimeError(f"Google a refusé l'autorisation : {error}")
+
+        returned_state = request.args.get("state")
+        if state and returned_state and returned_state != state:
+            raise RuntimeError("État OAuth invalide. Relance la connexion Google.")
+
+        code = request.args.get("code")
+        if not code:
+            raise RuntimeError("Google n'a renvoyé aucun code d'autorisation.")
+
+        flow.fetch_token(code=code)
+        GOOGLE_TOKEN.write_text(flow.credentials.to_json(), encoding="utf-8")
+
+        session.pop("google_oauth_state", None)
+        session.pop("google_oauth_code_verifier", None)
+
+        service = google_service()
+        group = google_find_group(service) if service else None
+        if group:
+            flash("Google Contacts connecté : groupe configuré trouvé, synchro automatique activée.")
+        else:
+            flash("Google connecté, mais le groupe configuré n'a pas été trouvé.")
+    except Exception as e:
+        flash(f"Connexion Google impossible : {e}")
+
+    return redirect(url_for("contacts_page"))
+
+
+@app.route("/google/disconnect", methods=["POST"])
+def google_disconnect():
+    if GOOGLE_TOKEN.exists():
+        GOOGLE_TOKEN.unlink()
+    flash("Google Contacts déconnecté de WOPR.")
+    return redirect(url_for("contacts_page"))
+
+
+def import_google_group_to_wopr():
+    """Google -> WOPR, non destructif.
+
+    Seuls les contacts du groupe Google configuré sont considérés.
+    Les fiches WOPR existantes sont uniquement complétées : aucune valeur locale
+    existante n'est remplacée. Les contacts Google sans correspondance locale
+    sont créés dans WOPR.
+    """
+    service = google_service()
+    if not service:
+        return False, "Google n'est pas connecté"
+
+    group_resource = google_find_group(service)
+    if not group_resource:
+        return False, "Le groupe Google configuré est introuvable"
+
+    token = None
+    people = []
+    while True:
+        result = google_execute_with_retry(service.people().connections().list(
+            resourceName="people/me",
+            pageSize=1000,
+            pageToken=token,
+            personFields="names,emailAddresses,phoneNumbers,addresses,organizations,biographies,memberships"
+        ))
+        for person in result.get("connections", []):
+            groups = {
+                (m.get("contactGroupMembership") or {}).get("contactGroupResourceName")
+                for m in person.get("memberships", [])
+            }
+            if group_resource in groups:
+                people.append(person)
+        token = result.get("nextPageToken")
+        if not token:
+            break
+
+    con = db()
+    created = enriched = skipped = 0
+
+    for person in people:
+        resource = (person.get("resourceName") or "").strip()
+        names = person.get("names", [])
+        name0 = names[0] if names else {}
+        first_name = (name0.get("givenName") or "").strip()
+        last_name = (name0.get("familyName") or "").strip()
+        display_name = (name0.get("displayName") or "").strip()
+
+        emails = [(x.get("value") or "").strip() for x in person.get("emailAddresses", []) if (x.get("value") or "").strip()]
+        phones = [(x.get("value") or "").strip() for x in person.get("phoneNumbers", []) if (x.get("value") or "").strip()]
+        addresses = person.get("addresses", [])
+        organizations = person.get("organizations", [])
+        biographies = person.get("biographies", [])
+
+        email = emails[0] if emails else ""
+        email_secondary = emails[1] if len(emails) > 1 else ""
+        phone = phones[0] if phones else ""
+        adr = addresses[0] if addresses else {}
+        street = (adr.get("streetAddress") or "").strip()
+        postal = (adr.get("postalCode") or "").strip()
+        city = (adr.get("city") or "").strip()
+        company = ((organizations[0].get("name") if organizations else "") or "").strip()
+        notes = ((biographies[0].get("value") if biographies else "") or "").strip()
+
+        local = None
+        if resource:
+            local = con.execute(
+                "SELECT * FROM clients WHERE google_resource_name=? LIMIT 1",
+                (resource,)
+            ).fetchone()
+
+        if local is None and email:
+            rows = con.execute(
+                "SELECT * FROM clients WHERE lower(trim(COALESCE(email,'')))=?",
+                (email.casefold(),)
+            ).fetchall()
+            if len(rows) == 1:
+                local = rows[0]
+
+        if local is None and email_secondary:
+            rows = con.execute(
+                "SELECT * FROM clients WHERE lower(trim(COALESCE(email,'')))=? OR lower(trim(COALESCE(email_secondary,'')))=?",
+                (email_secondary.casefold(), email_secondary.casefold())
+            ).fetchall()
+            if len(rows) == 1:
+                local = rows[0]
+
+        if local is None and phone:
+            wanted_phone = normalize_phone(phone)
+            rows = con.execute(
+                "SELECT * FROM clients WHERE trim(COALESCE(phone,''))<>''"
+            ).fetchall()
+            matches = [r for r in rows if normalize_phone(r["phone"]) == wanted_phone]
+            if len(matches) == 1:
+                local = matches[0]
+
+        composed = compose_client_name(last_name, first_name) or display_name or company or "Contact Google"
+        address = "\n".join(x for x in [street, " ".join(x for x in [postal, city] if x).strip()] if x)
+        stamp = now().isoformat(timespec="seconds")
+
+        if local is None:
+            con.execute("""
+                INSERT INTO clients(
+                    name,last_name,first_name,company,
+                    address,address_street,postal_code,city,
+                    phone,email,email_secondary,notes,
+                    google_resource_name,google_sync_status,google_sync_error,
+                    google_synced_at,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                composed,last_name,first_name,company,
+                address,street,postal,city,
+                    phone,email,email_secondary,notes,
+                    resource,"Synchronisé","",stamp,stamp,stamp
+            ))
+            created += 1
+            continue
+
+        sets = []
+        vals = []
+        changed = False
+
+        candidates = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "company": company,
+            "address_street": street,
+            "postal_code": postal,
+            "city": city,
+            "phone": phone,
+            "email": email,
+            "email_secondary": email_secondary,
+            "notes": notes,
+        }
+
+        for field, value in candidates.items():
+            if value and not str(local[field] or "").strip():
+                sets.append(f"{field}=?")
+                vals.append(value)
+                changed = True
+
+        if not str(local["name"] or "").strip() and composed:
+            sets.append("name=?")
+            vals.append(composed)
+            changed = True
+
+        if not str(local["address"] or "").strip() and address:
+            sets.append("address=?")
+            vals.append(address)
+            changed = True
+
+        sets += [
+            "google_resource_name=?",
+            "google_sync_status=?",
+            "google_sync_error=?",
+            "google_synced_at=?",
+            "updated_at=?"
+        ]
+        vals += [resource, "Synchronisé", "", stamp, stamp, local["id"]]
+
+        con.execute(f"UPDATE clients SET {', '.join(sets)} WHERE id=?", vals)
+        if changed:
+            enriched += 1
+        else:
+            skipped += 1
+
+    con.commit()
+    con.close()
+    return True, f"Google → WOPR : {created} créé(s), {enriched} complété(s), {skipped} déjà à jour."
+
+
+@app.route("/contacts/import-google-live", methods=["POST"])
+def contacts_import_google_live():
+    ok, msg = import_google_group_to_wopr()
+    flash(msg if ok else f"Erreur Google : {msg}")
+    return redirect(url_for("contacts_page"))
+
+
+# V2.3.228 — état de la synchro Google en arrière-plan.
+_google_sync_progress = {
+    "running": False,
+    "total": 0,
+    "done": 0,
+    "ok": 0,
+    "errors": 0,
+    "errors_only": False,
+    "finished_at": None,
+}
+_google_sync_progress_lock = threading.Lock()
+
+
+@app.route("/contacts/sync-google/status")
+def contacts_sync_google_status():
+    with _google_sync_progress_lock:
+        return jsonify(dict(_google_sync_progress))
+
+
+@app.route("/contacts/sync-google", methods=["POST"])
+def contacts_sync_google():
+    errors_only = request.form.get("errors_only") == "1"
+    con = db()
+    status_filter = "AND google_sync_status='Erreur'" if errors_only else "AND COALESCE(google_sync_status, '') != 'Synchronisé'"
+    ids = [r[0] for r in con.execute(f"""
+        SELECT id
+        FROM clients
+        WHERE COALESCE(archived,0)=0
+          {status_filter}
+        ORDER BY id
+    """).fetchall()]
+    con.close()
+
+    if not ids:
+        flash("Google : aucune fiche en erreur à resynchroniser." if errors_only else "Google : aucun contact en attente de synchronisation.")
+        return redirect(url_for("contacts_page"))
+
+    with _google_sync_progress_lock:
+        _google_sync_progress.update({
+            "running": True,
+            "total": len(ids),
+            "done": 0,
+            "ok": 0,
+            "errors": 0,
+            "errors_only": errors_only,
+            "finished_at": None,
+        })
+
+    def _bulk_worker(contact_ids):
+        ok_count = 0
+        error_count = 0
+
+        for cid in contact_ids:
+            try:
+                ok, _msg = sync_client_to_google(cid)
+                if ok:
+                    ok_count += 1
+                else:
+                    error_count += 1
+            except Exception as exc:
+                error_count += 1
+                try:
+                    set_google_sync_state(cid, "Erreur", error=str(exc))
+                except Exception:
+                    pass
+
+            with _google_sync_progress_lock:
+                _google_sync_progress["done"] = ok_count + error_count
+                _google_sync_progress["ok"] = ok_count
+                _google_sync_progress["errors"] = error_count
+
+            time.sleep(1.0)
+
+        with _google_sync_progress_lock:
+            _google_sync_progress["running"] = False
+            _google_sync_progress["done"] = len(contact_ids)
+            _google_sync_progress["ok"] = ok_count
+            _google_sync_progress["errors"] = error_count
+            _google_sync_progress["finished_at"] = now().isoformat(timespec="seconds")
+
+    threading.Thread(
+        target=_bulk_worker,
+        args=(ids,),
+        name="wopr-google-bulk-sync",
+        daemon=True,
+    ).start()
+
+    flash(f"Google : synchronisation de {len(ids)} contact(s) lancée en arrière-plan.")
+    return redirect(url_for("contacts_page", sync_watch=1))
+
+
+@app.route("/contacts/<int:client_id>/sync-google", methods=["POST"])
+def contact_sync_google(client_id):
+    ok, msg = sync_client_to_google(client_id)
+    flash("Contact Google synchronisé." if ok else f"Erreur Google : {msg}")
+    return redirect(url_for("contacts_page"))
+
+
+@app.route("/contacts/export/google.csv")
+def export_google_contacts():
+    con=db(); clients=con.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall(); con.close()
+    rows=[["First Name","Email 1 - Label","Email 1 - Value","Email 2 - Label","Email 2 - Value","Phone 1 - Label","Phone 1 - Value","Phone 2 - Label","Phone 2 - Value",
+           "Address 1 - Label","Address 1 - Street","Address 1 - City","Address 1 - Postal Code","Address 1 - Country","Labels","Notes"]]
+    for c in clients:
+        rows.append([c["name"],"Home",c["email"] or "","Other",c["email_secondary"] or "","Mobile",c["phone"] or "","Other",c["phone_secondary"] or "","Home",
+                     c["address_street"] or "",c["city"] or "",c["postal_code"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
+    return csv_response("WOPR_Contacts_Google.csv", rows)
+
+
+@app.route("/contacts/export/proton.csv")
+def export_proton_contacts():
+    con=db(); clients=con.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall(); con.close()
+    rows=[["first name","email","mobile","address 1","postal code","city","country","group membership","notes"]]
+    for c in clients:
+        rows.append([c["name"],c["email"] or "",c["phone"] or "",c["address_street"] or "",
+                     c["postal_code"] or "",c["city"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
+    return csv_response("WOPR_Contacts_Proton.csv", rows)
+
+
+@app.route("/contacts/export/all.vcf")
+def export_vcard_contacts():
+    con=db(); clients=con.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall(); con.close()
+    cards=[]
+    for c in clients:
+        lines=["BEGIN:VCARD","VERSION:3.0",f"FN:{vcard_escape(c['name'])}",f"N:;{vcard_escape(c['name'])};;;" ]
+        if c["email"]: lines.append(f"EMAIL;TYPE=INTERNET:{vcard_escape(c['email'])}")
+        if c["email_secondary"]: lines.append(f"EMAIL;TYPE=OTHER:{vcard_escape(c['email_secondary'])}")
+        if c["phone"]: lines.append(f"TEL;TYPE=CELL:{vcard_escape(c['phone'])}")
+        if c["phone_secondary"]: lines.append(f"TEL;TYPE=OTHER:{vcard_escape(c['phone_secondary'])}")
+        street=c["address_street"] or ""
+        if street or c["city"] or c["postal_code"]:
+            lines.append(f"ADR;TYPE=HOME:;;{vcard_escape(street)};{vcard_escape(c['city'])};;{vcard_escape(c['postal_code'])};France")
+        lines.append("CATEGORIES:" + str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"))
+        if c["notes"]:
+            lines.append(f"NOTE:{vcard_escape(c['notes'])}")
+        lines.append("END:VCARD")
+        cards.append("\r\n".join(lines))
+    data="\r\n".join(cards)+"\r\n"
+    return Response(data, mimetype="text/vcard; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="WOPR_Contacts.vcf"'})
+
+@app.route("/export/suivi.csv")
+def export_suivi():
+    con = db()
+    rows = con.execute("""
+        SELECT c.name client, r.received_date date, r.problem panne, r.invoice_no,
+               r.service_amount, r.goods_amount, r.payment_method, r.payment_mode,
+               r.sent_via, r.remarks, r.status, r.service_description, r.goods_description
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        ORDER BY r.received_date, r.id
+    """).fetchall()
+    con.close()
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=';')
+    writer.writerow(["Client","Date","Panne","Désignation prestation","Pièce / marchandise","Facture/devis N°","Prestations de services BIC",
+                     "Vente de marchandises BIC","Total","Mode","Remise / Envoi","Remarques","Statut"])
+    for x in rows:
+        writer.writerow([x["client"],x["date"],x["panne"], x["service_description"] or "", x["goods_description"] or "", x["invoice_no"] or "",
+                         f'{x["service_amount"]:.2f}',f'{x["goods_amount"]:.2f}',
+                         f"{float(x['service_amount'] or 0)+float(x['goods_amount'] or 0):.2f}",
+                         x["payment_mode"] or x["payment_method"] or "",
+                         x["sent_via"] or "",x["remarks"] or "",x["status"]])
+    data = output.getvalue().encode("utf-8-sig")
+    return Response(data, mimetype="text/csv",
+                    headers={"Content-Disposition":"attachment; filename=Suivi_Reparations.csv"})
+
+@app.route("/export/ventes.csv")
+def export_ventes():
+    con = db()
+    rows = con.execute("""
+        SELECT c.name client, r.finished_at, r.service_description, r.goods_description,
+               r.tests_validation, r.problem, r.service_amount, r.goods_amount,
+               r.payment_method, r.invoice_no
+        FROM repairs r JOIN clients c ON c.id=r.client_id
+        WHERE r.finished_at IS NOT NULL
+        ORDER BY r.finished_at
+    """).fetchall()
+    con.close()
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=';')
+    writer.writerow(["Opération","Fournisseur / client","Date","Articles et Quantité",
+                     "Règlement TTC","Type","Facture N°"])
+    for x in rows:
+        total = (x["service_amount"] or 0) + (x["goods_amount"] or 0)
+        items = " / ".join([
+            y for y in [
+                x["service_description"] or x["tests_validation"] or x["problem"],
+                x["goods_description"]
+            ] if y
+        ])
+        writer.writerow(["Vente", x["client"], (x["finished_at"] or "")[:10],
+                         items, f"{total:.2f}", x["payment_method"] or "", x["invoice_no"] or ""])
+    data = output.getvalue().encode("utf-8-sig")
+    return Response(data, mimetype="text/csv",
+                    headers={"Content-Disposition":"attachment; filename=Achats_Ventes_Ventes.csv"})
+
+if __name__ == "__main__":
+    if "--check-db-unlock" in sys.argv:
+        try:
+            initialize_database_security()
+            con = db()
+            try:
+                con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            finally:
+                con.close()
+            print("OK")
+            raise SystemExit(0)
+        except Exception as exc:
+            print(f"ERREUR SQLCIPHER: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+
+    # Utilisé par les scripts d'arrêt : le serveur est déjà terminé, on capture
+    # donc le dernier état SQLite entièrement validé de la session.
+    if "--backup-arret" in sys.argv:
+        try:
+            state = initialize_database_security()
+            if state == "locked" and _database_encryption_enabled():
+                path = _backup_encrypted_raw_without_key(tag="arret", only_if_changed=True)
+            else:
+                path = backup_database(
+                    force=False,
+                    tag="arret",
+                    only_if_changed=True
+                )
+            if path:
+                if state != "locked":
+                    verify_tmp = DB.parent / f".wopr_cli_verify_{secrets.token_hex(4)}.db"
+                    try:
+                        _extract_backup_to_sqlite(path, verify_tmp)
+                    finally:
+                        verify_tmp.unlink(missing_ok=True)
+                print(str(path))
+            else:
+                # Le launcher sait interpréter ce marqueur : aucune nouvelle
+                # sauvegarde n'est nécessaire car la base n'a pas changé.
+                print("UNCHANGED")
+            raise SystemExit(0)
+        except Exception as exc:
+            print(f"ERREUR BACKUP ARRET: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+
+    security_state = initialize_database_security()
+    if security_state == "migrated":
+        print("WOPR : migration SQLCipher terminée et vérifiée.")
+    if security_state != "locked":
+        backup_database(force=False, tag="demarrage")
+        init_db()
+        harden_local_permissions()
+    else:
+        print("WOPR : base SQLCipher verrouillée — déverrouillage dans le navigateur.")
+    print("WOPR : http://127.0.0.1:5000")
+    print("Signature téléphone : http://%s:5000" % local_ip())
+    print("Mode sécurité : actif — debug désactivé")
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

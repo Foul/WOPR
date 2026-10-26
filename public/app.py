@@ -23196,7 +23196,204 @@ def export_ventes():
     return Response(data, mimetype="text/csv",
                     headers={"Content-Disposition":"attachment; filename=Achats_Ventes_Ventes.csv"})
 
+def run_wopr_self_tests():
+    """Tests de non-régression rapides, en lecture seule."""
+    tests = []
+
+    def record(name, ok, detail=""):
+        tests.append((name, bool(ok), str(detail or "")))
+
+    try:
+        state = initialize_database_security()
+        record("Sécurité base", state != "locked", state)
+        if state == "locked":
+            return tests
+        init_db()
+    except Exception as exc:
+        record("Initialisation base", False, f"{type(exc).__name__}: {exc}")
+        return tests
+
+    con = None
+    try:
+        con = db()
+        row = con.execute("PRAGMA quick_check").fetchone()
+        record("Intégrité SQLite/SQLCipher", bool(row and str(row[0]).casefold() == "ok"), row[0] if row else "")
+        tables = {
+            str(r[0]) for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        required = {"clients", "repairs", "ledger_entries", "quotes", "audit_log"}
+        record("Tables métier", required.issubset(tables), ", ".join(sorted(required - tables)))
+    except Exception as exc:
+        record("Lecture base", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+    # Environnement / portabilité -------------------------------------------------
+    try:
+        tz = ZoneInfo("Europe/Paris")
+        sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
+        record(
+            "Fuseau Europe/Paris",
+            sample.utcoffset() is not None,
+            f"{tz.key} · UTC{sample.utcoffset()}",
+        )
+    except Exception as exc:
+        record("Fuseau Europe/Paris", False, f"{type(exc).__name__}: {exc}")
+
+    req_file = BASE / "requirements.txt"
+    try:
+        req_text = req_file.read_text(encoding="utf-8") if req_file.is_file() else ""
+        has_tzdata = bool(re.search(r"(?im)^tzdata(?:[<>=!~].*)?$", req_text))
+        has_win_sqlcipher = (
+            "sqlcipher3==0.6.2" in req_text
+            and 'platform_system == "Windows"' in req_text
+        )
+        record(
+            "Préparation Windows",
+            req_file.is_file() and has_tzdata and has_win_sqlcipher,
+            "tzdata + SQLCipher Windows déclarés"
+            if req_file.is_file() and has_tzdata and has_win_sqlcipher
+            else "public/requirements.txt incomplet",
+        )
+    except Exception as exc:
+        record("Préparation Windows", False, f"{type(exc).__name__}: {exc}")
+
+    # Fichiers d'interface indispensables -----------------------------------------
+    important_templates = [
+        "base.html",
+        "atelier.html",
+        "index.html",
+        "invoices.html",
+        "quotes.html",
+        "achats_ventes.html",
+        "contacts.html",
+        "health.html",
+        "activity.html",
+    ]
+    missing_templates = [
+        name for name in important_templates
+        if not (BASE / "templates" / name).is_file()
+    ]
+    record(
+        "Templates principaux",
+        not missing_templates,
+        "OK" if not missing_templates else "manquants : " + ", ".join(missing_templates),
+    )
+
+    eight_bit_css = BASE / "static" / "wopr-8bit-hotfix.css"
+    try:
+        css_text = eight_bit_css.read_text(encoding="utf-8", errors="ignore") if eight_bit_css.is_file() else ""
+        css_ok = (
+            eight_bit_css.is_file()
+            and "theme-8bit" in css_text
+            and "wopr-nav-dropdown" in css_text
+        )
+        record(
+            "Assets thème 8-bit",
+            css_ok,
+            "hotfix + sous-menus détectés" if css_ok else "wopr-8bit-hotfix.css absent/incomplet",
+        )
+    except Exception as exc:
+        record("Assets thème 8-bit", False, f"{type(exc).__name__}: {exc}")
+
+    # Services optionnels : on vérifie la cohérence locale sans faire d'appel réseau.
+    try:
+        sumup = read_sumup_settings()
+        if sumup.get("enabled"):
+            api_ok = bool(str(sumup.get("api_key") or "").strip())
+            merchant_ok = bool(str(sumup.get("merchant_code") or "").strip())
+            record(
+                "Configuration SumUp",
+                api_ok and merchant_ok,
+                "activée · clé API + merchant code présents"
+                if api_ok and merchant_ok
+                else "activée mais configuration incomplète",
+            )
+        else:
+            record("Configuration SumUp", True, "désactivée")
+    except Exception as exc:
+        record("Configuration SumUp", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        if GOOGLE_LIBS_OK:
+            detail = "bibliothèques disponibles"
+            if GOOGLE_TOKEN.exists():
+                detail += " · jeton présent"
+            elif GOOGLE_CLIENT_SECRET.exists():
+                detail += " · OAuth configuré, pas encore connecté"
+            else:
+                detail += " · non configuré"
+            record("Google Contacts", True, detail)
+        else:
+            record("Google Contacts", False, "bibliothèques Google absentes")
+    except Exception as exc:
+        record("Google Contacts", False, f"{type(exc).__name__}: {exc}")
+
+    current_year = now().year
+    current_month = now().month
+    urls = [
+        ("/atelier", "Atelier"),
+        (f"/suivi?year={current_year}&month={current_month}", "Suivi mois courant"),
+        (f"/suivi?year={current_year}&en_cours=1", "Suivi En cours"),
+        (f"/suivi?year={current_year}&attente_piece=1", "Suivi Attente pièce"),
+        (f"/suivi?year={current_year}&overdue=1", "Suivi +14 j"),
+        (f"/suivi?year={current_year}&a_restituer=1", "Suivi À restituer"),
+        ("/factures", "Factures"),
+        ("/factures?unpaid=1", "Factures impayées"),
+        ("/devis", "Devis"),
+        ("/achats-ventes", "Achats / Ventes"),
+        ("/contacts", "Clients"),
+        ("/contacts?google_status=pending", "Clients à synchroniser"),
+    ]
+
+    try:
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["admin_authenticated"] = True
+                sess["client_mode"] = False
+            for url, label in urls:
+                try:
+                    response = client.get(url, follow_redirects=False)
+                    record(label, response.status_code == 200, f"HTTP {response.status_code}")
+                except Exception as exc:
+                    record(label, False, f"{type(exc).__name__}: {exc}")
+
+    except Exception as exc:
+        record("Client Flask", False, f"{type(exc).__name__}: {exc}")
+
+    return tests
+
+
+def print_wopr_self_tests():
+    tests = run_wopr_self_tests()
+    failed = 0
+    print(f"WOPR {APP_VERSION} — tests de non-régression")
+    print("-" * 58)
+    for name, ok, detail in tests:
+        status = "OK " if ok else "FAIL"
+        suffix = f" — {detail}" if detail else ""
+        print(f"[{status}] {name}{suffix}")
+        if not ok:
+            failed += 1
+    print("-" * 58)
+    if failed:
+        print(f"ÉCHEC : {failed} test(s) en erreur.")
+        return 1
+    print(f"SUCCÈS : {len(tests)} test(s) validé(s).")
+    return 0
+
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        raise SystemExit(print_wopr_self_tests())
+
     if "--check-db-unlock" in sys.argv:
         try:
             initialize_database_security()
