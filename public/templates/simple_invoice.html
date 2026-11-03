@@ -4,36 +4,38 @@
 <div class="banner">
   <div>
     <div class="banner-title">🧾 Facture simple</div>
-    <div class="banner-sub">Client de passage · aucune ligne créée dans Suivi</div>
+    <div class="banner-sub">{% if quote_prefill %}Préremplie depuis le devis {{ quote_prefill['quote_no'] }} · vérifie puis valide{% else %}Client de passage · aucune ligne créée dans Suivi{% endif %}</div>
   </div>
   <a class="button" href="{{ url_for('invoices_page') }}">← Retour Factures</a>
 </div>
 
 <form method="post" class="invoice-entry simple-invoice-form">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  {% if quote_prefill %}<input type="hidden" name="source_quote_id" value="{{ quote_prefill['id'] }}">{% endif %}
 
   <div class="section-title">Client</div>
-  <input type="hidden" name="client_id" id="simple-client-id" value="">
+  <input type="hidden" name="client_id" id="simple-client-id" value="{{ quote_prefill_client['id'] if quote_prefill_client else (quote_prefill['client_id'] if quote_prefill and quote_prefill['client_id'] else '') }}">
   <div class="simple-client-choice">
     <label>Rechercher un client existant
       <input id="simple-client-search"
              type="search"
              autocomplete="off"
-             placeholder="Nom, société, téléphone ou e-mail…">
+             placeholder="Nom, société, téléphone ou e-mail…"
+             value="{{ quote_prefill_client['name'] if quote_prefill_client else (quote_prefill['client_name'] if quote_prefill else '') }}">
       <select id="simple-client-results" size="4" style="display:none; margin-top:.45rem;"></select>
       <small id="simple-client-help">Tape au moins 2 caractères. Aucun client choisi + champs vides = <strong>Client de passage</strong>.</small>
     </label>
   </div>
 
   <div class="grid two simple-new-client" id="simple-new-client">
-    <label>Prénom<input id="simple-first-name" name="first_name"></label>
-    <label>Nom<input id="simple-last-name" name="last_name"></label>
-    <label>Entreprise / Société<input id="simple-company" name="company"></label>
-    <label>Téléphone<input id="simple-phone" name="phone"></label>
-    <label>Téléphone secondaire<input id="simple-phone-secondary" name="phone_secondary"></label>
-    <label>E-mail<input id="simple-email" type="email" name="email"></label>
-    <label>E-mail secondaire<input id="simple-email-secondary" type="email" name="email_secondary"></label>
-    <label>Adresse<input id="simple-address" name="address_street"></label>
+    <label>Prénom<input id="simple-first-name" name="first_name" value="{{ quote_prefill_client['first_name'] if quote_prefill_client else '' }}"></label>
+    <label>Nom<input id="simple-last-name" name="last_name" value="{{ quote_prefill_client['last_name'] if quote_prefill_client else (quote_prefill['client_name'] if quote_prefill and not quote_prefill_client else '') }}"></label>
+    <label>Entreprise / Société<input id="simple-company" name="company" value="{{ quote_prefill_client['company'] if quote_prefill_client else (quote_prefill['client_company'] if quote_prefill else '') }}"></label>
+    <label>Téléphone<input id="simple-phone" name="phone" value="{{ quote_prefill_client['phone'] if quote_prefill_client else '' }}"></label>
+    <label>Téléphone secondaire<input id="simple-phone-secondary" name="phone_secondary" value="{{ quote_prefill_client['phone_secondary'] if quote_prefill_client else '' }}"></label>
+    <label>E-mail<input id="simple-email" type="email" name="email" value="{{ quote_prefill_client['email'] if quote_prefill_client else '' }}"></label>
+    <label>E-mail secondaire<input id="simple-email-secondary" type="email" name="email_secondary" value="{{ quote_prefill_client['email_secondary'] if quote_prefill_client else '' }}"></label>
+    <label>Adresse<input id="simple-address" name="address_street" value="{{ quote_prefill_client['address_street'] if quote_prefill_client else (quote_prefill['client_address_street'] if quote_prefill else '') }}"></label>
     <label>Code postal
       <input id="simple-postal-code"
              name="postal_code"
@@ -41,10 +43,11 @@
              maxlength="5"
              data-postal-autocomplete
              data-city-target="simple-city"
-             data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}">
+             data-postal-data="{{ url_for('static', filename='data/postal_codes.json') }}"
+             value="{{ quote_prefill_client['postal_code'] if quote_prefill_client else (quote_prefill['client_postal_code'] if quote_prefill else '') }}">
     </label>
     <label>Ville
-      <input id="simple-city" name="city">
+      <input id="simple-city" name="city" value="{{ quote_prefill_client['city'] if quote_prefill_client else (quote_prefill['client_city'] if quote_prefill else '') }}">
     </label>
   </div>
 
@@ -108,7 +111,7 @@
   </div>
 
   <div class="footer-actions">
-    <button class="primary big-action" type="submit">GÉNÉRER LA FACTURE</button>
+    <button class="primary big-action" type="submit">{% if quote_prefill %}CRÉER LA FACTURE DEPUIS LE DEVIS{% else %}GÉNÉRER LA FACTURE{% endif %}</button>
     <a class="button" href="{{ url_for('invoices_page') }}">Annuler</a>
   </div>
 </form>
@@ -142,14 +145,25 @@ function wire(row){
   row.querySelectorAll('.qty,.price').forEach(x=>x.addEventListener('input',updateTotals));
   row.querySelector('.remove-line').addEventListener('click',()=>{row.remove();updateTotals();});
 }
-function addLine(type){
+function addLine(type, data=null, focus=true){
   const row=tpl.content.firstElementChild.cloneNode(true);
   row.querySelector('select[name="line_type[]"]').value=type;
-  tbody.appendChild(row);wire(row);updateTotals();row.querySelector('.desc').focus();
+  if(data){
+    row.querySelector('.qty').value=data.quantity ?? 1;
+    row.querySelector('.desc').value=data.description ?? '';
+    row.querySelector('.price').value=data.unit_price ?? 0;
+  }
+  tbody.appendChild(row);wire(row);updateTotals();
+  if(focus) row.querySelector('.desc').focus();
 }
 document.getElementById('add-service').onclick=()=>addLine('service');
 document.getElementById('add-goods').onclick=()=>addLine('goods');
-addLine('service');
+const quotePrefillLines={{ quote_prefill_lines|tojson }};
+if(Array.isArray(quotePrefillLines) && quotePrefillLines.length){
+  quotePrefillLines.forEach(line=>addLine(line.line_type || 'service', line, false));
+}else{
+  addLine('service');
+}
 
 const clientSearch=document.getElementById('simple-client-search');
 const clientResults=document.getElementById('simple-client-results');

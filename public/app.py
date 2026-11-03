@@ -197,7 +197,7 @@ TRACKING_STATS_HIDDEN_FILE = PRIVATE_ROOT / "data" / "tracking_stats_hidden.json
 EXTERNAL_BACKUP_SETTINGS_FILE = PRIVATE_ROOT / "data" / "backup_settings.json"
 SUMUP_API_BASE = "https://api.sumup.com"
 ABBY_API_BASE = "https://api.app-abby.com"
-APP_VERSION = "2.6.2"
+APP_VERSION = "2.6.4"
 GOOGLE_SCOPE = ["https://www.googleapis.com/auth/contacts"]
 
 # Sécurité locale WOPR
@@ -989,6 +989,7 @@ def force_utf8_html(response):
             folders_v248_js_tag = f'<script src="/static/wopr-folders-v248.js?v={APP_VERSION}"></script>'
             actions_8bit_runtime_js_tag = f'<script src="/static/wopr-8bit-actions-runtime.js?v={APP_VERSION}"></script>'
             tracking_preview_js_tag = f'<script src="/static/wopr-tracking-preview.js?v={APP_VERSION}"></script>'
+            quote_postal_js_tag = f'<script src="/static/wopr-quote-postal.js?v={APP_VERSION}"></script>'
 
 
 
@@ -1007,6 +1008,8 @@ def force_utf8_html(response):
                 html = html.replace("</body>", actions_8bit_runtime_js_tag + "\n</body>", 1)
             if "wopr-tracking-preview.js" not in html and "</body>" in html:
                 html = html.replace("</body>", tracking_preview_js_tag + "\n</body>", 1)
+            if "wopr-quote-postal.js" not in html and "</body>" in html:
+                html = html.replace("</body>", quote_postal_js_tag + "\n</body>", 1)
 
             response.set_data(html)
         except Exception:
@@ -3181,7 +3184,67 @@ def backup_database(force=False, tag="auto", only_if_changed=False):
             old.unlink()
         except OSError:
             pass
+    _prune_shutdown_backups()
     return dest
+
+
+def _prune_shutdown_backups():
+    """Nettoie uniquement les sauvegardes automatiques d'arrêt.
+
+    Politique :
+    - conserve toujours les 3 plus récentes ;
+    - puis 1 sauvegarde par jour sur les 7 derniers jours ;
+    - puis 1 sauvegarde par semaine jusqu'à 8 semaines ;
+    - supprime le reste.
+    Les sauvegardes manuelles/autres tags ne sont jamais touchées.
+    """
+    if not BACKUP_DIR.exists():
+        return 0
+
+    rx = re.compile(
+        r"^wopr_(?:\d{8}_\d{6}|\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s)_arret\.db(?:\.gz)?$"
+    )
+    entries = []
+    for candidate in BACKUP_DIR.iterdir():
+        try:
+            if candidate.is_file() and rx.fullmatch(candidate.name):
+                entries.append((candidate.stat().st_mtime, candidate))
+        except OSError:
+            pass
+    entries.sort(key=lambda item: item[0], reverse=True)
+    if len(entries) <= 3:
+        return 0
+
+    now_dt = now()
+    keep = {path for _, path in entries[:3]}
+    kept_days = set()
+    kept_weeks = set()
+
+    for mtime, path in entries[3:]:
+        dt = datetime.fromtimestamp(mtime, tz=now_dt.tzinfo) if now_dt.tzinfo else datetime.fromtimestamp(mtime)
+        age_days = max(0, (now_dt.date() - dt.date()).days)
+        if age_days <= 7:
+            key = dt.date()
+            if key not in kept_days:
+                keep.add(path)
+                kept_days.add(key)
+        elif age_days <= 56:
+            iso = dt.isocalendar()
+            key = (iso.year, iso.week)
+            if key not in kept_weeks:
+                keep.add(path)
+                kept_weeks.add(key)
+
+    removed = 0
+    for _, path in entries:
+        if path in keep:
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def database_integrity_check(path):
@@ -3914,6 +3977,20 @@ def init_db():
     # seule sa référence relative est conservée en base.
     ensure_column(con, "ledger_entries", "document_path", "TEXT")
     ensure_column(con, "ledger_entries", "document_original_name", "TEXT")
+    # V2.6.2 — justificatif électronique Abby conservé séparément du PDF lisible.
+    ensure_column(con, "ledger_entries", "document_xml_path", "TEXT")
+    ensure_column(con, "ledger_entries", "document_xml_original_name", "TEXT")
+    # Migration transparente : avant la gestion PDF + XML séparée, un XML pouvait
+    # occuper l'unique document_path. On le remet dans son emplacement dédié.
+    con.execute("""
+        UPDATE ledger_entries
+        SET document_xml_path=document_path,
+            document_xml_original_name=document_original_name,
+            document_path=NULL,
+            document_original_name=NULL
+        WHERE lower(COALESCE(document_path,'')) LIKE '%.xml'
+          AND COALESCE(document_xml_path,'')=''
+    """)
 
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entry_date ON ledger_entries(entry_date)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_ledger_operation ON ledger_entries(operation)")
@@ -5937,11 +6014,23 @@ def supplier_document_filename(entry_date, party, invoice_no, original_name):
     return safe_document_name(f"{supplier}_{stem}{suffix}")
 
 
-def save_ledger_document(entry_id, storage):
+def _ledger_document_slot_for_suffix(suffix):
+    suffix = str(suffix or "").lower()
+    if suffix == ".xml":
+        return "document_xml_path", "document_xml_original_name", {".xml"}, "XML"
+    return "document_path", "document_original_name", {".pdf", ".jpg", ".jpeg", ".png"}, "PDF/image"
+
+
+def save_ledger_document(entry_id, storage, *, replace=False):
     """
-    Lie une facture fournisseur à une ligne Achats/Ventes et la range proprement.
-    Pas de sous-dossier par fournisseur : un seul dossier Fournisseurs par mois.
-    Les nouvelles pièces suivent le nom maison FOURNISSEUR_NumeroFacture.ext.
+    Lie une pièce fournisseur à une ligne Achats/Ventes et la range proprement.
+
+    WOPR conserve deux emplacements indépendants :
+      - document_path : PDF/image lisible ;
+      - document_xml_path : XML électronique (ex. Abby).
+
+    Cela permet de garder le couple PDF + XML pour une même facture sans perdre la
+    compatibilité avec les anciens achats qui n'avaient qu'un seul justificatif.
     """
     filename = str(getattr(storage, "filename", "") or "").strip()
     if not filename:
@@ -5955,24 +6044,44 @@ def save_ledger_document(entry_id, storage):
     if len(raw) > 20 * 1024 * 1024:
         raise ValueError("Fichier trop volumineux (20 Mo maximum).")
 
+    path_col, original_col, allowed_slot_ext, slot_label = _ledger_document_slot_for_suffix(suffix)
+
     con = db()
     row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
     if not row:
         con.close()
         raise ValueError("Ligne Achats/Ventes introuvable.")
-    if str(row["document_path"] or "").strip():
+    current_rel = str(row[path_col] or "").strip()
+    if current_rel and not replace:
         con.close()
-        raise ValueError("Une pièce justificative est déjà liée à cette ligne.")
+        raise ValueError(f"Une pièce {slot_label} est déjà liée à cette ligne.")
 
     folder = year_month_folder(FOURNISSEURS_ROOT, row["entry_date"], supplier=False, create=True)
 
-    # V2.3.95 — anti-doublon strict : avant même de fabriquer un nouveau nom,
-    # on cherche si CE fichier existe déjà dans Fournisseurs, quel que soit son nom.
-    # Exemple : une facture VistaPrint déjà classée manuellement doit être simplement
-    # liée à l'achat, jamais recopiée à côté sous un autre nom.
+    # Remplacement : si le fichier actuellement lié existe et garde le même type,
+    # on remplace son contenu sur place. Le nom de classement WOPR reste stable et
+    # aucun ancien fichier orphelin n'est créé.
+    if replace and current_rel:
+        try:
+            current_path = (DOCUMENTS_ROOT / current_rel).resolve()
+            suppliers_root = FOURNISSEURS_ROOT.resolve()
+            if current_path.is_file() and current_path.suffix.lower() in allowed_slot_ext and suppliers_root in current_path.parents:
+                current_path.write_bytes(raw)
+                con.execute(
+                    f"UPDATE ledger_entries SET {original_col}=?, updated_at=? WHERE id=?",
+                    (filename, now().isoformat(timespec="seconds"), entry_id),
+                )
+                con.commit()
+                con.close()
+                return current_path
+        except Exception:
+            pass
+
+    # Anti-doublon strict dans le type de pièce concerné uniquement. Un PDF et son
+    # XML de même facture doivent pouvoir coexister.
     dest = None
     for existing in folder.iterdir():
-        if not existing.is_file() or existing.suffix.lower() not in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}:
+        if not existing.is_file() or existing.suffix.lower() not in allowed_slot_ext:
             continue
         try:
             if existing.stat().st_size == len(raw) and existing.read_bytes() == raw:
@@ -5981,14 +6090,10 @@ def save_ledger_document(entry_id, storage):
         except Exception:
             continue
 
-    # V2.3.97 — priorité absolue au classement existant de Foul.
-    # Même si le PDF reçu à nouveau n'est pas strictement identique (métadonnées,
-    # régénération du fournisseur, etc.), on ne doit pas créer une seconde facture
-    # à côté si une pièce déjà classée correspond sans ambiguïté à la même facture.
     if dest is None:
         existing_docs = [
             p for p in folder.iterdir()
-            if p.is_file() and p.suffix.lower() in {".pdf", ".xml", ".jpg", ".jpeg", ".png"}
+            if p.is_file() and p.suffix.lower() in allowed_slot_ext
         ]
         invoice_key = _match_key(row["invoice_no"]) if is_supplier_invoice_reference(
             row["invoice_no"], party=row["party"], remarks=row["remarks"]
@@ -5998,7 +6103,6 @@ def save_ledger_document(entry_id, storage):
         original_stem = Path(filename).stem.strip()
         original_stem = re.sub(r"^(facture|invoice)[ _-]*", "", original_stem, flags=re.IGNORECASE).strip(" _-")
         original_key = _match_key(original_stem)
-        # Un identifiant trop court/générique ne doit jamais servir à rapprocher.
         if len(original_key) < 5:
             original_key = ""
 
@@ -6007,8 +6111,6 @@ def save_ledger_document(entry_id, storage):
             stem_key = _match_key(existing.stem)
             by_invoice = bool(invoice_key and len(invoice_key) >= 4 and invoice_key in stem_key)
             by_original = bool(original_key and (original_key in stem_key or stem_key.endswith(original_key)))
-            # Quand on matche par nom reçu, on exige aussi le fournisseur si celui-ci
-            # est présent dans le nom classé, afin d'éviter les collisions.
             supplier_ok = not supplier_key or supplier_key in stem_key or by_invoice
             if by_invoice or (by_original and supplier_ok):
                 strong_matches.append(existing)
@@ -6018,18 +6120,14 @@ def save_ledger_document(entry_id, storage):
         elif len(strong_matches) > 1:
             con.close()
             raise ValueError(
-                "Plusieurs justificatifs déjà classés semblent correspondre à cette facture. "
+                f"Plusieurs pièces {slot_label} déjà classées semblent correspondre à cette facture. "
                 "Aucun nouveau fichier n'a été créé : vérifie les fichiers du mois puis rattache le bon."
             )
 
     if dest is None:
         clean_name = supplier_document_filename(row["entry_date"], row["party"], row["invoice_no"], filename)
         dest = folder / clean_name
-
-        # Le même nom existe déjà mais le contenu diffère : surtout ne pas fabriquer
-        # automatiquement un ' - 2'. Cela crée exactement le bazar que l'on veut éviter.
-        # On arrête et on laisse l'utilisateur vérifier le document existant.
-        if dest.exists():
+        if dest.exists() and not replace:
             con.close()
             raise ValueError(
                 f"Un justificatif nommé {dest.name} existe déjà dans Fournisseurs. "
@@ -6038,15 +6136,40 @@ def save_ledger_document(entry_id, storage):
         dest.write_bytes(raw)
 
     rel = str(dest.relative_to(DOCUMENTS_ROOT))
-    con.execute("""
-        UPDATE ledger_entries
-        SET document_path=?, document_original_name=?, updated_at=?
-        WHERE id=?
-    """, (rel, filename, now().isoformat(timespec="seconds"), entry_id))
+    con.execute(
+        f"UPDATE ledger_entries SET {path_col}=?, {original_col}=?, updated_at=? WHERE id=?",
+        (rel, filename, now().isoformat(timespec="seconds"), entry_id),
+    )
     con.commit()
     con.close()
     return dest
 
+
+def ledger_xml_document_file(row):
+    """Résout le XML fournisseur lié à une ligne, sans le confondre avec le PDF."""
+    if not row:
+        return None
+    rel = str(row["document_xml_path"] or "").strip()
+    if rel:
+        p = DOCUMENTS_ROOT / rel
+        if p.is_file() and p.suffix.lower() == ".xml":
+            return p
+    original_name = str(row["document_xml_original_name"] or "").strip()
+    folder = year_month_folder(FOURNISSEURS_ROOT, str(row["entry_date"] or ""), supplier=False, create=False)
+    if not folder.is_dir():
+        return None
+    xmls = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".xml"]
+    wanted = Path(original_name).name.casefold() if original_name else ""
+    if wanted:
+        hits = [p for p in xmls if p.name.casefold() == wanted]
+        if len(hits) == 1:
+            return hits[0]
+    invoice_key = _match_key(row["invoice_no"] or "")
+    party_key = _match_key(row["party"] or "")
+    hits = [p for p in xmls if invoice_key and invoice_key in _match_key(p.stem)]
+    if len(hits) > 1 and party_key:
+        hits = [p for p in hits if party_key in _match_key(p.stem)]
+    return hits[0] if len(hits) == 1 else None
 
 def _supplier_document_candidates(entry_date):
     """Factures déjà classées par l'utilisateur dans le mois concerné, sans les modifier."""
@@ -6549,16 +6672,22 @@ def google_service():
 
 
 def google_execute_with_retry(request, max_retries=3):
-    """Exécute une requête Google et temporise proprement en cas de quota 429."""
+    """Exécute une requête Google avec retry sur quota et erreurs serveur transitoires."""
+    transient_statuses = {429, 500, 502, 503, 504}
     for attempt in range(max_retries + 1):
         try:
             return request.execute()
         except HttpError as exc:
-            if getattr(exc.resp, "status", None) != 429 or attempt >= max_retries:
+            status = getattr(exc.resp, "status", None)
+            if status not in transient_statuses or attempt >= max_retries:
                 raise
-            # Le quota critique est calculé à la minute : attendre un peu plus
-            # d'une minute évite de repartir dans la même fenêtre de quota.
-            time.sleep(65)
+            if status == 429:
+                # Le quota critique est calculé à la minute : attendre un peu plus
+                # d'une minute évite de repartir dans la même fenêtre de quota.
+                time.sleep(65)
+            else:
+                # 5xx Google : backoff court et progressif (1 s, 2 s, 4 s).
+                time.sleep(2 ** attempt)
 
 
 def google_find_group(service, wanted_name=None):
@@ -6849,10 +6978,10 @@ def sync_client_to_google(client_id):
 
         # Ajoute au groupe Google configuré. Cette opération est sans danger si déjà membre.
         try:
-            service.contactGroups().members().modify(
+            google_execute_with_retry(service.contactGroups().members().modify(
                 resourceName=group_resource,
                 body={"resourceNamesToAdd": [resource_name]}
-            ).execute()
+            ))
         except HttpError as e:
             if getattr(e.resp, "status", None) not in (400, 409):
                 raise
@@ -7520,8 +7649,18 @@ def parse_google_contacts_csv(raw_text):
             organization
         )
 
-        email = str(row.get("E-mail 1 - Value") or "").strip()
-        email_secondary = str(row.get("E-mail 2 - Value") or "").strip()
+        # Google a utilisé selon les versions "E-mail" puis "Email" dans ses CSV.
+        # Accepter les deux, y compris les CSV exportés par WOPR.
+        email = str(
+            row.get("E-mail 1 - Value")
+            or row.get("Email 1 - Value")
+            or ""
+        ).strip()
+        email_secondary = str(
+            row.get("E-mail 2 - Value")
+            or row.get("Email 2 - Value")
+            or ""
+        ).strip()
         phone = str(row.get("Phone 1 - Value") or "").strip()
         phone_secondary = str(row.get("Phone 2 - Value") or "").strip()
 
@@ -7751,6 +7890,8 @@ def analyze_google_csv_contacts(contacts):
                 fill["city"] = str(source.get("city") or "").strip()
             if not str(local.get("company") or "").strip() and source.get("organization"):
                 fill["company"] = str(source.get("organization") or "").strip()
+            if not str(local.get("notes") or "").strip() and source.get("notes"):
+                fill["notes"] = str(source.get("notes") or "").strip()
 
         actionable = bool(fill or duplicate_ids)
 
@@ -8108,10 +8249,10 @@ def google_create_from_proton(service, contact, group_resource):
     resource = created.get("resourceName")
     if resource and group_resource:
         try:
-            service.contactGroups().members().modify(
+            google_execute_with_retry(service.contactGroups().members().modify(
                 resourceName=group_resource,
                 body={"resourceNamesToAdd": [resource]}
-            ).execute()
+            ))
         except HttpError as e:
             if getattr(e.resp, "status", None) not in (400, 409):
                 raise
@@ -8591,6 +8732,7 @@ def security_page():
             write_smtp_settings(current)
             audit_event("SMTP_SETTINGS", "Configuration SMTP Proton mise à jour", request.remote_addr)
             flash("Configuration SMTP Proton enregistrée localement.")
+    _prune_shutdown_backups()
     backups = sorted(
         [p for p in BACKUP_DIR.iterdir() if p.is_file() and not p.name.startswith(".")],
         key=lambda p: p.stat().st_mtime,
@@ -11330,9 +11472,54 @@ def quote_pdf(quote_id):
     c.drawRightString(xs[4]-0.8*mm, vat_y2+2.0*mm, euro(grand_total))
 
     # ----------------------------------------------------------------
+    # Remarques du devis
+    # ----------------------------------------------------------------
+    remarks = str(q["notes"] or "").strip()
+    remarks_offset = 0
+    if remarks:
+        remarks_x = table_x
+        remarks_w = table_w
+        remarks_font = 7.2
+        remarks_label = "Remarques :"
+        remarks_lines = []
+        for raw in remarks.splitlines() or [remarks]:
+            raw = raw.strip()
+            if not raw:
+                continue
+            remarks_lines.extend(split_to_width(raw, QF["regular"], remarks_font, remarks_w-4.0*mm))
+
+        # Garde le devis sur une page : au-delà de 4 lignes, la dernière est tronquée proprement.
+        if len(remarks_lines) > 4:
+            remarks_lines = remarks_lines[:4]
+            last = remarks_lines[-1].rstrip()
+            while last and pdfmetrics.stringWidth(last + "...", QF["regular"], remarks_font) > remarks_w-4.0*mm:
+                last = last[:-1].rstrip()
+            remarks_lines[-1] = (last + "...") if last else "..."
+
+        remarks_h = (7.0 + max(1, len(remarks_lines)) * 3.5) * mm
+        remarks_y = vat_y2 - remarks_h - 2.0*mm
+
+        c.setFillColor(colors.white)
+        c.setStrokeColor(LIGHT_BORDER)
+        c.setLineWidth(0.3*mm)
+        c.rect(remarks_x, remarks_y, remarks_w, remarks_h, fill=1, stroke=1)
+
+        c.setFillColor(colors.black)
+        c.setFont(QF["bold"], 7.2)
+        c.drawString(remarks_x+1.5*mm, remarks_y+remarks_h-4.2*mm, remarks_label)
+
+        c.setFont(QF["regular"], remarks_font)
+        ry = remarks_y+remarks_h-8.0*mm
+        for part in remarks_lines or [""]:
+            c.drawString(remarks_x+1.5*mm, ry, part)
+            ry -= 3.5*mm
+
+        remarks_offset = remarks_h + 2.0*mm
+
+    # ----------------------------------------------------------------
     # Mentions sous tableau
     # ----------------------------------------------------------------
-    under_y = vat_y2-3.2*mm
+    under_y = vat_y2-3.2*mm-remarks_offset
     c.setFillColor(colors.black)
     c.setFont(QF["regular"], 7.2)
     c.drawString(table_x+0.5*mm, under_y, "En cas de non réparation, un ")
@@ -11357,33 +11544,39 @@ def quote_pdf(quote_id):
         "Toutefois, elle ne peut être tenue responsable des pertes de données résultant d'événements imprévisibles "
         "tels que les cyberattaques, les défaillances techniques ou les catastrophes naturelles."
     )
+    # Toute la zone de droite est réservée à la signature.
+    # Les textes légaux restent strictement dans la colonne de gauche.
+    sig_safe_right = 146.0*mm
+    legal_x = table_x + 0.5*mm
+    legal_w = sig_safe_right - legal_x
+
     c.setFont(QF["regular"], 5.9)
-    wrapped_data = split_to_width(data_text, QF["regular"], 5.9, 185*mm)
-    for part in wrapped_data[:3]:
-        c.drawString(table_x+0.5*mm, data_y, part)
+    wrapped_data = split_to_width(data_text, QF["regular"], 5.9, legal_w)
+    for part in wrapped_data[:4]:
+        c.drawString(legal_x, data_y, part)
         data_y -= 3.3*mm
 
     c.setFont(QF["bold"], 5.9)
-    c.drawString(
-        table_x+0.5*mm, data_y,
-        "Les utilisateurs sont invités à sauvegarder régulièrement leurs données importantes."
+    data_y = draw_wrapped(
+        "Les utilisateurs sont invités à sauvegarder régulièrement leurs données importantes.",
+        legal_x, data_y, legal_w, QF["bold"], 5.9, 3.3*mm, max_lines=2
     )
 
-    # Conditions paiement à gauche
-    conditions_y = data_y-10.0*mm
+    # Conditions paiement à gauche, sans jamais empiéter sur la signature.
+    conditions_y = data_y-6.0*mm
     c.setFillColor(LIGHT_GREY)
     c.setFont(QF["regular"], 5.8)
     condition_lines = [
         "Conditions de paiement : paiement à réception de facture",
         "Aucun escompte consenti pour règlement anticipé",
-        "Tout incident de paiement est passible d'intérêt de retard. Le montant des pénalités résulte de l'application",
-        "aux sommes restant dues d'un taux d'intérêt légal en vigueur au moment de l'incident.",
+        "Tout incident de paiement est passible d'intérêt de retard. Le montant des pénalités résulte de l'application aux sommes restant dues d'un taux d'intérêt légal en vigueur au moment de l'incident.",
         "Indemnité forfaitaire pour frais de recouvrement due au créancier en cas de retard de paiement: 40€",
     ]
     yy = conditions_y
     for txt in condition_lines:
-        c.drawString(table_x+0.5*mm, yy, txt)
-        yy -= 4.0*mm
+        for part in split_to_width(txt, QF["regular"], 5.8, legal_w):
+            c.drawString(legal_x, yy, part)
+            yy -= 3.5*mm
 
     # Zone Bon pour accord à droite
     sig_x = 151.5*mm
@@ -11410,7 +11603,7 @@ def quote_pdf(quote_id):
 
     # Sauvegarde automatique dans WOPR/private/documents/Devis/AAAA/MM - Mois
     quote_folder = year_month_folder(DEVIS_ROOT, q["quote_date"], create=True)
-    quote_filename = safe_document_name(f"{q['client_name']}_{q['quote_no']}.wopr.pdf")
+    quote_filename = safe_document_name(f"{q['client_name']}_{q['quote_no']}.pdf")
     quote_saved_path = quote_folder / quote_filename
     try:
         quote_saved_path.write_bytes(pdf_bytes)
@@ -11421,9 +11614,8 @@ def quote_pdf(quote_id):
     return send_file(
         bio,
         mimetype="application/pdf",
-        # V2.3.239 : le devis vient d'être archivé dans private/documents/Devis.
-        # L'utilisateur le visualise sans créer une seconde copie dans Téléchargements.
-        as_attachment=False,
+        # Le bouton PDF télécharge directement le devis généré.
+        as_attachment=True,
         download_name=quote_filename
     )
 
@@ -13761,21 +13953,45 @@ def achats_ventes_document_add(entry_id):
     if not row:
         return "Ligne introuvable", 404
     year = str(row["entry_date"] or now().strftime("%Y-%m-%d"))[:4]
+    month = int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None
     if str(row["operation"] or "").casefold() != "achat":
         flash("Les factures fournisseurs peuvent être liées uniquement à un achat.")
-        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+        return redirect(url_for("achats_ventes_page", year=year, month=month))
     storage = request.files.get("supplier_document")
     if not storage or not str(storage.filename or "").strip():
-        flash("Choisis une facture à joindre.")
-        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+        flash("Choisis une pièce à joindre.")
+        return redirect(url_for("achats_ventes_page", year=year, month=month))
     try:
-        dest = save_ledger_document(entry_id, storage)
+        dest = save_ledger_document(entry_id, storage, replace=False)
     except ValueError as exc:
         flash(str(exc))
-        return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+        return redirect(url_for("achats_ventes_page", year=year, month=month))
     audit_event("LEDGER_DOCUMENT_ADD", f"id={entry_id} file={dest.name if dest else ''}", request.remote_addr)
-    flash("Facture fournisseur liée et rangée automatiquement.")
-    return redirect(url_for("achats_ventes_page", year=year, month=int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None))
+    flash("Justificatif fournisseur lié et rangé automatiquement.")
+    return redirect(url_for("achats_ventes_page", year=year, month=month))
+
+
+@app.route("/achats-ventes/<int:entry_id>/document/replace", methods=["POST"])
+def achats_ventes_document_replace(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+    year = str(row["entry_date"] or now().strftime("%Y-%m-%d"))[:4]
+    month = int(str(row["entry_date"])[5:7]) if len(str(row["entry_date"])) >= 7 and str(row["entry_date"])[5:7].isdigit() else None
+    storage = request.files.get("supplier_document")
+    if not storage or not str(storage.filename or "").strip():
+        flash("Choisis le nouveau justificatif.")
+        return redirect(url_for("achats_ventes_page", year=year, month=month))
+    try:
+        dest = save_ledger_document(entry_id, storage, replace=True)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for("achats_ventes_page", year=year, month=month))
+    audit_event("LEDGER_DOCUMENT_REPLACE", f"id={entry_id} file={dest.name if dest else ''}", request.remote_addr)
+    flash("Justificatif remplacé.")
+    return redirect(url_for("achats_ventes_page", year=year, month=month))
 
 
 @app.route("/achats-ventes/<int:entry_id>/document/view")
@@ -13788,13 +14004,37 @@ def achats_ventes_document_view(entry_id):
     path = ledger_document_file(row)
     if not path:
         return "Pièce justificative introuvable", 404
-    # Si le résolveur a retrouvé l'original sous un autre nom, on corrige le lien pour de bon.
     try:
         resolved_rel = str(path.relative_to(DOCUMENTS_ROOT))
         if resolved_rel != str(row["document_path"] or ""):
             con_fix = db()
             con_fix.execute(
                 "UPDATE ledger_entries SET document_path=?, updated_at=? WHERE id=?",
+                (resolved_rel, now().isoformat(timespec="seconds"), entry_id),
+            )
+            con_fix.commit()
+            con_fix.close()
+    except Exception:
+        pass
+    return send_file(path, as_attachment=False, download_name=path.name)
+
+
+@app.route("/achats-ventes/<int:entry_id>/document/xml/view")
+def achats_ventes_document_xml_view(entry_id):
+    con = db()
+    row = con.execute("SELECT * FROM ledger_entries WHERE id=?", (entry_id,)).fetchone()
+    con.close()
+    if not row:
+        return "Ligne introuvable", 404
+    path = ledger_xml_document_file(row)
+    if not path:
+        return "Justificatif XML introuvable", 404
+    try:
+        resolved_rel = str(path.relative_to(DOCUMENTS_ROOT))
+        if resolved_rel != str(row["document_xml_path"] or ""):
+            con_fix = db()
+            con_fix.execute(
+                "UPDATE ledger_entries SET document_xml_path=?, updated_at=? WHERE id=?",
                 (resolved_rel, now().isoformat(timespec="seconds"), entry_id),
             )
             con_fix.commit()
@@ -15915,12 +16155,21 @@ def repair_close(rid):
             close_payment_method = deposit_method or close_payment_mode
             close_payment_detail = deposit_detail or ""
 
-        # V2.6.2 — la facturation est indépendante de l'état Atelier.
-        # Créer/modifier/encaisser une facture ne signifie pas que la réparation
-        # est terminée ni que le matériel a été restitué.
-        # Le statut reste donc exactement celui du dossier avant facturation.
+        # V2.6.2 — la facturation reste indépendante de l'état Atelier.
+        # Exception volontaire et explicite : lors du passage non payé -> payé,
+        # l'interface demande si le matériel vient d'être rendu au client.
+        # Seule une réponse Oui marque le dossier Restitué et renseigne la date.
         close_status = str(r["status"] or "").strip() or "Reçu"
         close_returned_at = r["returned_at"]
+        newly_paid = bool(paid_flag) and not bool(int(r["paid"] or 0))
+        returned_with_payment = (
+            newly_paid
+            and not bool(r["simple_invoice"])
+            and request.form.get("returned_with_payment") == "1"
+        )
+        if returned_with_payment:
+            close_status = "Restitué"
+            close_returned_at = now().date().isoformat()
 
         close_sent_via = (
             request.form.get("sent_via")
@@ -15991,7 +16240,12 @@ def repair_close(rid):
         if paid_flag:
             con.execute("UPDATE repairs SET sumup_payment_url='' WHERE id=?", (rid,))
 
-        record_repair_status_change(con, rid, r["status"], close_status, "Facturation")
+        status_change_reason = (
+            "Paiement reçu + matériel rendu depuis la facture"
+            if returned_with_payment
+            else "Facturation"
+        )
+        record_repair_status_change(con, rid, r["status"], close_status, status_change_reason)
 
         con.execute("DELETE FROM invoice_lines WHERE repair_id=?", (rid,))
         for line in lines:
@@ -16704,6 +16958,41 @@ def intake_pdf(rid):
 @app.route("/invoice/simple", methods=["GET", "POST"])
 def simple_invoice_new():
     con = db()
+    quote_prefill = None
+    quote_prefill_lines = []
+    quote_prefill_client = None
+
+    source_quote_id_raw = request.values.get("source_quote_id", "").strip()
+    source_quote_id = int(source_quote_id_raw) if source_quote_id_raw.isdigit() else None
+    if source_quote_id:
+        quote_prefill = con.execute(
+            "SELECT * FROM quotes WHERE id=?",
+            (source_quote_id,)
+        ).fetchone()
+        if quote_prefill:
+            existing_invoice = con.execute("""
+                SELECT id, invoice_no
+                FROM repairs
+                WHERE COALESCE(quote_no,'')=?
+                  AND COALESCE(invoice_no,'')<>''
+                ORDER BY id DESC
+                LIMIT 1
+            """, (quote_prefill["quote_no"],)).fetchone()
+            if existing_invoice:
+                con.close()
+                flash(f"Le devis {quote_prefill['quote_no']} a déjà été facturé ({existing_invoice['invoice_no']}).")
+                return redirect(url_for("invoices_page"))
+            quote_prefill_lines = [dict(row) for row in con.execute("""
+                SELECT position,line_type,quantity,description,unit_price
+                FROM quote_lines
+                WHERE quote_id=?
+                ORDER BY position,id
+            """, (source_quote_id,)).fetchall()]
+            if quote_prefill["client_id"]:
+                quote_prefill_client = con.execute(
+                    "SELECT * FROM clients WHERE id=?",
+                    (quote_prefill["client_id"],)
+                ).fetchone()
 
     if request.method == "POST":
         sync_new_client_id = None
@@ -16913,6 +17202,17 @@ def simple_invoice_new():
         ))
         rid = int(cur.lastrowid)
 
+        if quote_prefill:
+            con.execute(
+                "UPDATE repairs SET quote_no=? WHERE id=?",
+                (quote_prefill["quote_no"], rid)
+            )
+            con.execute("""
+                UPDATE quotes
+                SET status='Facturé', updated_at=?
+                WHERE id=?
+            """, (now().isoformat(timespec="seconds"), int(quote_prefill["id"])))
+
         for line in lines:
             con.execute("""
                 INSERT INTO invoice_lines(
@@ -16943,7 +17243,13 @@ def simple_invoice_new():
         ORDER BY name COLLATE NOCASE
     """).fetchall()
     con.close()
-    return render_template("simple_invoice.html", clients=clients)
+    return render_template(
+        "simple_invoice.html",
+        clients=clients,
+        quote_prefill=dict(quote_prefill) if quote_prefill else None,
+        quote_prefill_lines=quote_prefill_lines,
+        quote_prefill_client=dict(quote_prefill_client) if quote_prefill_client else None,
+    )
 
 
 
@@ -17309,7 +17615,9 @@ def invoices_page():
     year, selected_month = resolve_period_selection(
         requested_year=request.args.get("year"),
         available_years=available_years,
-        default_all_year=unpaid_only,
+        # Factures ne doit jamais appliquer un mois caché par défaut.
+        # Sans choix explicite de l'utilisateur, on affiche toute l'année.
+        default_all_year=True,
         search_active=bool(q),
     )
     archive_years = [y for y in available_years if y != current_year]
@@ -19786,8 +20094,16 @@ def invoice_pdf(rid):
         client_lines.append(street)
     elif r["client_address"]:
         legacy_lines = [x.strip() for x in str(r["client_address"]).replace("\r","").split("\n") if x.strip()]
-        client_lines.extend(legacy_lines[:1])
-    if cp_city:
+        # Anciennes fiches : le champ adresse peut déjà contenir uniquement
+        # "CP Ville" alors que postal_code/city sont aussi renseignés.
+        # Ne jamais imprimer deux fois la même ligne dans le cartouche client.
+        cp_city_key = " ".join(cp_city.casefold().split())
+        for legacy_line in legacy_lines:
+            legacy_key = " ".join(legacy_line.casefold().split())
+            if legacy_key and legacy_key != cp_city_key:
+                client_lines.append(legacy_line)
+                break
+    if cp_city and " ".join(cp_city.casefold().split()) not in {" ".join(str(line).casefold().split()) for line in client_lines}:
         client_lines.append(cp_city)
 
     cy = cby + cbh - 16*mm
@@ -19852,11 +20168,8 @@ def invoice_pdf(rid):
     visual_rows = []
     desc_width = col_desc - 2*mm
 
-    # La mention "Détails sur la feuille de suivi" appartient à la prestation :
-    # elle est ajoutée juste sous la dernière ligne de service, avant toute marchandise.
-    service_indexes = [i for i, row in enumerate(rows) if row[4] == "service"]
-    last_service_index = service_indexes[-1] if service_indexes else None
-
+    # La mention "Détails sur la feuille de suivi" appartient à chaque prestation :
+    # elle est ajoutée juste sous chaque ligne de service, jamais sous une marchandise.
     for item_index, (qty, description, amount, unit, line_type) in enumerate(rows):
         raw_lines = str(description or "").replace("\r", "").split("\n")
         if not raw_lines:
@@ -19884,7 +20197,7 @@ def invoice_pdf(rid):
                 "spacer": False,
             })
 
-        if invoice_followup_note and item_index == last_service_index:
+        if invoice_followup_note and line_type == "service":
             visual_rows.append({
                 "qty": None,
                 "desc": invoice_followup_note,
@@ -20554,8 +20867,10 @@ def import_google_csv_confirm():
 
         # Revalider au moment de l'écriture : uniquement les champs encore vides.
         allowed = (
-            "first_name", "last_name", "company", "phone", "email",
-            "address_street", "postal_code", "city"
+            "first_name", "last_name", "company",
+            "phone", "phone_secondary",
+            "email", "email_secondary",
+            "address_street", "postal_code", "city", "notes"
         )
         sets = []
         values = []
@@ -20884,10 +21199,10 @@ def import_proton_confirm():
                 resource = google_matches[0]
                 try:
                     if group_resource:
-                        service.contactGroups().members().modify(
+                        google_execute_with_retry(service.contactGroups().members().modify(
                             resourceName=group_resource,
                             body={"resourceNamesToAdd": [resource]}
-                        ).execute()
+                        ))
                     set_google_sync_state(client_id, "Synchronisé", resource_name=resource)
                     google_linked += 1
                 except HttpError as e:
@@ -23100,12 +23415,40 @@ def contact_sync_google(client_id):
 
 @app.route("/contacts/export/google.csv")
 def export_google_contacts():
-    con=db(); clients=con.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall(); con.close()
-    rows=[["First Name","Email 1 - Label","Email 1 - Value","Email 2 - Label","Email 2 - Value","Phone 1 - Label","Phone 1 - Value","Phone 2 - Label","Phone 2 - Value",
-           "Address 1 - Label","Address 1 - Street","Address 1 - City","Address 1 - Postal Code","Address 1 - Country","Labels","Notes"]]
+    con = db()
+    clients = con.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall()
+    con.close()
+
+    rows = [[
+        "First Name", "Last Name", "Organization Name",
+        "Email 1 - Label", "Email 1 - Value",
+        "Email 2 - Label", "Email 2 - Value",
+        "Phone 1 - Label", "Phone 1 - Value",
+        "Phone 2 - Label", "Phone 2 - Value",
+        "Address 1 - Label", "Address 1 - Street", "Address 1 - City",
+        "Address 1 - Postal Code", "Address 1 - Country",
+        "Labels", "Notes"
+    ]]
+
+    label = str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR")
     for c in clients:
-        rows.append([c["name"],"Home",c["email"] or "","Other",c["email_secondary"] or "","Mobile",c["phone"] or "","Other",c["phone_secondary"] or "","Home",
-                     c["address_street"] or "",c["city"] or "",c["postal_code"] or "","France",str(cfg().get("google_contact_group") or cfg().get("business_name") or "WOPR"),c["notes"] or ""])
+        first_name = str(c["first_name"] or "").strip()
+        last_name = str(c["last_name"] or "").strip()
+        # Compatibilité avec les anciennes fiches qui n'avaient que `name`.
+        if not first_name and not last_name:
+            last_name, first_name = split_legacy_client_name(c["name"] or "")
+
+        rows.append([
+            first_name, last_name, c["company"] or "",
+            "Home", c["email"] or "",
+            "Other", c["email_secondary"] or "",
+            "Mobile", c["phone"] or "",
+            "Other", c["phone_secondary"] or "",
+            "Home", c["address_street"] or "", c["city"] or "",
+            c["postal_code"] or "", "France",
+            label, c["notes"] or ""
+        ])
+
     return csv_response("WOPR_Contacts_Google.csv", rows)
 
 

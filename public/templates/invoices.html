@@ -31,10 +31,31 @@
   {% endif %}
 </div>
 
+<div class="wopr-period-filter" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 14px;">
+  <form method="get" action="{{ url_for('invoices_page') }}" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0;">
+    <input type="hidden" name="year" value="{{ year }}">
+    {% if unpaid_only %}<input type="hidden" name="unpaid" value="1">{% endif %}
+    <strong>Période :</strong>
+    <select name="month" onchange="this.form.submit()" style="min-height:34px;padding:5px 8px;">
+      <option value="0" {% if not selected_month %}selected{% endif %}>Toute l'année</option>
+      {% for m in range(1,13) %}
+        <option value="{{ m }}" {% if selected_month == m %}selected{% endif %}>{{ month_names[m] }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
 {% if unpaid_only %}
+{% set unpaid_ns = namespace(total=0.0) %}
+{% for item in invoices %}
+  {% set unpaid_ns.total = unpaid_ns.total + (item.get('remaining_amount') if item.get('remaining_amount') is not none else (item.get('invoice_total') or 0)) %}
+{% endfor %}
 <div class="sheet-note" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
   <strong>💳 Affichage : factures impayées uniquement</strong>
-  <a class="mini-btn" href="{{ url_for('invoices_page', year=year) }}">Voir toutes les factures</a>
+  <div style="display:flex;align-items:center;gap:10px">
+    <strong style="white-space:nowrap;">Total impayé : {{ '%.2f'|format(unpaid_ns.total)|replace('.', ',') }} €</strong>
+    <a class="mini-btn" href="{{ url_for('invoices_page', year=year) }}">Voir toutes les factures</a>
+  </div>
 </div>
 {% endif %}
 
@@ -47,7 +68,7 @@
          autocomplete="off">
   <button class="button primary" type="submit">RECHERCHER</button>
   {% if q %}
-    <a class="button" href="{{ url_for('invoices_page', year=year) }}">Effacer</a>
+    <a class="button" href="{{ url_for('invoices_page', year=year, month=selected_month) }}">Effacer</a>
   {% endif %}
 </form>
 {% if amount_query is not none %}

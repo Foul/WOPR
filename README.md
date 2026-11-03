@@ -11,7 +11,7 @@
 
 WOPR est une application locale de gestion d’atelier conçue pour centraliser le suivi des réparations, les clients, devis, factures, encaissements, achats, justificatifs, stock de composants et tâches administratives.
 
-**Version documentée : 2.6.2**
+**Version documentée : 2.6.4**
 
 > Développé avec l’aide de ChatGPT (OpenAI) pour l’assistance au développement, à la documentation et aux tests.
 
@@ -21,7 +21,7 @@ WOPR est une application locale de gestion d’atelier conçue pour centraliser 
 - Gestion complète des réparations : création, diagnostic, suivi, statut, remarques, facturation et restitution.
 - Mode Client permettant d’utiliser l’interface devant un client sans afficher les informations confidentielles.
 - Gestion des clients avec recherche, archivage, coordonnées et intégrations optionnelles.
-- Devis et factures PDF, factures simples et historique des règlements.
+- Devis et factures PDF, conversion d’un devis accepté en facture, factures simples et historique des règlements.
 - Gestion des paiements fractionnés et rapprochement des encaissements.
 - Contrôle du chiffre d’affaires et préparation des déclarations.
 - Intégration SumUp pour le rapprochement des paiements.

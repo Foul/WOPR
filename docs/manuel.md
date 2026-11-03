@@ -1,7 +1,7 @@
 # WOPR - Manuel utilisateur
 
-**Version documentée : 2.6.2**
-**Documentation mise à jour : 5 octobre 2026**
+**Version documentée : 2.6.4**
+**Documentation mise à jour : 3 novembre 2026**
 
 **Workflow d’Organisation et de Pilotage des Réparations**
 
@@ -362,7 +362,10 @@ La section **Devis** permet :
 - d’ouvrir les documents originaux associés ;
 - d’envoyer le devis ;
 - d’ouvrir son dossier ;
+- de convertir un devis accepté en facture via le bouton **Facturer** ;
 - de supprimer le devis.
+
+Lors de la facturation d’un devis, WOPR ouvre d’abord **Facture simple** avec le client et les lignes du devis préremplis. La facture n’est créée qu’après validation manuelle. Après création réussie, le devis passe au statut **Facturé** afin d’éviter une double facturation involontaire.
 
 Les fichiers supplémentaires liés à un même devis restent associés au devis concerné et ne sont pas considérés à tort comme des doublons.
 

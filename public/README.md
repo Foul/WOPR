@@ -1,6 +1,6 @@
 # WOPR — cœur public
 
-Version documentée : **2.4.0**.
+Version documentée : **2.6.4**.
 
 Ce dossier contient le code public de WOPR. Les bases, documents clients, clés, jetons, paramètres et personnalisations restent dans `../private/` et ne doivent pas être publiés.
 

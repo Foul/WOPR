@@ -79,16 +79,6 @@
       <small>12 chiffres. Exemple : 300720261200. Contrôle anti-doublon à l'enregistrement.</small>
     </label>
 
-    <label>Devis n°
-      <input type="text" name="quote_no" value="{{ r['quote_no'] or '' }}" placeholder="Facultatif">
-      <small>Affiché sur le PDF seulement si renseigné.</small>
-    </label>
-
-    <label>Commande n°
-      <input type="text" name="order_no" value="{{ r['order_no'] or '' }}" placeholder="Ex. PO01653157">
-      <small>Affiché sur le PDF seulement si renseigné.</small>
-    </label>
-
     <label>Date de facture
       <input type="date" name="invoice_date" value="{{ invoice_date_value }}" required>
       <small>Modifiable avant ou après création de la facture.</small>
@@ -176,6 +166,7 @@
       <input id="paid-checkbox" type="checkbox" name="paid"
              {% if r['paid'] %}checked{% endif %}
              {% if r['legacy_imported'] %}disabled{% endif %}>
+      <input id="returned-with-payment" type="hidden" name="returned_with_payment" value="">
       Paiement reçu
     </label>
   </div>
@@ -242,6 +233,30 @@
 </tr>
 </template>
 
+<div id="return-payment-modal" class="return-payment-modal" hidden aria-hidden="true">
+  <div class="return-payment-box" role="dialog" aria-modal="true" aria-labelledby="return-payment-title">
+    <div id="return-payment-title" class="return-payment-title">PAIEMENT RECU</div>
+    <div class="return-payment-question">Le PC / la piece a-t-il ete rendu au client ?</div>
+    <div class="return-payment-actions">
+      <button type="button" id="return-payment-yes" class="button return-payment-yes">Oui, materiel rendu</button>
+      <button type="button" id="return-payment-no" class="button return-payment-no">Non, pas encore rendu</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.return-payment-modal{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(5,18,28,.72);padding:20px;}
+.return-payment-modal[hidden]{display:none;}
+.return-payment-box{width:min(560px,calc(100vw - 40px));box-sizing:border-box;padding:22px;background:#eef8ff;border:3px solid #248fe5;box-shadow:8px 8px 0 #12202a;text-align:center;}
+.return-payment-title{font-size:1.2rem;font-weight:900;letter-spacing:.05em;margin-bottom:14px;}
+.return-payment-question{font-size:1.05rem;font-weight:700;margin-bottom:20px;}
+.return-payment-actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.return-payment-actions .button{min-height:52px;font-weight:900;white-space:normal;}
+.return-payment-yes{background:#d9f4df !important;color:#174b23 !important;}
+.return-payment-no{background:#ffe5b8 !important;color:#704500 !important;}
+@media (max-width:620px){.return-payment-actions{grid-template-columns:1fr;}}
+</style>
+
 <script>
 const tbody = document.getElementById('invoice-lines');
 const tpl = document.getElementById('line-template');
@@ -285,6 +300,12 @@ if(noInvoiceParts)noInvoiceParts.addEventListener('change',refreshNoInvoiceParts
 
 const paidCheckbox=document.getElementById('paid-checkbox');
 const accountingDate=document.getElementById('accounting-date');
+const returnedWithPayment=document.getElementById('returned-with-payment');
+const returnPaymentModal=document.getElementById('return-payment-modal');
+const returnPaymentYes=document.getElementById('return-payment-yes');
+const returnPaymentNo=document.getElementById('return-payment-no');
+const invoiceForm=document.getElementById('invoice-form');
+const initiallyPaid={{ 'true' if r['paid'] else 'false' }};
 function localToday(){
   const d=new Date();
   const y=d.getFullYear();
@@ -292,10 +313,52 @@ function localToday(){
   const day=String(d.getDate()).padStart(2,'0');
   return `${y}-${m}-${day}`;
 }
+function showReturnPaymentModal(){
+  if(!returnPaymentModal)return;
+  returnPaymentModal.hidden=false;
+  returnPaymentModal.setAttribute('aria-hidden','false');
+  window.setTimeout(()=>{if(returnPaymentYes)returnPaymentYes.focus();},0);
+}
+function hideReturnPaymentModal(){
+  if(!returnPaymentModal)return;
+  returnPaymentModal.hidden=true;
+  returnPaymentModal.setAttribute('aria-hidden','true');
+}
+function chooseReturnedWithPayment(value){
+  if(returnedWithPayment)returnedWithPayment.value=value;
+  hideReturnPaymentModal();
+  if(paidCheckbox)paidCheckbox.focus();
+}
+if(returnPaymentYes)returnPaymentYes.addEventListener('click',()=>chooseReturnedWithPayment('1'));
+if(returnPaymentNo)returnPaymentNo.addEventListener('click',()=>chooseReturnedWithPayment('0'));
+if(returnPaymentModal){
+  document.addEventListener('keydown',e=>{
+    if(!returnPaymentModal.hidden&&e.key==='Escape'){
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  },true);
+}
 if(paidCheckbox&&accountingDate&&!paidCheckbox.disabled){
   paidCheckbox.addEventListener('change',()=>{
     if(paidCheckbox.checked&&!accountingDate.value){
       accountingDate.value=localToday();
+    }
+    if(returnedWithPayment){
+      returnedWithPayment.value='';
+      if(paidCheckbox.checked&&!initiallyPaid){
+        showReturnPaymentModal();
+      }else{
+        hideReturnPaymentModal();
+      }
+    }
+  });
+}
+if(invoiceForm){
+  invoiceForm.addEventListener('submit',e=>{
+    if(paidCheckbox&&paidCheckbox.checked&&!initiallyPaid&&returnedWithPayment&&!returnedWithPayment.value){
+      e.preventDefault();
+      showReturnPaymentModal();
     }
   });
 }

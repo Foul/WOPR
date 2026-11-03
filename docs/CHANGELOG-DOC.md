@@ -1,5 +1,14 @@
 # Changelog de la documentation
 
+## 2.6.4 - 3 novembre 2026 - conversion devis vers facture
+
+- ajout du bouton **Facturer** depuis la liste des devis ;
+- préremplissage de Facture simple avec le client et les lignes du devis ;
+- validation manuelle obligatoire avant création de la facture ;
+- passage du devis au statut **Facturé** après création réussie ;
+- protection contre une double facturation involontaire du même devis ;
+- documentation HTML, Markdown, PDF et versions publiques alignées sur WOPR 2.6.4.
+
 ## 2.6.2 - 5 octobre 2026 - fiabilisation Achats/Ventes et justificatifs fournisseurs
 
 - correction du retour sur la période réellement affichée après modification dans Achats / Ventes ;

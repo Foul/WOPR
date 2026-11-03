@@ -98,7 +98,7 @@
         <span class="quote-status quote-status-{{ q['status']|lower|replace('é','e')|replace(' ','-') }}">{{ q['status'] }}</span>
       </td>
       <td class="invoice-list-actions quote-list-actions">
-        {% if q['document_count'] > 0 %}
+        {% if q['document_count'] > 0 and not q['edited_in_app'] %}
           <a class="mini-btn quote-original-btn wopr-action-open"
              target="_blank"
              href="{{ url_for('quote_original_real', quote_id=q['id'], doc_index=0) }}">
@@ -107,6 +107,11 @@
         {% endif %}
         <a class="mini-btn wopr-action-edit" href="{{ url_for('quote_edit', quote_id=q['id']) }}">Modifier</a>
         <a class="mini-btn primary wopr-action-open" href="{{ url_for('quote_pdf', quote_id=q['id']) }}">PDF</a>
+        {% if q['status'] != 'Facturé' %}
+          <a class="mini-btn wopr-action-save" href="{{ url_for('simple_invoice_new', source_quote_id=q['id']) }}">FACTURER</a>
+        {% else %}
+          <span class="mini-btn disabled-btn" title="Ce devis a déjà été facturé">FACTURÉ</span>
+        {% endif %}
         {% if q['client_email'] %}
           <a class="mini-btn invoice-email-btn wopr-action-send" href="{{ url_for('quote_email', quote_id=q['id']) }}">📧 Envoyer</a>
         {% else %}

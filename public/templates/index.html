@@ -263,7 +263,7 @@
 
           <td class="row-actions followup-actions">
             {% if r.get('_virtual_payment') %}
-              <a class="mini-btn wopr-action-open" href="{{ url_for('repair_detail', rid=r['id']) }}">Voir dossier</a>
+              <a class="mini-btn wopr-action-open" href="{{ url_for('repair_detail', rid=r['id']) }}">Voir suivi</a>
             {% else %}
               <a class="mini-btn wopr-action-open" href="{{ url_for('repair_detail', rid=r['id']) }}">Ouvrir</a>
               {% if r['client_phone'] %}
